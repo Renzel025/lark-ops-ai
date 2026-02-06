@@ -1,7 +1,26 @@
+# Node
 node_modules/
-.env
-*.pem
-*.key
-screenshots/
-puppeteer/screenshots/
-__pycache__/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Puppeteer / Telegram artifacts
+puppeeter/tg_profile/
+puppeeter/tg_profile.tar.gz
+puppeeter/tg_session/
+puppeeter/screenshots/
+puppeeter/*.png
+puppeeter/*.html
+
+# Logs / runtime artifacts
+*.log
+app.log
+
+# Archives / binaries
+*.zip
+*.tgz
+*.tar.gz
+
+# OS / editor
+.DS_Store
+.vscode/
