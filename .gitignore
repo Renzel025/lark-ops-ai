@@ -24,3 +24,16 @@ app.log
 # OS / editor
 .DS_Store
 .vscode/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenv
+venv/
+.venv/
+
+# Env secrets
+.env
+.env.*
