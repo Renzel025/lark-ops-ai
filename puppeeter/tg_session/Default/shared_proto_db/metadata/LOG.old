@@ -1,0 +1,14 @@
+2026/02/06-03:38:00.914 effe Recovering log #207
+2026/02/06-03:38:00.916 effe Level-0 table #209: started
+2026/02/06-03:38:00.922 effe Level-0 table #209: 124 bytes OK
+2026/02/06-03:38:00.934 effe Delete type=0 #207
+2026/02/06-03:38:00.934 effe Delete type=3 #205
+2026/02/06-03:38:00.935 eff4 Compacting 4@0 + 1@1 files
+2026/02/06-03:38:00.943 eff4 Generated table #211@0: 18 keys, 304 bytes
+2026/02/06-03:38:00.943 eff4 Compacted 4@0 + 1@1 files => 304 bytes
+2026/02/06-03:38:00.948 eff4 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/02/06-03:38:00.948 eff4 Delete type=2 #200
+2026/02/06-03:38:00.948 eff4 Delete type=2 #206
+2026/02/06-03:38:00.948 eff4 Delete type=2 #203
+2026/02/06-03:38:00.948 eff4 Delete type=2 #198
+2026/02/06-03:38:00.948 eff4 Delete type=2 #209

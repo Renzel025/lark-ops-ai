@@ -1,0 +1,11 @@
+2026/02/04-03:50:15.000 cde7 Recovering log #237
+2026/02/04-03:50:15.003 cde7 Level-0 table #240: started
+2026/02/04-03:50:15.008 cde7 Level-0 table #240: 44242 bytes OK
+2026/02/04-03:50:15.017 cde7 Delete type=0 #237
+2026/02/04-03:50:15.017 cde7 Delete type=3 #235
+2026/02/04-03:50:15.774 cde9 Compacting 1@0 + 1@1 files
+2026/02/04-03:50:15.789 cde9 Generated table #242@0: 1056 keys, 161512 bytes
+2026/02/04-03:50:15.790 cde9 Compacted 1@0 + 1@1 files => 161512 bytes
+2026/02/04-03:50:15.797 cde9 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/02/04-03:50:15.798 cde9 Delete type=2 #238
+2026/02/04-03:50:15.798 cde9 Delete type=2 #240

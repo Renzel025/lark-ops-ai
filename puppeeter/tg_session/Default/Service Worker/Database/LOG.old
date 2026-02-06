@@ -1,0 +1,5 @@
+2026/02/06-03:38:00.410 effc Recovering log #166
+2026/02/06-03:38:00.429 effc Level-0 table #168: started
+2026/02/06-03:38:00.435 effc Level-0 table #168: 297 bytes OK
+2026/02/06-03:38:00.452 effc Delete type=3 #165
+2026/02/06-03:38:00.452 effc Delete type=0 #166

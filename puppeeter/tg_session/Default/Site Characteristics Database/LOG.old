@@ -1,0 +1,5 @@
+2026/02/06-03:38:00.412 f01a Recovering log #150
+2026/02/06-03:38:00.425 f01a Level-0 table #152: started
+2026/02/06-03:38:00.435 f01a Level-0 table #152: 162 bytes OK
+2026/02/06-03:38:00.449 f01a Delete type=3 #149
+2026/02/06-03:38:00.449 f01a Delete type=0 #150

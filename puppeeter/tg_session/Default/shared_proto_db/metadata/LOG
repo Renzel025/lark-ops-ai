@@ -1,0 +1,5 @@
+2026/02/06-03:39:31.827 f09d Recovering log #210
+2026/02/06-03:39:31.827 f09d Level-0 table #213: started
+2026/02/06-03:39:31.834 f09d Level-0 table #213: 124 bytes OK
+2026/02/06-03:39:31.848 f09d Delete type=0 #210
+2026/02/06-03:39:31.848 f09d Delete type=3 #208
