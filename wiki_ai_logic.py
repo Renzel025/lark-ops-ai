@@ -2,7 +2,7 @@ import json
 import requests
 
 # Direct Document Token from the URL
-OBJ_TOKEN = "O94kwR7YWiRyFkkTVf2lHHzpgbc"
+OBJ_TOKEN = "TokenfromyourURLdocs"
 
 
 def get_wiki_content(token):
