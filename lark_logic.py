@@ -4,7 +4,7 @@ from wiki_ai_logic import handle_wiki_ai
 from p0_logic import start_p0, end_p0_session, P0_SESSIONS
 
 # This remains your specific incident group
-INCIDENT_GROUP_ID = "oc_f4e833c6744e55eb50dfcd8830fa913e"
+INCIDENT_GROUP_ID = "yourlarkgroupchat"
 
 # P0 trigger regex
 P0_REGEX = re.compile(r"\b(p0|priority\s*0)\b", re.IGNORECASE)
