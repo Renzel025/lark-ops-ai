@@ -19,7 +19,7 @@ log = logging.getLogger("lark-ops-ai")
 REQ_TIMEOUT = 10
 
 # Owner (OPEN_ID)
-SPECIFIC_OWNER_ID = "ou_cb50274ea2ff11149ba48d95c1803f01"
+SPECIFIC_OWNER_ID = "your-lark-open-id"
 MEETING_TOPIC = "CP-Emergency feedback紧急问题反馈群"
 
 # Force timezone to Philippines
