@@ -21,10 +21,10 @@ def _build_emergency_title(priority: str, topic_line: str = "") -> str:
     return f"🚨 {prio} — {tail}"
 
 
-def _build_meeting_invite_headline(priority: str) -> str:
-    """Short human line for the red meeting card (header); VC topic still uses emergency_topic separately."""
+def _build_meeting_invite_footer(priority: str) -> str:
+    """Bottom line on the red meeting card (after Join); same for P0 / P1 and all incident groups."""
     prio = (priority or "P0").strip().upper()
-    return f"{prio} declared — created a meeting, please help to join"
+    return f"{prio} declared - created a meeting please help to join"
 
 
 def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:
@@ -67,30 +67,25 @@ def build_meeting_card(
     emergency_topic: str = "",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
-    headline = _build_meeting_invite_headline(prio)
-    topic_ctx = (emergency_topic or "").strip()
+    title_text = _build_emergency_title(prio, emergency_topic)
+    footer_text = _build_meeting_invite_footer(prio)
     meeting_line = f"Meeting ID: {meeting_no}" if meeting_no else "Meeting has been created."
-    elements: List[Dict[str, Any]] = []
-    if topic_ctx:
-        elements.append(
-            {"tag": "div", "text": {"tag": "plain_text", "content": topic_ctx}},
-        )
-    elements.extend(
-        [
-            {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
-            {"tag": "hr"},
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "Join meeting"},
-                "type": "primary",
-                "multi_url": {"url": link, "pc_url": link},
-            },
-        ]
-    )
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
+        {"tag": "hr"},
+        {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "Join meeting"},
+            "type": "primary",
+            "multi_url": {"url": link, "pc_url": link},
+        },
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "plain_text", "content": footer_text}},
+    ]
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
-        "header": {"template": "red", "title": {"tag": "plain_text", "content": headline}},
+        "header": {"template": "red", "title": {"tag": "plain_text", "content": title_text}},
         "body": {"elements": elements},
     }
 
