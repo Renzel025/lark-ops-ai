@@ -143,7 +143,11 @@ def _save_preview(
     impact: str,
     support: str,
     awaiting_edit_input: bool = False,
+    priority: str = "P0",
 ) -> None:
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
     with _P0_PREVIEWS_LOCK:
         P0_PREVIEWS[sender_open_id] = {
             "target_chat": target_chat,
@@ -153,7 +157,8 @@ def _save_preview(
             "issue": issue,
             "impact": impact,
             "support": support,
-            "md": _cards.build_bilingual_overview_md(start_epoch, issue, impact, support),
+            "priority": prio,
+            "md": _cards.build_bilingual_overview_md(start_epoch, issue, impact, support, priority=prio),
             "awaiting_edit_input": awaiting_edit_input,
             "updated_at": int(time.time()),
         }
@@ -191,6 +196,10 @@ def clear_preview_edit_flags(sender_open_id: str) -> None:
 def _build_preview_from_draft(
     sender_open_id: str, tenant_token: str, target_chat: str, start_epoch: int, draft: Dict[str, Any]
 ) -> str:
+    _chat_id, sess = _session.find_session_by_target_chat(target_chat)
+    prio = str((sess or {}).get("priority") or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
     combined_text, combined_mentions = _compose_combined_source_text(draft)
     if not combined_text.strip():
         return ""
@@ -203,7 +212,17 @@ def _build_preview_from_draft(
     issue = _issues.summarize_issue(issue_source)
     impact = _text.build_impact_scope(issue_source)
     support = _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
-    _save_preview(sender_open_id=sender_open_id, target_chat=target_chat, start_epoch=start_epoch, combined_text=combined_text, mention_names=combined_mentions, issue=issue, impact=impact, support=support)
+    _save_preview(
+        sender_open_id=sender_open_id,
+        target_chat=target_chat,
+        start_epoch=start_epoch,
+        combined_text=combined_text,
+        mention_names=combined_mentions,
+        issue=issue,
+        impact=impact,
+        support=support,
+        priority=prio,
+    )
     preview = get_preview(sender_open_id) or {}
     return str(preview.get("md") or "").strip()
 
@@ -236,7 +255,11 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             md = _build_preview_from_draft(sender_open_id=sender_open_id, tenant_token=tenant_token, target_chat=target_chat, start_epoch=start_epoch, draft=draft)
             if not md:
                 return
-            _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_preview_card(md))
+            prev = get_preview(sender_open_id) or {}
+            pr = str(prev.get("priority") or "P0").strip().upper()
+            if pr not in ("P0", "P1"):
+                pr = "P0"
+            _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr))
         finally:
             with _PREVIEW_TIMERS_LOCK:
                 _PREVIEW_TIMERS.pop(sender_open_id, None)
@@ -276,6 +299,7 @@ def save_preview(
     impact: str,
     support: str,
     awaiting_edit_input: bool = False,
+    priority: str = "P0",
 ) -> None:
     """Persist preview state for the sender."""
     _save_preview(
@@ -288,4 +312,5 @@ def save_preview(
         impact=impact,
         support=support,
         awaiting_edit_input=awaiting_edit_input,
+        priority=priority,
     )
