@@ -413,7 +413,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 return
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
-            st, body = _lark.post_card_to_chat(target_chat, tenant_token, card)
+            st, body, _ = _lark.post_card_to_chat(target_chat, tenant_token, card)
             if st != 200:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")

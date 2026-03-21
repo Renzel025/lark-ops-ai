@@ -84,8 +84,35 @@ def build_meeting_card(
     ]
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        # Required so we can PATCH this message when the meeting ends (remove Join button).
+        "config": {"enable_forward": True, "update_multi": True},
         "header": {"template": "red", "title": {"tag": "plain_text", "content": title_text}},
+        "body": {"elements": elements},
+    }
+
+
+def build_meeting_invite_card_closed(
+    meeting_no: str = "",
+    priority: str = "P0",
+    emergency_topic: str = "",
+    reason_line: str = "Meeting has ended. Join from this card is no longer available.",
+) -> Dict[str, Any]:
+    """
+    Replacement body for the red invite card after end/cancel: no URL / no Join button.
+    Must keep ``update_multi: true`` to satisfy Lark PATCH rules.
+    """
+    prio = (priority or "P0").strip().upper()
+    tail = (emergency_topic or "").strip() or MEETING_TOPIC
+    meeting_line = f"Meeting ID: {meeting_no}" if meeting_no else "Meeting ID: —"
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"{prio} — {tail}"}},
+        {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
+        {"tag": "div", "text": {"tag": "plain_text", "content": (reason_line or "").strip() or "Meeting closed."}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"🔒 {prio} meeting ended"}},
         "body": {"elements": elements},
     }
 

@@ -129,6 +129,37 @@ def get_active_target_chat() -> str:
     return target_chat or last_key
 
 
+def _close_meeting_invite_card(sess: Dict[str, Any], token: str, reason_line: str = "") -> None:
+    """PATCH the original red invite message so Join is removed after end/cancel."""
+    mid = str((sess or {}).get("meeting_invite_message_id") or "").strip()
+    if not mid or not token:
+        return
+    try:
+        meeting_no = str(sess.get("meeting_no") or "").strip()
+        priority = str(sess.get("priority") or "P0").strip().upper()
+        em_topic = str(sess.get("emergency_topic") or "").strip()
+        default_reason = "Meeting has ended. Join from this card is no longer available."
+        line = (reason_line or "").strip() or default_reason
+        card = _cards.build_meeting_invite_card_closed(
+            meeting_no=meeting_no,
+            priority=priority,
+            emergency_topic=em_topic,
+            reason_line=line,
+        )
+        st, body = _lark.patch_interactive_card(token, mid, card)
+        if st != 200:
+            log.warning(
+                "close meeting invite card PATCH failed HTTP=%s message_id=%s body=%s",
+                st,
+                mid,
+                (body or "")[:500],
+            )
+        else:
+            log.info("Closed meeting invite card (PATCH) message_id=%s", mid)
+    except Exception as e:
+        log.warning("close meeting invite card exception: %s", e)
+
+
 def bind_live_meeting_id(meeting_ref: str) -> None:
     meeting_ref = (meeting_ref or "").strip()
     if not meeting_ref or not P0_SESSIONS:
@@ -145,6 +176,7 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
     _cancel_ongoing_timer(chat_id)
     _cancel_escalation_timer(chat_id)
     if token and sess:
+        _close_meeting_invite_card(sess, token)
         meeting_no = str(sess.get("meeting_no") or "").strip()
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
@@ -180,6 +212,11 @@ def cancel_p0_session(
         if (not meeting_ended) and reserve_id:
             _lark.delete_vc_reserve(token, reserve_id)
         log.info("cancel_p0_session VC action chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s", chat_id, reserve_id, meeting_id, meeting_no)
+        _close_meeting_invite_card(
+            sess,
+            token,
+            reason_line="Meeting was cancelled. Join from this card is no longer available.",
+        )
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
@@ -309,7 +346,7 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     if not nonce:
         log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
         return False
-    st, body = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_meeting_confirm_card(nonce))
+    st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_meeting_confirm_card(nonce))
     if st != 200:
         log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
@@ -362,7 +399,7 @@ def _schedule_ongoing_meeting_card(chat_id: str, token: str) -> None:
             card = _cards.build_ongoing_meeting_card(
                 meeting_no, participant_depts_line, "P0", emergency_topic=em_topic
             )
-            st, body = _lark.post_card_to_chat(chat_id, token, card)
+            st, body, _ = _lark.post_card_to_chat(chat_id, token, card)
             if st != 200:
                 log.error("ongoing meeting card failed HTTP=%s body=%s", st, (body or "")[:500])
         finally:
@@ -391,7 +428,7 @@ def _schedule_p1_escalation_card(chat_id: str, token: str) -> None:
                 return
             meeting_no = str(sess.get("meeting_no") or "").strip()
             sess["awaiting_p1_p0_confirm"] = True
-            st, body = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_fifteen_min_confirm_card(meeting_no))
+            st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_fifteen_min_confirm_card(meeting_no))
             if st != 200:
                 log.error("p1 15min confirm card failed HTTP=%s body=%s", st, (body or "")[:500])
                 sess.pop("awaiting_p1_p0_confirm", None)
@@ -423,7 +460,7 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
         return False
     meeting_no = str(sess.get("meeting_no") or "").strip()
     trigger_open_id = str(sess.get("trigger_open_id") or "").strip()
-    st, body = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_escalated_card(meeting_no))
+    st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_escalated_card(meeting_no))
     if st != 200:
         log.error("apply_p1_escalation_after_confirm card failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
@@ -522,7 +559,7 @@ def start_p0(
             log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
     log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
     meeting_no = str(vc.get("meeting_no", "")).strip()
-    st, body = _lark.post_card_to_chat(
+    st, body, invite_mid = _lark.post_card_to_chat(
         chat_id,
         token,
         _cards.build_meeting_card(
@@ -538,6 +575,8 @@ def start_p0(
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to post meeting card.")
         P0_SESSIONS.pop(chat_id, None)
         return
+    if invite_mid:
+        P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
     dm_targets = _dm_instruction_targets(trigger_open_id)
     for oid in dm_targets:
         if not oid:
