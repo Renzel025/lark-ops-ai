@@ -1,0 +1,210 @@
+"""
+Text normalization, player count extraction, impact scope, and issue scrubbing.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, List, Optional, Tuple
+
+from . import config as _config
+
+OPEN_ID_RE = _config.OPEN_ID_RE
+CJK_RE = _config.CJK_RE
+ID_RE = _config.ID_RE
+NOT_SPECIFIED_RE = _config.NOT_SPECIFIED_RE
+PLAYER_COUNT_PATTERNS = _config.PLAYER_COUNT_PATTERNS
+PLAYER_VAGUE_PATTERNS = _config.PLAYER_VAGUE_PATTERNS
+PLAYER_VAGUE_LABELS = _config.PLAYER_VAGUE_LABELS
+
+
+def is_open_id(x: str) -> bool:
+    return bool(OPEN_ID_RE.match((x or "").strip()))
+
+
+def looks_like_chinese(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:
+        return False
+    cjk = len(CJK_RE.findall(s))
+    return cjk >= 6 or (cjk / max(len(s), 1)) > 0.15
+
+
+def is_not_specified(s: str) -> bool:
+    return bool(NOT_SPECIFIED_RE.match((s or "").strip()))
+
+
+def normalize_impact_scope_manual(text: str) -> str:
+    """User-edited impact scope from DM or card form (plain text, one line)."""
+    src = (text or "").strip()
+    if not src or is_not_specified(src):
+        return "Not specified"
+    return normalize_gaming_zh(clean_single_line_translation(src))[:500].strip() or "Not specified"
+
+
+def normalize_issue_manual(text: str) -> str:
+    """User-edited issue summary from card form (single-line input; whitespace collapsed)."""
+    src = (text or "").strip()
+    if not src or is_not_specified(src):
+        return "Not specified"
+    s = re.sub(r"\s+", " ", src.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")).strip()
+    s = normalize_gaming_zh(s)
+    return s[:2000].strip() or "Not specified"
+
+
+def normalize_gaming_zh(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return s
+    s = s.replace("球员", "玩家")
+    s = s.replace("受影响的球员", "受影响的玩家")
+    s = s.replace("影响范围：", "影响范围:")
+    return s
+
+
+def clean_single_line_translation(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return ""
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln.strip() for ln in s.split("\n") if ln.strip()]
+    if not lines:
+        return ""
+    s = lines[0]
+    s = re.sub(r"^(翻译[:：]\s*|中文[:：]\s*|问题[:：]\s*|影响范围[:：]\s*)", "", s).strip()
+    return s[:300].strip()
+
+
+def strip_env_quotes(s: str) -> str:
+    s = (s or "").strip()
+    if (len(s) >= 2) and (s[0] == s[-1]) and s[0] in ("'", '"'):
+        return s[1:-1].strip()
+    return s
+
+
+def clean_pasted_text(text: Optional[str]) -> str:
+    import json
+    if text is None:
+        return ""
+    s = str(text).strip()
+    if not s:
+        return ""
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            if isinstance(obj.get("text"), str):
+                s = obj["text"]
+            elif isinstance(obj.get("content"), str):
+                s = obj["content"]
+        elif isinstance(obj, str):
+            s = obj
+    except Exception:
+        pass
+    s = s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def norm_name(s: str) -> str:
+    s = (s or "").strip()
+    s = s.lstrip("@").strip()
+    s = re.sub(r"[,:;)\]\}]+$", "", s).strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.lower()
+
+
+def norm_person_name(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = s.replace("@", "")
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
+
+
+def normalize_lookup_name(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"^(sir|mr|ms|mrs)\s+", "", s)
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
+
+
+def extract_player_ids(text: str) -> List[str]:
+    ids = ID_RE.findall(text or "")
+    seen = set()
+    out = []
+    for x in ids:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
+
+
+def extract_player_count_from_text(text: str) -> Tuple[Optional[int], Optional[str]]:
+    src = (text or "").strip()
+    if not src:
+        return None, None
+    for builder, pat in PLAYER_COUNT_PATTERNS:
+        m = pat.search(src)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except Exception:
+            continue
+        return builder(n)
+    for kind, pat in PLAYER_VAGUE_PATTERNS:
+        if pat.search(src):
+            return None, PLAYER_VAGUE_LABELS.get(kind, "Multiple affected players")
+    return None, None
+
+
+def _score_issue_block(text: str) -> int:
+    s = (text or "").strip()
+    if not s:
+        return -10
+    lower = s.lower()
+    score = 0
+    if len(s) >= 30:
+        score += 1
+    if len(s) >= 80:
+        score += 2
+    player_terms = [
+        "player", "players", "unable", "cannot", "can't", "failed", "failure",
+        "error", "issue", "problem", "cannot enter", "unable to access",
+        "unable to login", "cannot login", "not working", "stuck", "missing",
+        "gone", "disappear", "lost", "reward", "voucher", "bonus", "claim",
+        "redeem", "login", "access", "game", "session",
+    ]
+    for term in player_terms:
+        if term in lower:
+            score += 2
+    noise_terms = [
+        "reply to", "view earlier", "edited", "owner:", "meeting id",
+        "recordings (minutes)", "you joined the meeting", "you left the meeting",
+    ]
+    for term in noise_terms:
+        if term in lower:
+            score -= 3
+    if re.fullmatch(r"[\d\s,]+", s):
+        score -= 10
+    return score
+
+
+def _pick_best_issue_text(text: str) -> str:
+    src = (text or "").strip()
+    if not src:
+        return ""
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", src) if b.strip()]
+    if not blocks:
+        return src
+    return max(blocks, key=_score_issue_block)
+
+
+def build_impact_scope(text: str) -> str:
+    ids = extract_player_ids(text)
+    if ids:
+        return f"{len(ids)} affected players"
+    _n, label = extract_player_count_from_text(text)
+    if label:
+        return label
+    return "Not specified"

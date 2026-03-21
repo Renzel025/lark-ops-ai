@@ -1,0 +1,227 @@
+import os
+import re
+import logging
+from typing import Any, List
+
+from wiki_ai_logic import handle_wiki_ai
+from p0_logic.config import get_p0_trigger_ignore_open_ids
+from p0_logic import (
+    start_p0,
+    end_p0_session,
+    cancel_p0_session,
+    P0_SESSIONS,
+    handle_dm_generate_overview,
+    get_p1_prompt_pending,
+    set_p1_prompt_pending,
+    pop_p1_prompt_pending,
+    request_p1_meeting_confirmation,
+)
+
+log = logging.getLogger("lark-ops-ai")
+
+INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "oc_f4e833c6744e55eb50dfcd8830fa913e").strip()
+WIKI_GROUP_CHAT_ID = os.getenv("WIKI_GROUP_CHAT_ID", "").strip()
+
+# Simple keyword trigger: any occurrence of p0 / p1
+P0_REGEX = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
+P1_REGEX = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
+
+# End commands
+P0_END_REGEX = re.compile(r"\b(p0\s*end|end\s*p0|close\s*p0|p0\s*resolved)\b", re.IGNORECASE)
+P1_END_REGEX = re.compile(r"\b(p1\s*end|end\s*p1|close\s*p1|p1\s*resolved)\b", re.IGNORECASE)
+
+# Cancel commands
+CANCEL_REGEX = re.compile(r"^\s*(cancel|cancel p0|cancel p1|cancel meeting)\s*$", re.IGNORECASE)
+
+
+def _clean_mention_names(raw_mentions: Any) -> List[str]:
+    out: List[str] = []
+    if not raw_mentions:
+        return out
+
+    if isinstance(raw_mentions, list):
+        for m in raw_mentions:
+            if isinstance(m, str):
+                name = m.strip()
+                if name:
+                    out.append(name)
+                continue
+
+            if isinstance(m, dict):
+                name = (
+                    m.get("name")
+                    or m.get("title")
+                    or m.get("display_name")
+                    or m.get("full_name")
+                    or ""
+                )
+                name = str(name).strip()
+                if name:
+                    out.append(name)
+
+    seen = set()
+    deduped: List[str] = []
+    for x in out:
+        k = x.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(x)
+
+    return deduped
+
+
+def _get_active_session_chat_id() -> str:
+    if not P0_SESSIONS:
+        return ""
+    return list(P0_SESSIONS.keys())[-1]
+
+
+def process_message(
+    incoming_text: str,
+    chat_id: str,
+    user_id: str,
+    token: str,
+    lark_client: Any,
+    groq_key: str,
+    **kwargs: Any,
+) -> None:
+    text_raw = (incoming_text or "").strip()
+    text_lower = text_raw.lower() if text_raw else ""
+
+    message_type = str(kwargs.get("message_type") or "").strip().lower()
+    message_id = str(kwargs.get("message_id") or "").strip()
+    image_key = str(kwargs.get("image_key") or kwargs.get("file_key") or "").strip()
+    mention_names = _clean_mention_names(kwargs.get("mention_names") or kwargs.get("mentions"))
+    tenant_token = str(kwargs.get("tenant_token") or token or "").strip()
+    chat_type = str(kwargs.get("chat_type") or "").strip().lower()
+
+    active_chat_id = _get_active_session_chat_id()
+    has_active_session = bool(active_chat_id)
+
+    log.info(
+        "process_message route: chat_id=%s chat_type=%s user_id=%s message_type=%s text=%r mentions=%s active_chat_id=%s has_active_session=%s",
+        chat_id,
+        chat_type,
+        user_id,
+        message_type,
+        text_raw[:200] if text_raw else "",
+        mention_names,
+        active_chat_id,
+        has_active_session,
+    )
+
+    # ---------------------------------------------------------
+    # INCIDENT GROUP
+    # ---------------------------------------------------------
+    if chat_id == INCIDENT_GROUP_ID:
+        if not text_raw:
+            return
+
+        # Cancel command
+        if CANCEL_REGEX.match(text_raw):
+            if chat_id in P0_SESSIONS:
+                sess = P0_SESSIONS.get(chat_id) or {}
+                priority = str(sess.get("priority") or "P0").strip().upper()
+                log.info("Incident group: cancel requested chat_id=%s priority=%s", chat_id, priority)
+                cancel_p0_session(chat_id, token, reason=f"Unexpected {priority} keyword detection.")
+            else:
+                log.info("Incident group: cancel requested but no active session chat_id=%s", chat_id)
+            return
+
+        # End command
+        if P0_END_REGEX.search(text_lower) or P1_END_REGEX.search(text_lower):
+            if chat_id in P0_SESSIONS:
+                log.info("Incident group: ending active session chat_id=%s", chat_id)
+                end_p0_session(chat_id, token)
+            else:
+                log.info("Incident group: end requested but no active session chat_id=%s", chat_id)
+            return
+
+        # Trigger P0 if keyword exists anywhere
+        if P0_REGEX.search(text_raw):
+            if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
+                log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
+                return
+            if chat_id in P0_SESSIONS:
+                log.info("Incident group: session already active chat_id=%s", chat_id)
+                return
+
+            log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
+            start_p0(chat_id, token, user_id, priority="P0")
+            return
+
+        # Trigger P1 if keyword exists anywhere — confirm with Yes/No card first
+        if P1_REGEX.search(text_raw):
+            if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
+                log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
+                return
+            if chat_id in P0_SESSIONS:
+                log.info("Incident group: session already active chat_id=%s", chat_id)
+                return
+            if get_p1_prompt_pending(chat_id):
+                log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
+                return
+
+            log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
+            set_p1_prompt_pending(chat_id, user_id)
+            if not request_p1_meeting_confirmation(chat_id, token, user_id):
+                pop_p1_prompt_pending(chat_id)
+                log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
+            return
+
+        # Ignore non P0/P1 chatter in the incident group to avoid noisy auto replies.
+        log.info("Incident group: ignoring non P0/P1 message")
+        return
+
+    # ---------------------------------------------------------
+    # WIKI GROUP
+    # ---------------------------------------------------------
+    if WIKI_GROUP_CHAT_ID and chat_id == WIKI_GROUP_CHAT_ID:
+        if not text_raw:
+            return
+
+        log.info("Wiki group: routing to wiki")
+        handle_wiki_ai(text_raw, chat_id, token, groq_key)
+        return
+
+    # ---------------------------------------------------------
+    # DM / OTHER CHAT WHILE SESSION IS ACTIVE
+    # ---------------------------------------------------------
+    if has_active_session:
+        if message_type == "image" and image_key:
+            log.info(
+                "Active session: handling image source_chat_id=%s active_session_chat_id=%s user_id=%s image_key=%s",
+                chat_id,
+                active_chat_id,
+                user_id,
+                image_key,
+            )
+            handle_dm_generate_overview(
+                sender_open_id=user_id,
+                tenant_token=tenant_token,
+                image_key=image_key,
+                mention_names=mention_names,
+                message_id=message_id,
+            )
+            return
+
+        if text_raw:
+            log.info(
+                "Active session: handling text source_chat_id=%s active_session_chat_id=%s user_id=%s text_head=%r",
+                chat_id,
+                active_chat_id,
+                user_id,
+                text_raw[:120],
+            )
+            handle_dm_generate_overview(
+                sender_open_id=user_id,
+                tenant_token=tenant_token,
+                text=text_raw,
+                mention_names=mention_names,
+                message_id=message_id,
+            )
+            return
+
+    log.info("Ignored message from non-allowed chat_id=%s", chat_id)
+    return
