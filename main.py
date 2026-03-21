@@ -83,6 +83,15 @@ def _first_non_empty_str(values: List[Any]) -> str:
     return ""
 
 
+def _extract_group_chat_display_name(evt: Dict[str, Any]) -> str:
+    """If the webhook payload includes a group name, pass it to P0 start (avoids extra API call)."""
+    return _first_non_empty_str(
+        [
+            _deep_get(evt, "message", "chat_name"),
+        ]
+    )
+
+
 def _extract_mention_names(msg: Dict[str, Any]) -> List[str]:
     out: List[str] = []
     mentions = msg.get("mentions") or []
@@ -512,6 +521,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             image_key=image_keys[0] if image_keys else "",
             mention_names=mention_names,
             chat_type=chat_type,
+            source_chat_name=_extract_group_chat_display_name(evt),
         )
 
     except Exception as e:

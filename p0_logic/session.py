@@ -59,6 +59,15 @@ def find_session_by_meeting_no(meeting_no: str) -> Tuple[str, Dict[str, Any]]:
     return "", {}
 
 
+def get_source_chat_label_for_target_chat(target_chat: str) -> str:
+    """Human-readable source incident group name stored on the active session (if any)."""
+    target_chat = (target_chat or "").strip()
+    if not target_chat:
+        return ""
+    _cid, sess = find_session_by_target_chat(target_chat)
+    return str((sess or {}).get("source_chat_name") or "").strip()
+
+
 def find_session_by_target_chat(target_chat: str) -> Tuple[str, Dict[str, Any]]:
     target_chat = (target_chat or "").strip()
     if not target_chat:
@@ -405,11 +414,12 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
     sess["awaiting_p1_p0_confirm"] = False
     sess["priority"] = "P0"
     log.info("P1 escalated to P0 (user confirmed) chat_id=%s meeting_no=%s", chat_id, meeting_no)
+    lab = str(sess.get("source_chat_name") or "").strip()
     for dm_to in _dm_instruction_targets(trigger_open_id):
         if not dm_to:
             continue
         try:
-            _lark.post_card_to_open_id(dm_to, token, _cards.build_dm_instruction_card("P0"))
+            _lark.post_card_to_open_id(dm_to, token, _cards.build_dm_instruction_card("P0", source_chat_label=lab))
         except Exception as e:
             log.error("Failed to send P1->P0 DM instruction open_id=%s err=%s", dm_to, e)
     _schedule_ongoing_meeting_card(chat_id, token)
@@ -435,7 +445,13 @@ def decline_p1_escalation_end_as_p1(chat_id: str, token: str) -> bool:
     return True
 
 
-def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0") -> None:
+def start_p0(
+    chat_id: str,
+    token: str,
+    trigger_open_id: str,
+    priority: str = "P0",
+    source_chat_name: str = "",
+) -> None:
     from . import drafts as _drafts
     from . import participants as _participants
 
@@ -459,6 +475,9 @@ def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
         return
     target_chat = _config.get_overview_post_chat_id() or chat_id
+    chat_label = (source_chat_name or "").strip()
+    if not chat_label:
+        chat_label = _lark.get_group_chat_name(chat_id, token)
     affected_players = ""
     P0_SESSIONS[chat_id] = {
         "priority": priority,
@@ -470,6 +489,7 @@ def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0
         "trigger_open_id": trigger_open_id,
         "source_chat": chat_id,
         "target_chat": target_chat,
+        "source_chat_name": chat_label,
         "participants": [],
         "affected_players": affected_players,
     }
@@ -500,7 +520,7 @@ def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0
             if not oid:
                 continue
             try:
-                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P0"))
+                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P0", source_chat_label=chat_label))
             except Exception as e:
                 log.error("Failed to send P0 DM instruction open_id=%s err=%s", oid, e)
         _schedule_ongoing_meeting_card(chat_id, token)
@@ -509,7 +529,7 @@ def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0
             if not oid:
                 continue
             try:
-                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P1"))
+                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P1", source_chat_label=chat_label))
             except Exception as e:
                 log.error("Failed to send P1 DM instruction open_id=%s err=%s", oid, e)
         _schedule_p1_escalation_card(chat_id, token)

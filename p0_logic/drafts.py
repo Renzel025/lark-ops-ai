@@ -259,7 +259,10 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             pr = str(prev.get("priority") or "P0").strip().upper()
             if pr not in ("P0", "P1"):
                 pr = "P0"
-            _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr))
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            _lark.post_card_to_open_id(
+                sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr, source_chat_label=lab)
+            )
         finally:
             with _PREVIEW_TIMERS_LOCK:
                 _PREVIEW_TIMERS.pop(sender_open_id, None)

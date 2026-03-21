@@ -20,6 +20,16 @@ def _build_emergency_title(priority: str) -> str:
     return f"🚨 {prio} EMERGENCY — {MEETING_TOPIC}"
 
 
+def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:
+    """Append incident group name to card titles (Lark plain_text stays short)."""
+    s = (source_chat_label or "").strip()
+    if not s:
+        return ""
+    if len(s) > max_chars:
+        s = s[: max_chars - 1] + "…"
+    return f" — {s}"
+
+
 def format_duration(start_epoch: int, end_epoch: Optional[int] = None) -> str:
     try:
         start_epoch = int(start_epoch or 0)
@@ -306,11 +316,11 @@ def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
     }
 
 
-def build_dm_instruction_card(priority: str = "P0") -> Dict[str, Any]:
+def build_dm_instruction_card(priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
-    title = f"🧾 Send {prio} incident details here (DM)"
+    title = f"🧾 Send {prio} incident details (DM){_title_group_suffix(source_chat_label)}"
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
@@ -372,19 +382,19 @@ def build_dm_instruction_card(priority: str = "P0") -> Dict[str, Any]:
     }
 
 
-def build_overview_result_card(md: str, priority: str = "P0") -> Dict[str, Any]:
+def build_overview_result_card(md: str, priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview{_title_group_suffix(source_chat_label)}"}},
         "body": {"elements": [{"tag": "div", "text": {"tag": "lark_md", "content": md}}]},
     }
 
 
-def build_preview_card(md: str, priority: str = "P0") -> Dict[str, Any]:
+def build_preview_card(md: str, priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
@@ -392,7 +402,7 @@ def build_preview_card(md: str, priority: str = "P0") -> Dict[str, Any]:
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview Preview"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview Preview{_title_group_suffix(source_chat_label)}"}},
         "body": {
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": safe_md}},
@@ -463,7 +473,11 @@ def build_preview_card(md: str, priority: str = "P0") -> Dict[str, Any]:
 
 
 def build_edit_overview_card(
-    current_issue: str = "", current_impact: str = "", current_support: str = "", priority: str = "P0"
+    current_issue: str = "",
+    current_impact: str = "",
+    current_support: str = "",
+    priority: str = "P0",
+    source_chat_label: str = "",
 ) -> Dict[str, Any]:
     """Single card to edit Issue, Impact Scope, and Support Request."""
     prio = (priority or "P0").strip().upper()
@@ -475,7 +489,10 @@ def build_edit_overview_card(
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
-        "header": {"template": "orange", "title": {"tag": "plain_text", "content": f"✏️ Edit {prio} Overview"}},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": f"✏️ Edit {prio} Overview{_title_group_suffix(source_chat_label)}"},
+        },
         "body": {
             "elements": [
                 {

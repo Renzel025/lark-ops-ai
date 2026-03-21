@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
 from . import config as _config
@@ -140,10 +140,35 @@ def _preview_priority(preview: Dict[str, Any]) -> str:
     return pr if pr in ("P0", "P1") else "P0"
 
 
-def _send_instruction_card(sender_open_id: str, tenant_token: str, note: Optional[str] = None) -> None:
+def _dm_card_meta(sender_open_id: str) -> Tuple[str, str]:
+    """(source_chat_label, priority) for DM instruction card titles."""
+    draft = _drafts.get_draft(sender_open_id) or {}
+    tc = str(draft.get("target_chat") or "").strip() or (_session.get_active_target_chat() or "")
+    lab = _session.get_source_chat_label_for_target_chat(tc)
+    _cid, sess = _session.find_session_by_target_chat(tc) if tc else ("", {})
+    pr = str((sess or {}).get("priority") or "P0").strip().upper()
+    if pr not in ("P0", "P1"):
+        pr = "P0"
+    return lab, pr
+
+
+def _send_instruction_card(
+    sender_open_id: str,
+    tenant_token: str,
+    note: Optional[str] = None,
+    *,
+    repost_instruction_card: bool = True,
+    priority: str = "P0",
+    source_chat_label: str = "",
+) -> None:
     if note:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, note)
-    _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_dm_instruction_card())
+    if repost_instruction_card:
+        _lark.post_card_to_open_id(
+            sender_open_id,
+            tenant_token,
+            _cards.build_dm_instruction_card(priority, source_chat_label=source_chat_label),
+        )
 
 
 def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
@@ -167,7 +192,10 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
         return False
     prev = _drafts.get_preview(sender_open_id) or {}
     pr = _preview_priority(prev)
-    st, body = _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr))
+    lab = _session.get_source_chat_label_for_target_chat(target_chat)
+    st, body = _lark.post_card_to_open_id(
+        sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr, source_chat_label=lab)
+    )
     if st != 200:
         log.error("generate_preview_now failed HTTP=%s body=%s", st, (body or "")[:500])
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send preview card.")
@@ -233,10 +261,13 @@ def handle_dm_generate_overview(
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, f"❌ No, {person} is not currently in the meeting.")
             return
         if _config.CLEAR_RE.match(src_text):
+            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(sender_open_id, tenant_token, "🗑️ Draft cleared.")
+            _send_instruction_card(
+                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+            )
             return
         if _config.STATUS_RE.match(src_text):
             draft = _drafts.get_draft(sender_open_id)
@@ -344,10 +375,13 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _generate_preview_now(sender_open_id, tenant_token)
             return
         if action_name == "clear_draft":
+            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(sender_open_id, tenant_token, "🗑️ Draft cleared.")
+            _send_instruction_card(
+                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+            )
             return
         if action_name == "show_participants":
             participants = _participants.list_meeting_participants()
@@ -377,7 +411,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not target_chat or not md:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Preview is incomplete.")
                 return
-            card = _cards.build_overview_result_card(md, priority=pri)
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
             st, body = _lark.post_card_to_chat(target_chat, tenant_token, card)
             if st != 200:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
@@ -386,7 +421,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(sender_open_id, tenant_token, "✅ Overview sent to the target group chat.")
+            _send_instruction_card(
+                sender_open_id,
+                tenant_token,
+                "✅ Overview sent to the target group chat.",
+                repost_instruction_card=False,
+            )
             return
         if action_name == "generate_again":
             if not combined_text:
@@ -406,7 +446,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=pri,
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
-            card = _cards.build_preview_card(str(new_preview.get("md") or ""), priority=_preview_priority(new_preview))
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            card = _cards.build_preview_card(
+                str(new_preview.get("md") or ""),
+                priority=_preview_priority(new_preview),
+                source_chat_label=lab,
+            )
             st, body = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
             if st != 200:
                 log.error("generate_again failed HTTP=%s body=%s", st, (body or "")[:500])
@@ -414,8 +459,11 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         if action_name == "edit_preview":
             _drafts.set_preview_edit_waiting(sender_open_id, True)
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
             st, body = _lark.post_card_to_open_id(
-                sender_open_id, tenant_token, _cards.build_edit_overview_card(issue, impact, support, priority=pri)
+                sender_open_id,
+                tenant_token,
+                _cards.build_edit_overview_card(issue, impact, support, priority=pri, source_chat_label=lab),
             )
             if st != 200:
                 log.error("edit_preview failed HTTP=%s body=%s", st, (body or "")[:500])
@@ -454,21 +502,32 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=pri,
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
             _lark.post_card_to_open_id(
                 sender_open_id,
                 tenant_token,
-                _cards.build_preview_card(str(new_preview.get("md") or ""), priority=_preview_priority(new_preview)),
+                _cards.build_preview_card(
+                    str(new_preview.get("md") or ""),
+                    priority=_preview_priority(new_preview),
+                    source_chat_label=lab,
+                ),
             )
             return
         if action_name == "back_to_preview":
             _drafts.clear_preview_edit_flags(sender_open_id)
-            _lark.post_card_to_open_id(sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pri))
+            lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            _lark.post_card_to_open_id(
+                sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pri, source_chat_label=lab)
+            )
             return
         if action_name == "cancel_preview":
+            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(sender_open_id, tenant_token, "🗑️ Preview cancelled.")
+            _send_instruction_card(
+                sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
+            )
             return
         log.warning("Unknown card action: %s", action_name)
     except Exception as e:

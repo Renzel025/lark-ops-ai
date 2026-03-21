@@ -83,6 +83,25 @@ def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tupl
     return r.status_code, (r.text or "")
 
 
+def get_group_chat_name(chat_id: str, token: str) -> str:
+    """Resolve a group chat's display name (for card titles)."""
+    chat_id = (chat_id or "").strip()
+    if not chat_id or not token:
+        return ""
+    url = f"{LARK_BASE}/im/v1/chats/{quote(chat_id, safe='')}"
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+        j, _ = safe_json(r)
+        if j.get("code") != 0:
+            log.warning("get_group_chat_name chat_id=%s code=%s msg=%s", chat_id, j.get("code"), j.get("msg"))
+            return ""
+        data = j.get("data") or {}
+        return str(data.get("name") or "").strip()
+    except Exception as e:
+        log.warning("get_group_chat_name chat_id=%s err=%s", chat_id, e)
+        return ""
+
+
 def safe_json(resp: requests.Response) -> Tuple[Dict[str, Any], str]:
     txt = resp.text or ""
     ctype = (resp.headers.get("Content-Type") or "").lower()

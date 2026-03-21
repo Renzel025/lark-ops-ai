@@ -87,6 +87,7 @@ def process_message(
     token: str,
     lark_client: Any,
     groq_key: str,
+    source_chat_name: str = "",
     **kwargs: Any,
 ) -> None:
     text_raw = (incoming_text or "").strip()
@@ -159,7 +160,7 @@ def process_message(
                 return
 
             log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
-            start_p0(chat_id, token, user_id, priority="P0")
+            start_p0(chat_id, token, user_id, priority="P0", source_chat_name=source_chat_name)
             return
 
         # Trigger P1 if keyword exists anywhere — confirm with Yes/No card first
