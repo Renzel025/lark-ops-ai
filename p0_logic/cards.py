@@ -228,9 +228,8 @@ def build_meeting_ended_card(
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     em_line = _build_emergency_title(prio, emergency_topic)
-    # Grey header + lock; body = one-card “ended” summary (also used to PATCH the red invite).
+    # Title carries ✅ line; body starts at 🚨 line (P0 / P1 both use ``prio``).
     body_md = (
-        f"✅ {prio} meeting ended\n"
         f"{em_line}\n\n"
         f"Meeting ID: {meeting_no}\n"
         f"Duration: {duration_text}\n\n"
@@ -242,7 +241,7 @@ def build_meeting_ended_card(
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"🔒 {prio} meeting ended"}},
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"✅ {prio} meeting ended"}},
         "body": {
             "elements": [
                 {
