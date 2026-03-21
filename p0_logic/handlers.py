@@ -258,13 +258,14 @@ def handle_dm_generate_overview(
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, f"❌ No, {person} is not currently in the meeting.")
             return
         if _config.CLEAR_RE.match(src_text):
-            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
-            )
+            if _config.get_dm_repost_instruction_after_reset():
+                lab, pr = _dm_card_meta(sender_open_id)
+                _send_instruction_card(
+                    sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                )
             return
         if _config.STATUS_RE.match(src_text):
             draft = _drafts.get_draft(sender_open_id)
@@ -372,13 +373,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _generate_preview_now(sender_open_id, tenant_token)
             return
         if action_name == "clear_draft":
-            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
-            )
+            if _config.get_dm_repost_instruction_after_reset():
+                lab, pr = _dm_card_meta(sender_open_id)
+                _send_instruction_card(
+                    sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                )
             return
         if action_name == "show_participants":
             participants = _participants.list_meeting_participants()
@@ -516,13 +518,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to restore preview card.")
             return
         if action_name == "cancel_preview":
-            lab, pr = _dm_card_meta(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
-            )
+            if _config.get_dm_repost_instruction_after_reset():
+                lab, pr = _dm_card_meta(sender_open_id)
+                _send_instruction_card(
+                    sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
+                )
             return
         log.warning("Unknown card action: %s", action_name)
     except Exception as e:

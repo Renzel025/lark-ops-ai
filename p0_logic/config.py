@@ -249,3 +249,15 @@ def get_dm_instruction_open_id() -> str:
     """First DM instruction recipient, or empty (for simple callers)."""
     ids = get_dm_instruction_open_ids()
     return ids[0] if ids else ""
+
+
+def get_dm_repost_instruction_after_reset() -> bool:
+    """
+    If True, after **Cancel preview** or **Clear draft** the bot reposts the DM instruction
+    card (and the short status text). Default **False** to reduce overview-card spam; set
+    ``P0_DM_REPOST_INSTRUCTION_AFTER_RESET=1`` for the old behavior. Older instruction
+    cards in the thread usually still accept button clicks.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_DM_REPOST_INSTRUCTION_AFTER_RESET") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")

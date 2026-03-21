@@ -84,6 +84,7 @@ get_owner_ids = config.get_owner_ids
 get_p0_trigger_ignore_open_ids = config.get_p0_trigger_ignore_open_ids
 get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
+get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
 
 __all__ = [
     "P0_SESSIONS",
@@ -141,4 +142,5 @@ __all__ = [
     "get_p0_trigger_ignore_open_ids",
     "get_dm_instruction_open_id",
     "get_dm_instruction_open_ids",
+    "get_dm_repost_instruction_after_reset",
 ]
