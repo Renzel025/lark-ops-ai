@@ -16,6 +16,28 @@ log = logging.getLogger("lark-ops-ai")
 _UNMAPPED_DEPT_LABEL = "Other"
 
 
+def format_participants_names_display(names: List[Any]) -> str:
+    """
+    Bulleted list of unique VC display names (no support-sheet → department mapping).
+
+    Used for DM \"Participants\" and ongoing-meeting card attendee list.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for p in names:
+        name = str(p or "").strip()
+        if not name:
+            continue
+        key = _text.normalize_lookup_name(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    if not out:
+        return ""
+    return "\n".join(f"• {n}" for n in out)
+
+
 def departments_line_from_names(names: List[Any], tenant_token: str) -> str:
     """
     Map participant display names → department using SUPPORT sheet (column A: name, B: dept).

@@ -218,10 +218,10 @@ def build_meeting_cancelled_card(
     meeting_no: str,
     duration_text: str = "Not available",
     priority: str = "P0",
-    reason: str = "Unexpected P0 keyword detection.",
+    reason: str = "Unspecified",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
-    cancel_reason = (reason or "Unexpected P0 keyword detection.").strip()
+    cancel_reason = (reason or "Unspecified").strip() or "Unspecified"
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
@@ -318,7 +318,7 @@ def build_dm_instruction_card(priority: str = "P0") -> Dict[str, Any]:
         "body": {
             "elements": [
                 {"tag": "div", "text": {"tag": "plain_text", "content": "You may send screenshots and pasted text in any order."}},
-                {"tag": "div", "text": {"tag": "plain_text", "content": "Tap Build overview when ready. Clear draft resets input. Tap Participants to list meeting departments."}},
+                {"tag": "div", "text": {"tag": "plain_text", "content": "Tap Build overview when ready. Clear draft resets input. Tap Participants to list meeting attendees by name."}},
                 {"tag": "hr"},
                 {
                     "tag": "column_set",

@@ -92,26 +92,15 @@ def _cancel_escalation_timer(chat_id: str) -> None:
             pass
 
 
-def _participant_teams_text(sess: Dict[str, Any], tenant_token: str) -> str:
+def _participant_teams_text(sess: Dict[str, Any], _tenant_token: str) -> str:
+    """Ongoing-meeting card: list attendee display names (not sheet → dept codes like OSE/FPMS)."""
+    from . import participants as _participants
+
     participants = list(sess.get("participants") or [])
-    mp = _support.get_support_map(tenant_token)
-    teams: List[str] = []
-    seen = set()
-    has_unmapped = False
-    for name in participants:
-        dept = _support.match_dept_from_name(mp, name)
-        if dept:
-            kk = dept.lower()
-            if kk not in seen:
-                seen.add(kk)
-                teams.append(dept)
-        else:
-            has_unmapped = True
-    if has_unmapped:
-        teams.append("Other Participants")
-    if not teams:
+    line = _participants.format_participants_names_display(participants)
+    if not line.strip():
         return "• No participant info yet"
-    return "\n".join([f"• {t}" for t in teams])
+    return line
 
 
 def get_active_session_key() -> str:
@@ -164,7 +153,7 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
 def cancel_p0_session(
     chat_id: str,
     token: Optional[str] = None,
-    reason: str = "Unexpected P0 keyword detection.",
+    reason: str = "Unspecified",
 ) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
@@ -209,7 +198,7 @@ def end_p0_session_by_meeting_ref(meeting_ref: str, token: Optional[str] = None)
 def cancel_p0_session_by_meeting_no(
     meeting_no: str,
     token: Optional[str] = None,
-    reason: str = "Unexpected P0 keyword detection.",
+    reason: str = "Unspecified",
 ) -> None:
     chat_id, _ = find_session_by_meeting_no(meeting_no)
     if not chat_id:

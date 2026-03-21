@@ -215,7 +215,10 @@ def handle_dm_generate_overview(
             if not participants:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
                 return
-            line = _participants.departments_line_from_names(participants, tenant_token)
+            line = _participants.format_participants_names_display(participants)
+            if not line.strip():
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
+                return
             _lark.post_text_to_open_id(sender_open_id, tenant_token, f"Participants\n{line}")
             return
         m = _config.IS_IN_MEETING_RE.match(src_text)
@@ -351,7 +354,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not participants:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
                 return
-            line = _participants.departments_line_from_names(participants, tenant_token)
+            line = _participants.format_participants_names_display(participants)
+            if not line.strip():
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
+                return
             _lark.post_text_to_open_id(sender_open_id, tenant_token, f"Participants\n{line}")
             return
         preview = _drafts.get_preview(sender_open_id)

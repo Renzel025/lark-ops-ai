@@ -47,6 +47,7 @@ add_meeting_participant = participants.add_meeting_participant
 remove_meeting_participant = participants.remove_meeting_participant
 strip_seeded_host_placeholder_for_open_id = participants.strip_seeded_host_placeholder_for_open_id
 departments_line_from_names = participants.departments_line_from_names
+format_participants_names_display = participants.format_participants_names_display
 
 # Lark
 get_tenant_token = lark_client.get_tenant_token
@@ -110,6 +111,7 @@ __all__ = [
     "remove_meeting_participant",
     "strip_seeded_host_placeholder_for_open_id",
     "departments_line_from_names",
+    "format_participants_names_display",
     "get_tenant_token",
     "post_text_to_chat",
     "post_card_to_chat",

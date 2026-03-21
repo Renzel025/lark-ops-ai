@@ -30,8 +30,12 @@ P1_REGEX = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
 P0_END_REGEX = re.compile(r"\b(p0\s*end|end\s*p0|close\s*p0|p0\s*resolved)\b", re.IGNORECASE)
 P1_END_REGEX = re.compile(r"\b(p1\s*end|end\s*p1|close\s*p1|p1\s*resolved)\b", re.IGNORECASE)
 
-# Cancel commands
-CANCEL_REGEX = re.compile(r"^\s*(cancel|cancel p0|cancel p1|cancel meeting)\s*$", re.IGNORECASE)
+# Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
+# Order: longer prefixes first so "cancel meeting" wins over "cancel".
+CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
+    r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel)\s*(.*)$",
+    re.IGNORECASE,
+)
 
 
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
@@ -118,13 +122,21 @@ def process_message(
         if not text_raw:
             return
 
-        # Cancel command
-        if CANCEL_REGEX.match(text_raw):
+        # Cancel command (optional reason after the keyword phrase)
+        cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
+        if cancel_m:
+            tail = (cancel_m.group(2) or "").strip()
+            cancel_reason = tail if tail else "Unspecified"
             if chat_id in P0_SESSIONS:
                 sess = P0_SESSIONS.get(chat_id) or {}
                 priority = str(sess.get("priority") or "P0").strip().upper()
-                log.info("Incident group: cancel requested chat_id=%s priority=%s", chat_id, priority)
-                cancel_p0_session(chat_id, token, reason=f"Unexpected {priority} keyword detection.")
+                log.info(
+                    "Incident group: cancel requested chat_id=%s priority=%s reason=%r",
+                    chat_id,
+                    priority,
+                    cancel_reason,
+                )
+                cancel_p0_session(chat_id, token, reason=cancel_reason)
             else:
                 log.info("Incident group: cancel requested but no active session chat_id=%s", chat_id)
             return
