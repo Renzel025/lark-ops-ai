@@ -19,6 +19,23 @@ from . import text_processing as _text
 log = logging.getLogger("lark-ops-ai")
 
 
+def _delete_preview_dm_message(sender_open_id: str, tenant_token: str) -> None:
+    """Recall the Overview Preview card in DM (if we stored ``preview_message_id``)."""
+    prev = _drafts.get_preview(sender_open_id) or {}
+    mid = str(prev.get("preview_message_id") or "").strip()
+    if not mid or not tenant_token:
+        return
+    st, body = _lark.delete_message(tenant_token, mid)
+    if st != 200:
+        log.warning(
+            "delete preview DM message failed HTTP=%s open_id=%s mid=%s body=%s",
+            st,
+            sender_open_id,
+            mid,
+            (body or "")[:400],
+        )
+
+
 def _deep_get(d: Any, *path: str) -> Any:
     cur = d
     for key in path:
@@ -259,11 +276,12 @@ def handle_dm_generate_overview(
             return
         if _config.CLEAR_RE.match(src_text):
             lab, pr = _dm_card_meta(sender_open_id)
+            _delete_preview_dm_message(sender_open_id, tenant_token)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
             _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                sender_open_id, tenant_token, note=None, priority=pr, source_chat_label=lab
             )
             return
         if _config.STATUS_RE.match(src_text):
@@ -373,11 +391,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         if action_name == "clear_draft":
             lab, pr = _dm_card_meta(sender_open_id)
+            _delete_preview_dm_message(sender_open_id, tenant_token)
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
             _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                sender_open_id, tenant_token, note=None, priority=pr, source_chat_label=lab
             )
             return
         if action_name == "show_participants":
@@ -415,15 +434,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
+            _delete_preview_dm_message(sender_open_id, tenant_token)
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(
-                sender_open_id,
-                tenant_token,
-                "✅ Overview sent to the target group chat.",
-                repost_instruction_card=False,
-            )
             return
         if action_name == "generate_again":
             if not combined_text:
@@ -517,11 +531,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         if action_name == "cancel_preview":
             lab, pr = _dm_card_meta(sender_open_id)
+            _delete_preview_dm_message(sender_open_id, tenant_token)
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
             _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
+                sender_open_id, tenant_token, note=None, priority=pr, source_chat_label=lab
             )
             return
         log.warning("Unknown card action: %s", action_name)
