@@ -525,6 +525,8 @@ def build_edit_overview_card(
     current_support: str = "",
     priority: str = "P0",
     source_chat_label: str = "",
+    *,
+    update_multi: bool = True,
 ) -> Dict[str, Any]:
     """Single card to edit Issue, Impact Scope, and Support Request."""
     prio = (priority or "P0").strip().upper()
@@ -533,9 +535,12 @@ def build_edit_overview_card(
     default_issue = "" if _text.is_not_specified(current_issue) else (current_issue or "")
     default_impact = "" if _text.is_not_specified(current_impact) else (current_impact or "")
     default_support = "" if _text.is_not_specified(current_support) else (current_support or "")
+    cfg: Dict[str, Any] = {"enable_forward": True}
+    if update_multi:
+        cfg["update_multi"] = True
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        "config": cfg,
         "header": {
             "template": "orange",
             "title": {"tag": "plain_text", "content": f"✏️ Edit {prio} Overview{_title_group_suffix(source_chat_label)}"},

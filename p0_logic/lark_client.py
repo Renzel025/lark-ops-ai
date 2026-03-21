@@ -82,6 +82,19 @@ def post_card_to_chat(chat_id: str, token: str, card: Dict[str, Any]) -> Tuple[i
     return r.status_code, txt, parse_im_message_id_from_response(txt)
 
 
+def recall_im_message(token: str, message_id: str) -> Tuple[int, str]:
+    """
+    Recall (delete) a message the bot sent. Same as user "recall" in chat.
+    Requires scope e.g. ``im:message`` / ``im:message:recall`` per tenant policy.
+    """
+    message_id = (message_id or "").strip()
+    if not message_id:
+        return 400, "message_id empty"
+    url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
+    r = requests.delete(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+    return r.status_code, (r.text or "")
+
+
 def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) -> Tuple[int, str]:
     """
     Replace an interactive (card) message body. Card must have been sent with

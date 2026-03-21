@@ -150,9 +150,11 @@ def _save_preview(
         prio = "P0"
     with _P0_PREVIEWS_LOCK:
         old_mid = ""
+        old_edit_mid = ""
         old = P0_PREVIEWS.get(sender_open_id)
         if old:
             old_mid = str(old.get("preview_message_id") or "").strip()
+            old_edit_mid = str(old.get("edit_message_id") or "").strip()
         row: Dict[str, Any] = {
             "target_chat": target_chat,
             "start_epoch": start_epoch,
@@ -168,6 +170,8 @@ def _save_preview(
         }
         if old_mid:
             row["preview_message_id"] = old_mid
+        if old_edit_mid:
+            row["edit_message_id"] = old_edit_mid
         P0_PREVIEWS[sender_open_id] = row
 
 
@@ -198,6 +202,19 @@ def clear_preview_edit_flags(sender_open_id: str) -> None:
             return
         p["awaiting_edit_input"] = False
         p["updated_at"] = int(time.time())
+
+
+def take_edit_message_id(sender_open_id: str) -> str:
+    """Remove and return the DM edit-card ``message_id`` (before recalling that message)."""
+    sender_open_id = (sender_open_id or "").strip()
+    with _P0_PREVIEWS_LOCK:
+        p = P0_PREVIEWS.get(sender_open_id)
+        if not p:
+            return ""
+        mid = str(p.pop("edit_message_id", None) or "").strip()
+        if mid:
+            p["updated_at"] = int(time.time())
+        return mid
 
 
 def _build_preview_from_draft(
@@ -357,4 +374,39 @@ def post_or_patch_preview_card(sender_open_id: str, tenant_token: str, card: Dic
             pp = P0_PREVIEWS.get(sender_open_id)
             if pp:
                 pp["preview_message_id"] = new_mid
+    return True
+
+
+def post_or_patch_edit_card(sender_open_id: str, tenant_token: str, card: Dict[str, Any]) -> bool:
+    """
+    Post the edit-overview form once, then PATCH the same message so repeated Edit / Save
+    does not stack multiple edit cards in the DM.
+    """
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id or not tenant_token:
+        return False
+    mid = ""
+    with _P0_PREVIEWS_LOCK:
+        p = P0_PREVIEWS.get(sender_open_id)
+        if p:
+            mid = str(p.get("edit_message_id") or "").strip()
+    if mid:
+        st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+        if st == 200:
+            return True
+        log.warning(
+            "edit card PATCH failed HTTP=%s open_id=%s — posting new card body=%s",
+            st,
+            sender_open_id,
+            (body or "")[:400],
+        )
+    st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
+    if st != 200:
+        log.error("edit card POST failed HTTP=%s body=%s", st, (body or "")[:500])
+        return False
+    if new_mid:
+        with _P0_PREVIEWS_LOCK:
+            pp = P0_PREVIEWS.get(sender_open_id)
+            if pp:
+                pp["edit_message_id"] = new_mid
     return True
