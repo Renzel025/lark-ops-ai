@@ -168,7 +168,7 @@ def get_primary_owner_id() -> str:
     return ids[0] if ids else ""
 
 
-def create_vc_reserve(token: str) -> Dict[str, str]:
+def create_vc_reserve(token: str, meeting_topic: str = "") -> Dict[str, str]:
     import time as _time
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     now_sec = int(_time.time())
@@ -177,11 +177,12 @@ def create_vc_reserve(token: str) -> Dict[str, str]:
     if not owner_id:
         log.error("No owner id configured.")
         return {"link": "", "reserve_id": "", "meeting_no": "", "app_link": ""}
+    topic = (meeting_topic or "").strip() or MEETING_TOPIC
     payload = {
         "end_time": str(end_sec),
         "owner_id": owner_id,
         "meeting_settings": {
-            "topic": MEETING_TOPIC,
+            "topic": topic,
             "meeting_initial_type": 1,
             "auto_record": True,
         },

@@ -153,7 +153,12 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
         try:
-            _lark.post_card_to_chat(chat_id, token, _cards.build_meeting_ended_card(meeting_no, duration_text, priority))
+            em_topic = str(sess.get("emergency_topic") or "").strip()
+            _lark.post_card_to_chat(
+                chat_id,
+                token,
+                _cards.build_meeting_ended_card(meeting_no, duration_text, priority, emergency_topic=em_topic),
+            )
         except Exception as e:
             log.error("Failed to post meeting ended card: %s", e)
     P0_SESSIONS.pop(chat_id, None)
@@ -182,7 +187,18 @@ def cancel_p0_session(
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
         try:
-            _lark.post_card_to_chat(chat_id, token, _cards.build_meeting_cancelled_card(meeting_no=meeting_no, duration_text=duration_text, priority=priority, reason=reason))
+            em_topic = str(sess.get("emergency_topic") or "").strip()
+            _lark.post_card_to_chat(
+                chat_id,
+                token,
+                _cards.build_meeting_cancelled_card(
+                    meeting_no=meeting_no,
+                    duration_text=duration_text,
+                    priority=priority,
+                    reason=reason,
+                    emergency_topic=em_topic,
+                ),
+            )
         except Exception as e:
             log.error("Failed to post meeting cancelled card: %s", e)
     P0_SESSIONS.pop(chat_id, None)
@@ -345,7 +361,10 @@ def _schedule_ongoing_meeting_card(chat_id: str, token: str) -> None:
                 return
             meeting_no = str(sess.get("meeting_no") or "").strip()
             participant_text = _participant_teams_text(sess, token)
-            card = _cards.build_ongoing_meeting_card(meeting_no, participant_text, "P0")
+            em_topic = str(sess.get("emergency_topic") or "").strip()
+            card = _cards.build_ongoing_meeting_card(
+                meeting_no, participant_text, "P0", emergency_topic=em_topic
+            )
             st, body = _lark.post_card_to_chat(chat_id, token, card)
             if st != 200:
                 log.error("ongoing meeting card failed HTTP=%s body=%s", st, (body or "")[:500])
@@ -469,7 +488,8 @@ def start_p0(
         _lark.post_text_to_chat(chat_id, token, msg)
         return
     now = int(time.time())
-    vc = _lark.create_vc_reserve(token)
+    emergency_topic = _config.get_emergency_topic_for_source_chat(chat_id)
+    vc = _lark.create_vc_reserve(token, meeting_topic=emergency_topic)
     link = (vc.get("link") or "").strip()
     if not link:
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
@@ -490,6 +510,7 @@ def start_p0(
         "source_chat": chat_id,
         "target_chat": target_chat,
         "source_chat_name": chat_label,
+        "emergency_topic": emergency_topic,
         "participants": [],
         "affected_players": affected_players,
     }
@@ -502,7 +523,17 @@ def start_p0(
             log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
     log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
     meeting_no = str(vc.get("meeting_no", "")).strip()
-    st, body = _lark.post_card_to_chat(chat_id, token, _cards.build_meeting_card(link=link, meeting_no=meeting_no, priority=priority, affected_players=affected_players))
+    st, body = _lark.post_card_to_chat(
+        chat_id,
+        token,
+        _cards.build_meeting_card(
+            link=link,
+            meeting_no=meeting_no,
+            priority=priority,
+            affected_players=affected_players,
+            emergency_topic=emergency_topic,
+        ),
+    )
     if st != 200:
         log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to post meeting card.")

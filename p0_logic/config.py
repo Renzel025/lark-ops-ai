@@ -88,6 +88,33 @@ except ImportError:  # Python < 3.9
 
 PHT = ZoneInfo("Asia/Manila")
 MEETING_TOPIC = (os.getenv("MEETING_TOPIC") or "CP-Emergency feedback紧急问题反馈群").strip()
+
+
+def get_emergency_topic_for_source_chat(chat_id: str) -> str:
+    """
+    Bilingual suffix for ``🚨 P0 EMERGENCY — …`` (meeting cards + VC topic), per incident group.
+
+    ``INCIDENT_GROUP_EMERGENCY_TOPICS=oc_aaa=CP-Emergency feedback紧急问题反馈群,oc_bbb=Game urgent-游戏紧急群``
+
+    Comma-separated; each segment is ``oc_...=topic text``. If no match, uses ``MEETING_TOPIC``.
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    default = (os.getenv("MEETING_TOPIC") or "CP-Emergency feedback紧急问题反馈群").strip()
+    if not cid:
+        return default
+    raw = (os.getenv("INCIDENT_GROUP_EMERGENCY_TOPICS") or "").strip()
+    if not raw:
+        return default
+    for segment in raw.split(","):
+        segment = segment.strip()
+        if "=" not in segment:
+            continue
+        key, _, val = segment.partition("=")
+        key, val = key.strip(), val.strip()
+        if key == cid and val:
+            return val
+    return default
 LARK_BASE = "https://open-sg.larksuite.com/open-apis"
 
 SHEETS_BASES = [

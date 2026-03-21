@@ -77,6 +77,7 @@ build_bilingual_overview_md = cards.build_bilingual_overview_md
 # Config (for callers that need env)
 reload_env_runtime = config.reload_env_runtime
 get_incident_group_chat_ids = config.get_incident_group_chat_ids
+get_emergency_topic_for_source_chat = config.get_emergency_topic_for_source_chat
 get_overview_post_chat_id = config.get_overview_post_chat_id
 get_target_group_chat_id = config.get_target_group_chat_id
 get_owner_ids = config.get_owner_ids
@@ -133,6 +134,7 @@ __all__ = [
     "build_bilingual_overview_md",
     "reload_env_runtime",
     "get_incident_group_chat_ids",
+    "get_emergency_topic_for_source_chat",
     "get_overview_post_chat_id",
     "get_target_group_chat_id",
     "get_owner_ids",

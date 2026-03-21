@@ -15,9 +15,10 @@ PHT = _config.PHT
 MEETING_TOPIC = _config.MEETING_TOPIC
 
 
-def _build_emergency_title(priority: str) -> str:
+def _build_emergency_title(priority: str, topic_line: str = "") -> str:
     prio = (priority or "P0").strip().upper()
-    return f"🚨 {prio} EMERGENCY — {MEETING_TOPIC}"
+    tail = (topic_line or "").strip() or MEETING_TOPIC
+    return f"🚨 {prio} EMERGENCY — {tail}"
 
 
 def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:
@@ -57,9 +58,10 @@ def build_meeting_card(
     meeting_no: str = "",
     priority: str = "P0",
     affected_players: str = "",
+    emergency_topic: str = "",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
-    title_text = _build_emergency_title(prio)
+    title_text = _build_emergency_title(prio, emergency_topic)
     meeting_line = f"Meeting ID: {meeting_no}" if meeting_no else "Meeting has been created."
     elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
@@ -75,7 +77,7 @@ def build_meeting_card(
             "tag": "div",
             "text": {
                 "tag": "plain_text",
-                "content": f"{prio} declared - created a meeting please help to join",
+                "content": title_text,
             },
         },
     ]
@@ -87,7 +89,9 @@ def build_meeting_card(
     }
 
 
-def build_ongoing_meeting_card(meeting_no: str, participant_teams_text: str, priority: str = "P0") -> Dict[str, Any]:
+def build_ongoing_meeting_card(
+    meeting_no: str, participant_teams_text: str, priority: str = "P0", emergency_topic: str = ""
+) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     return {
         "schema": "2.0",
@@ -103,7 +107,7 @@ def build_ongoing_meeting_card(meeting_no: str, participant_teams_text: str, pri
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"**{_build_emergency_title(prio)}**\n\n"
+                            f"**{_build_emergency_title(prio, emergency_topic)}**\n\n"
                             f"**Meeting ID:** {meeting_no}\n\n"
                             "Meeting is already 10 minutes ongoing.\n"
                             "Kindly ask them if need to contact Sir David and Sir Eason.\n\n"
@@ -198,7 +202,10 @@ def build_p1_escalated_card(meeting_no: str) -> Dict[str, Any]:
 
 
 def build_meeting_ended_card(
-    meeting_no: str, duration_text: str = "Not available", priority: str = "P0"
+    meeting_no: str,
+    duration_text: str = "Not available",
+    priority: str = "P0",
+    emergency_topic: str = "",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     return {
@@ -212,7 +219,7 @@ def build_meeting_ended_card(
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"**{_build_emergency_title(prio)}**\n\n"
+                            f"**{_build_emergency_title(prio, emergency_topic)}**\n\n"
                             f"**Meeting ID:** {meeting_no}\n"
                             f"**Duration:** {duration_text}\n\n"
                             "The emergency meeting has concluded."
@@ -229,6 +236,7 @@ def build_meeting_cancelled_card(
     duration_text: str = "Not available",
     priority: str = "P0",
     reason: str = "Unspecified",
+    emergency_topic: str = "",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     cancel_reason = (reason or "Unspecified").strip() or "Unspecified"
@@ -243,7 +251,7 @@ def build_meeting_cancelled_card(
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"**{_build_emergency_title(prio)}**\n\n"
+                            f"**{_build_emergency_title(prio, emergency_topic)}**\n\n"
                             f"**Meeting ID:** {meeting_no or 'Not available'}\n"
                             f"**Duration Before Cancel:** {duration_text}\n"
                             f"**Reason:** {cancel_reason}"
