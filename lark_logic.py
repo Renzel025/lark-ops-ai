@@ -21,9 +21,10 @@ log = logging.getLogger("lark-ops-ai")
 
 WIKI_GROUP_CHAT_ID = os.getenv("WIKI_GROUP_CHAT_ID", "").strip()
 
-# Simple keyword trigger: any occurrence of p0 / p1
-P0_REGEX = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
-P1_REGEX = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
+# Whole-message only — avoids false triggers when someone pastes the meeting-card footer
+# ("P0 declared - created a meeting…") or writes "P0 incident: …" which used to match \bp0\b.
+P0_TRIGGER_RE = re.compile(r"^\s*(p0|priority\s*0)\s*$", re.IGNORECASE)
+P1_TRIGGER_RE = re.compile(r"^\s*(p1|priority\s*1)\s*$", re.IGNORECASE)
 
 # End commands
 P0_END_REGEX = re.compile(r"\b(p0\s*end|end\s*p0|close\s*p0|p0\s*resolved)\b", re.IGNORECASE)
@@ -150,8 +151,8 @@ def process_message(
                 log.info("Incident group: end requested but no active session chat_id=%s", chat_id)
             return
 
-        # Trigger P0 if keyword exists anywhere
-        if P0_REGEX.search(text_raw):
+        # Trigger P0 only if the entire message is the keyword (not a substring).
+        if P0_TRIGGER_RE.match(text_raw):
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
@@ -163,8 +164,8 @@ def process_message(
             start_p0(chat_id, token, user_id, priority="P0", source_chat_name=source_chat_name)
             return
 
-        # Trigger P1 if keyword exists anywhere — confirm with Yes/No card first
-        if P1_REGEX.search(text_raw):
+        # Trigger P1 only if the entire message is the keyword — confirm with Yes/No card first
+        if P1_TRIGGER_RE.match(text_raw):
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
