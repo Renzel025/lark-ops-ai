@@ -91,9 +91,18 @@ def build_meeting_card(
 
 
 def build_ongoing_meeting_card(
-    meeting_no: str, participant_teams_text: str, priority: str = "P0", emergency_topic: str = ""
+    meeting_no: str,
+    participant_departments_line: str,
+    priority: str = "P0",
+    emergency_topic: str = "",
 ) -> Dict[str, Any]:
+    """
+    ``participant_departments_line`` = comma-separated unique departments from SUPPORT sheet
+    (same logic as ``participants.departments_line_from_names``), e.g. ``FPMS, FE``.
+    Rendered in ``plain_text`` so Lark does not treat it as markdown (unlike the body above).
+    """
     prio = (priority or "P0").strip().upper()
+    dept_line = (participant_departments_line or "").strip() or "No participant info yet"
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
@@ -111,11 +120,17 @@ def build_ongoing_meeting_card(
                             f"**{_build_emergency_title(prio, emergency_topic)}**\n\n"
                             f"**Meeting ID:** {meeting_no}\n\n"
                             "Meeting is already 10 minutes ongoing.\n"
-                            "Kindly ask them if need to contact Sir David and Sir Eason.\n\n"
-                            f"**Participants:**\n\n{participant_teams_text}"
+                            "Kindly ask them if need to contact Sir David and Sir Eason."
                         ),
                     },
-                }
+                },
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": f"Participants\n{dept_line}",
+                    },
+                },
             ],
         },
     }

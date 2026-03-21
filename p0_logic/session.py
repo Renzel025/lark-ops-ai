@@ -101,15 +101,12 @@ def _cancel_escalation_timer(chat_id: str) -> None:
             pass
 
 
-def _participant_teams_text(sess: Dict[str, Any], _tenant_token: str) -> str:
-    """Ongoing-meeting card: list attendee display names (not sheet → dept codes like OSE/FPMS)."""
+def _participant_teams_text(sess: Dict[str, Any], tenant_token: str) -> str:
+    """Ongoing-meeting card: unique departments from SUPPORT sheet (A=name, B=dept), e.g. ``FPMS, FE``."""
     from . import participants as _participants
 
     participants = list(sess.get("participants") or [])
-    line = _participants.format_participants_names_display(participants)
-    if not line.strip():
-        return "• No participant info yet"
-    return line
+    return _participants.departments_line_from_names(participants, tenant_token)
 
 
 def get_active_session_key() -> str:
@@ -360,10 +357,10 @@ def _schedule_ongoing_meeting_card(chat_id: str, token: str) -> None:
             if str(sess.get("priority") or "").strip().upper() != "P0":
                 return
             meeting_no = str(sess.get("meeting_no") or "").strip()
-            participant_text = _participant_teams_text(sess, token)
+            participant_depts_line = _participant_teams_text(sess, token)
             em_topic = str(sess.get("emergency_topic") or "").strip()
             card = _cards.build_ongoing_meeting_card(
-                meeting_no, participant_text, "P0", emergency_topic=em_topic
+                meeting_no, participant_depts_line, "P0", emergency_topic=em_topic
             )
             st, body = _lark.post_card_to_chat(chat_id, token, card)
             if st != 200:
@@ -516,9 +513,11 @@ def start_p0(
     }
     if trigger_open_id:
         try:
-            fallback_host = f"Host ({trigger_open_id[-6:]})"
-            _participants.add_meeting_participant(fallback_host)
-            log.info("Seeded fallback host participant=%s for chat_id=%s", fallback_host, chat_id)
+            host_label = _lark.lookup_user_name_by_open_id(token, trigger_open_id)
+            if not host_label:
+                host_label = f"Host ({trigger_open_id[-6:]})"
+            _participants.add_meeting_participant(host_label)
+            log.info("Seeded host participant=%s for chat_id=%s", host_label, chat_id)
         except Exception as e:
             log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
     log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
