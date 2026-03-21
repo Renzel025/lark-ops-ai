@@ -129,35 +129,60 @@ def get_active_target_chat() -> str:
     return target_chat or last_key
 
 
-def _close_meeting_invite_card(sess: Dict[str, Any], token: str, reason_line: str = "") -> None:
-    """PATCH the original red invite message so Join is removed after end/cancel."""
+def _patch_meeting_invite_to_terminal(
+    sess: Dict[str, Any],
+    token: str,
+    *,
+    kind: str,
+    duration_text: str,
+    cancel_reason: str = "",
+) -> bool:
+    """
+    Replace the original red invite card in-place (same message_id) so chat is not spammed.
+    ``kind`` = ``ended`` | ``cancelled``. Returns True if PATCH returned HTTP 200.
+    """
     mid = str((sess or {}).get("meeting_invite_message_id") or "").strip()
     if not mid or not token:
-        return
+        return False
     try:
         meeting_no = str(sess.get("meeting_no") or "").strip()
         priority = str(sess.get("priority") or "P0").strip().upper()
         em_topic = str(sess.get("emergency_topic") or "").strip()
-        default_reason = "Meeting has ended. Join from this card is no longer available."
-        line = (reason_line or "").strip() or default_reason
-        card = _cards.build_meeting_invite_card_closed(
-            meeting_no=meeting_no,
-            priority=priority,
-            emergency_topic=em_topic,
-            reason_line=line,
-        )
+        if kind == "ended":
+            card = _cards.build_meeting_ended_card(
+                meeting_no,
+                duration_text,
+                priority,
+                emergency_topic=em_topic,
+                update_multi=True,
+            )
+        elif kind == "cancelled":
+            card = _cards.build_meeting_cancelled_card(
+                meeting_no=meeting_no,
+                duration_text=duration_text,
+                priority=priority,
+                reason=cancel_reason or "Unspecified",
+                emergency_topic=em_topic,
+                update_multi=True,
+            )
+        else:
+            log.warning("patch meeting invite: unknown kind=%r", kind)
+            return False
         st, body = _lark.patch_interactive_card(token, mid, card)
         if st != 200:
             log.warning(
-                "close meeting invite card PATCH failed HTTP=%s message_id=%s body=%s",
+                "patch meeting invite terminal failed HTTP=%s kind=%s message_id=%s body=%s",
                 st,
+                kind,
                 mid,
                 (body or "")[:500],
             )
-        else:
-            log.info("Closed meeting invite card (PATCH) message_id=%s", mid)
+            return False
+        log.info("Patched meeting invite → %s message_id=%s", kind, mid)
+        return True
     except Exception as e:
-        log.warning("close meeting invite card exception: %s", e)
+        log.warning("patch meeting invite terminal exception: %s", e)
+        return False
 
 
 def bind_live_meeting_id(meeting_ref: str) -> None:
@@ -176,20 +201,23 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
     _cancel_ongoing_timer(chat_id)
     _cancel_escalation_timer(chat_id)
     if token and sess:
-        _close_meeting_invite_card(sess, token)
         meeting_no = str(sess.get("meeting_no") or "").strip()
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
-        try:
-            em_topic = str(sess.get("emergency_topic") or "").strip()
-            _lark.post_card_to_chat(
-                chat_id,
-                token,
-                _cards.build_meeting_ended_card(meeting_no, duration_text, priority, emergency_topic=em_topic),
-            )
-        except Exception as e:
-            log.error("Failed to post meeting ended card: %s", e)
+        em_topic = str(sess.get("emergency_topic") or "").strip()
+        patched = _patch_meeting_invite_to_terminal(sess, token, kind="ended", duration_text=duration_text)
+        if not patched:
+            try:
+                _lark.post_card_to_chat(
+                    chat_id,
+                    token,
+                    _cards.build_meeting_ended_card(
+                        meeting_no, duration_text, priority, emergency_topic=em_topic, update_multi=False
+                    ),
+                )
+            except Exception as e:
+                log.error("Failed to post meeting ended card (fallback): %s", e)
     P0_SESSIONS.pop(chat_id, None)
 
 
@@ -212,29 +240,29 @@ def cancel_p0_session(
         if (not meeting_ended) and reserve_id:
             _lark.delete_vc_reserve(token, reserve_id)
         log.info("cancel_p0_session VC action chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s", chat_id, reserve_id, meeting_id, meeting_no)
-        _close_meeting_invite_card(
-            sess,
-            token,
-            reason_line="Meeting was cancelled. Join from this card is no longer available.",
-        )
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
-        try:
-            em_topic = str(sess.get("emergency_topic") or "").strip()
-            _lark.post_card_to_chat(
-                chat_id,
-                token,
-                _cards.build_meeting_cancelled_card(
-                    meeting_no=meeting_no,
-                    duration_text=duration_text,
-                    priority=priority,
-                    reason=reason,
-                    emergency_topic=em_topic,
-                ),
-            )
-        except Exception as e:
-            log.error("Failed to post meeting cancelled card: %s", e)
+        em_topic = str(sess.get("emergency_topic") or "").strip()
+        patched = _patch_meeting_invite_to_terminal(
+            sess, token, kind="cancelled", duration_text=duration_text, cancel_reason=reason
+        )
+        if not patched:
+            try:
+                _lark.post_card_to_chat(
+                    chat_id,
+                    token,
+                    _cards.build_meeting_cancelled_card(
+                        meeting_no=meeting_no,
+                        duration_text=duration_text,
+                        priority=priority,
+                        reason=reason,
+                        emergency_topic=em_topic,
+                        update_multi=False,
+                    ),
+                )
+            except Exception as e:
+                log.error("Failed to post meeting cancelled card (fallback): %s", e)
     P0_SESSIONS.pop(chat_id, None)
 
 

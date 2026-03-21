@@ -91,32 +91,6 @@ def build_meeting_card(
     }
 
 
-def build_meeting_invite_card_closed(
-    meeting_no: str = "",
-    priority: str = "P0",
-    emergency_topic: str = "",
-    reason_line: str = "Meeting has ended. Join from this card is no longer available.",
-) -> Dict[str, Any]:
-    """
-    Replacement body for the red invite card after end/cancel: no URL / no Join button.
-    Must keep ``update_multi: true`` to satisfy Lark PATCH rules.
-    """
-    prio = (priority or "P0").strip().upper()
-    tail = (emergency_topic or "").strip() or MEETING_TOPIC
-    meeting_line = f"Meeting ID: {meeting_no}" if meeting_no else "Meeting ID: —"
-    elements: List[Dict[str, Any]] = [
-        {"tag": "div", "text": {"tag": "plain_text", "content": f"{prio} — {tail}"}},
-        {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
-        {"tag": "div", "text": {"tag": "plain_text", "content": (reason_line or "").strip() or "Meeting closed."}},
-    ]
-    return {
-        "schema": "2.0",
-        "config": {"enable_forward": True, "update_multi": True},
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"🔒 {prio} meeting ended"}},
-        "body": {"elements": elements},
-    }
-
-
 def build_ongoing_meeting_card(
     meeting_no: str,
     participant_departments_line: str,
@@ -249,10 +223,12 @@ def build_meeting_ended_card(
     duration_text: str = "Not available",
     priority: str = "P0",
     emergency_topic: str = "",
+    *,
+    update_multi: bool = False,
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     em_line = _build_emergency_title(prio, emergency_topic)
-    # Grey header + lock (same vibe as patched closed invite); body = summary lines user asked for.
+    # Grey header + lock; body = one-card “ended” summary (also used to PATCH the red invite).
     body_md = (
         f"✅ {prio} meeting ended\n"
         f"{em_line}\n\n"
@@ -260,9 +236,12 @@ def build_meeting_ended_card(
         f"Duration: {duration_text}\n\n"
         "The emergency meeting has concluded."
     )
+    cfg: Dict[str, Any] = {"enable_forward": True}
+    if update_multi:
+        cfg["update_multi"] = True
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        "config": cfg,
         "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"🔒 {prio} meeting ended"}},
         "body": {
             "elements": [
@@ -284,12 +263,17 @@ def build_meeting_cancelled_card(
     priority: str = "P0",
     reason: str = "Unspecified",
     emergency_topic: str = "",
+    *,
+    update_multi: bool = False,
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     cancel_reason = (reason or "Unspecified").strip() or "Unspecified"
+    cfg: Dict[str, Any] = {"enable_forward": True}
+    if update_multi:
+        cfg["update_multi"] = True
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        "config": cfg,
         "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"🛑 {prio} meeting cancelled"}},
         "body": {
             "elements": [
