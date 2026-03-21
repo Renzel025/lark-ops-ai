@@ -18,7 +18,7 @@ MEETING_TOPIC = _config.MEETING_TOPIC
 def _build_emergency_title(priority: str, topic_line: str = "") -> str:
     prio = (priority or "P0").strip().upper()
     tail = (topic_line or "").strip() or MEETING_TOPIC
-    return f"🚨 {prio} EMERGENCY — {tail}"
+    return f"🚨 {prio} — {tail}"
 
 
 def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:

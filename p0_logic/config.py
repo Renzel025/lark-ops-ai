@@ -92,7 +92,7 @@ MEETING_TOPIC = (os.getenv("MEETING_TOPIC") or "CP-Emergency feedback紧急问�
 
 def get_emergency_topic_for_source_chat(chat_id: str) -> str:
     """
-    Bilingual suffix for ``🚨 P0 EMERGENCY — …`` (meeting cards + VC topic), per incident group.
+    Bilingual suffix for ``🚨 P0 — …`` (meeting cards + VC topic), per incident group.
 
     ``INCIDENT_GROUP_EMERGENCY_TOPICS=oc_aaa=CP-Emergency feedback紧急问题反馈群,oc_bbb=Game urgent-游戏紧急群``
 
