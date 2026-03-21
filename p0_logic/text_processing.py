@@ -33,11 +33,36 @@ def is_not_specified(s: str) -> bool:
     return bool(NOT_SPECIFIED_RE.match((s or "").strip()))
 
 
+def format_bare_player_count_phrase(text: str) -> Optional[str]:
+    """
+    If text is only a numeric player count (e.g. ``5000``, ``5,000``, ``5000 players``),
+    return a full phrase for the overview card / translation.
+    """
+    src = (text or "").strip()
+    if not src:
+        return None
+    m = re.fullmatch(r"(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\s*(?:players?|users?|accounts?))?\s*", src, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    if 1900 <= n <= 2100:
+        return None
+    if n < 1 or n > 50_000_000:
+        return None
+    return f"{n} affected players"
+
+
 def normalize_impact_scope_manual(text: str) -> str:
     """User-edited impact scope from DM or card form (plain text, one line)."""
     src = (text or "").strip()
     if not src or is_not_specified(src):
         return "Not specified"
+    bare = format_bare_player_count_phrase(src)
+    if bare:
+        return bare
     return normalize_gaming_zh(clean_single_line_translation(src))[:500].strip() or "Not specified"
 
 
@@ -200,6 +225,18 @@ def _pick_best_issue_text(text: str) -> str:
     return max(blocks, key=_score_issue_block)
 
 
+def _impact_from_bare_count_lines(text: str) -> Optional[str]:
+    """Detect lines that are only a player count (common when ops pastes a short note)."""
+    src = (text or "").strip()
+    if not src:
+        return None
+    for raw in src.splitlines():
+        hit = format_bare_player_count_phrase(raw.strip())
+        if hit:
+            return hit
+    return format_bare_player_count_phrase(src)
+
+
 def build_impact_scope(text: str) -> str:
     ids = extract_player_ids(text)
     if ids:
@@ -207,4 +244,7 @@ def build_impact_scope(text: str) -> str:
     _n, label = extract_player_count_from_text(text)
     if label:
         return label
+    bare_line = _impact_from_bare_count_lines(text)
+    if bare_line:
+        return bare_line
     return "Not specified"

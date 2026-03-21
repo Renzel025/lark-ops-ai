@@ -32,9 +32,39 @@ def reload_env_runtime() -> None:
         log.error("Failed to reload .env: %s", e)
 
 
-def get_target_group_chat_id() -> str:
+# Default incident group if env unset (matches historical lark_logic default).
+_DEFAULT_INCIDENT_GROUP_FALLBACK = "oc_f4e833c6744e55eb50dfcd8830fa913e"
+
+
+def get_incident_group_chat_ids() -> FrozenSet[str]:
+    """
+    All group chat ids (oc_...) where P0/P1 keywords are handled.
+
+    Set either:
+    - ``INCIDENT_GROUP_IDS=oc_a,oc_b`` (preferred for multiple), or
+    - ``INCIDENT_GROUP_ID=oc_a`` or ``INCIDENT_GROUP_ID=oc_a,oc_b`` (comma-separated).
+    """
     reload_env_runtime()
-    return (os.getenv("INCIDENT_GROUP_ID") or "").strip()
+    raw = (os.getenv("INCIDENT_GROUP_IDS") or "").strip()
+    if not raw:
+        raw = (os.getenv("INCIDENT_GROUP_ID") or "").strip()
+    if not raw:
+        return frozenset({_DEFAULT_INCIDENT_GROUP_FALLBACK})
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def get_overview_post_chat_id() -> str:
+    """
+    If set, \"Send overview\" posts to this oc_ chat; otherwise posts to the group
+    where the session started (per-chat_id session).
+    """
+    reload_env_runtime()
+    return (os.getenv("OVERVIEW_TARGET_GROUP_CHAT_ID") or os.getenv("P0_OVERVIEW_POST_CHAT_ID") or "").strip()
+
+
+def get_target_group_chat_id() -> str:
+    """Backward-compatible alias: optional fixed overview destination (not incident routing)."""
+    return get_overview_post_chat_id()
 
 
 REQ_TIMEOUT_ENV = (os.getenv("REQ_TIMEOUT", "15") or "15").strip()
@@ -104,6 +134,7 @@ PLAYER_COUNT_PATTERNS: List[Tuple[CountBuilder, re.Pattern[str]]] = [
     (lambda n: (n, f"at least {n} affected players"), re.compile(r"\bat least\s+(\d+)\s+players?\b", re.IGNORECASE)),
     (lambda n: (n, f"at least {n} affected players"), re.compile(r"\b(\d+)\s*\+\s*players?\b", re.IGNORECASE)),
     (lambda n: (n, f"{n} affected players"), re.compile(r"\b(\d+)\s+players?\b", re.IGNORECASE)),
+    (lambda n: (n, f"{n} affected players"), re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d{3,})\s+users?\b", re.IGNORECASE)),
 ]
 
 PLAYER_VAGUE_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [

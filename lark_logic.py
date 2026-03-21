@@ -4,7 +4,7 @@ import logging
 from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
-from p0_logic.config import get_p0_trigger_ignore_open_ids
+from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
 from p0_logic import (
     start_p0,
     end_p0_session,
@@ -19,7 +19,6 @@ from p0_logic import (
 
 log = logging.getLogger("lark-ops-ai")
 
-INCIDENT_GROUP_ID = os.getenv("INCIDENT_GROUP_ID", "oc_f4e833c6744e55eb50dfcd8830fa913e").strip()
 WIKI_GROUP_CHAT_ID = os.getenv("WIKI_GROUP_CHAT_ID", "").strip()
 
 # Simple keyword trigger: any occurrence of p0 / p1
@@ -118,7 +117,7 @@ def process_message(
     # ---------------------------------------------------------
     # INCIDENT GROUP
     # ---------------------------------------------------------
-    if chat_id == INCIDENT_GROUP_ID:
+    if chat_id in get_incident_group_chat_ids():
         if not text_raw:
             return
 

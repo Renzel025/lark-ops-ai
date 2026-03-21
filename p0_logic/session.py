@@ -458,7 +458,7 @@ def start_p0(chat_id: str, token: str, trigger_open_id: str, priority: str = "P0
     if not link:
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
         return
-    target_chat = _config.get_target_group_chat_id() or chat_id
+    target_chat = _config.get_overview_post_chat_id() or chat_id
     affected_players = ""
     P0_SESSIONS[chat_id] = {
         "priority": priority,
