@@ -500,7 +500,7 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
         if not dm_to:
             continue
         try:
-            _lark.post_card_to_open_id(dm_to, token, _cards.build_dm_instruction_card("P0", source_chat_label=lab))
+            _, _, _ = _lark.post_card_to_open_id(dm_to, token, _cards.build_dm_instruction_card("P0", source_chat_label=lab))
         except Exception as e:
             log.error("Failed to send P1->P0 DM instruction open_id=%s err=%s", dm_to, e)
     _schedule_ongoing_meeting_card(chat_id, token)
@@ -617,7 +617,7 @@ def start_p0(
             if not oid:
                 continue
             try:
-                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P0", source_chat_label=chat_label))
+                _, _, _ = _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P0", source_chat_label=chat_label))
             except Exception as e:
                 log.error("Failed to send P0 DM instruction open_id=%s err=%s", oid, e)
         _schedule_ongoing_meeting_card(chat_id, token)
@@ -626,7 +626,7 @@ def start_p0(
             if not oid:
                 continue
             try:
-                _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P1", source_chat_label=chat_label))
+                _, _, _ = _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P1", source_chat_label=chat_label))
             except Exception as e:
                 log.error("Failed to send P1 DM instruction open_id=%s err=%s", oid, e)
         _schedule_p1_escalation_card(chat_id, token)

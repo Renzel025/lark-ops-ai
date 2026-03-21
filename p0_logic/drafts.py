@@ -149,7 +149,11 @@ def _save_preview(
     if prio not in ("P0", "P1"):
         prio = "P0"
     with _P0_PREVIEWS_LOCK:
-        P0_PREVIEWS[sender_open_id] = {
+        old_mid = ""
+        old = P0_PREVIEWS.get(sender_open_id)
+        if old:
+            old_mid = str(old.get("preview_message_id") or "").strip()
+        row: Dict[str, Any] = {
             "target_chat": target_chat,
             "start_epoch": start_epoch,
             "combined_text": combined_text,
@@ -162,6 +166,9 @@ def _save_preview(
             "awaiting_edit_input": awaiting_edit_input,
             "updated_at": int(time.time()),
         }
+        if old_mid:
+            row["preview_message_id"] = old_mid
+        P0_PREVIEWS[sender_open_id] = row
 
 
 def get_preview(sender_open_id: str) -> Optional[Dict[str, Any]]:
@@ -260,9 +267,8 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             if pr not in ("P0", "P1"):
                 pr = "P0"
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            _lark.post_card_to_open_id(
-                sender_open_id, tenant_token, _cards.build_preview_card(md, priority=pr, source_chat_label=lab)
-            )
+            card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
+            post_or_patch_preview_card(sender_open_id, tenant_token, card)
         finally:
             with _PREVIEW_TIMERS_LOCK:
                 _PREVIEW_TIMERS.pop(sender_open_id, None)
@@ -317,3 +323,38 @@ def save_preview(
         awaiting_edit_input=awaiting_edit_input,
         priority=priority,
     )
+
+
+def post_or_patch_preview_card(sender_open_id: str, tenant_token: str, card: Dict[str, Any]) -> bool:
+    """
+    Post Overview Preview to the user's DM, or PATCH the previous preview message (same as meeting card).
+    Falls back to a new POST if PATCH fails (e.g. old card without update_multi).
+    """
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id or not tenant_token:
+        return False
+    mid = ""
+    with _P0_PREVIEWS_LOCK:
+        p = P0_PREVIEWS.get(sender_open_id)
+        if p:
+            mid = str(p.get("preview_message_id") or "").strip()
+    if mid:
+        st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+        if st == 200:
+            return True
+        log.warning(
+            "preview PATCH failed HTTP=%s open_id=%s — sending new card body=%s",
+            st,
+            sender_open_id,
+            (body or "")[:400],
+        )
+    st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
+    if st != 200:
+        log.error("preview POST failed HTTP=%s body=%s", st, (body or "")[:500])
+        return False
+    if new_mid:
+        with _P0_PREVIEWS_LOCK:
+            pp = P0_PREVIEWS.get(sender_open_id)
+            if pp:
+                pp["preview_message_id"] = new_mid
+    return True

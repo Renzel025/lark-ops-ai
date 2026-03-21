@@ -107,11 +107,12 @@ def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]
     return r.status_code, (r.text or "")
 
 
-def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str]:
+def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str, str]:
     url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
     payload = {"receive_id": open_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
     r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
-    return r.status_code, (r.text or "")
+    txt = r.text or ""
+    return r.status_code, txt, parse_im_message_id_from_response(txt)
 
 
 def get_group_chat_name(chat_id: str, token: str) -> str:

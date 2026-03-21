@@ -432,14 +432,23 @@ def build_overview_result_card(md: str, priority: str = "P0", source_chat_label:
     }
 
 
-def build_preview_card(md: str, priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
+def build_preview_card(
+    md: str,
+    priority: str = "P0",
+    source_chat_label: str = "",
+    *,
+    update_multi: bool = True,
+) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
     safe_md = (md or "").strip()[:3500]
+    cfg: Dict[str, Any] = {"enable_forward": True}
+    if update_multi:
+        cfg["update_multi"] = True
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        "config": cfg,
         "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview Preview{_title_group_suffix(source_chat_label)}"}},
         "body": {
             "elements": [
