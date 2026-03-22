@@ -6,7 +6,7 @@ from typing import Any, List
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
 from p0_logic.cards import build_meeting_ended_card, build_no_active_p0_session_card
-from p0_logic.lark_client import post_card_to_chat
+from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic.session import get_last_ended_snapshot
 from p0_logic import (
     start_p0,
@@ -181,6 +181,13 @@ def process_message(
                     st, body, _ = post_card_to_chat(chat_id, token, card)
                     if st != 200:
                         log.warning("no-session end prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
+                    if snap:
+                        dur = (snap.get("duration_text") or "Not available").strip() or "Not available"
+                        line = f"ℹ️ Meeting already ended. Duration: {dur}"
+                        mn = (snap.get("meeting_no") or "").strip()
+                        if mn:
+                            line += f". Meeting ID: {mn}"
+                        post_text_to_chat(chat_id, token, line)
             return
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).

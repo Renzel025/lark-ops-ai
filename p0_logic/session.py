@@ -265,6 +265,13 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
                 )
             except Exception as e:
                 log.error("Failed to post meeting ended card (fallback): %s", e)
+        summary = f"✅ Meeting ended. Duration: {duration_text}"
+        if meeting_no:
+            summary += f". Meeting ID: {meeting_no}"
+        try:
+            _lark.post_text_to_chat(chat_id, token, summary)
+        except Exception as e:
+            log.warning("post_text meeting ended summary failed chat_id=%s err=%s", chat_id, e)
     P0_SESSIONS.pop(chat_id, None)
 
 
