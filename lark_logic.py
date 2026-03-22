@@ -5,6 +5,9 @@ from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
+from p0_logic.cards import build_meeting_ended_card, build_no_active_p0_session_card
+from p0_logic.lark_client import post_card_to_chat
+from p0_logic.session import get_last_ended_snapshot
 from p0_logic import (
     start_p0,
     end_p0_session,
@@ -148,6 +151,12 @@ def process_message(
                 cancel_p0_session(chat_id, token, reason=cancel_reason)
             else:
                 log.info("Incident group: cancel requested but no active session chat_id=%s", chat_id)
+                if token:
+                    st, body, _ = post_card_to_chat(
+                        chat_id, token, build_no_active_p0_session_card("cancel")
+                    )
+                    if st != 200:
+                        log.warning("no-session cancel prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
         # End command
@@ -157,6 +166,21 @@ def process_message(
                 end_p0_session(chat_id, token)
             else:
                 log.info("Incident group: end requested but no active session chat_id=%s", chat_id)
+                if token:
+                    snap = get_last_ended_snapshot(chat_id)
+                    if snap:
+                        card = build_meeting_ended_card(
+                            snap.get("meeting_no") or "",
+                            snap.get("duration_text") or "Not available",
+                            snap.get("priority") or "P0",
+                            emergency_topic=snap.get("emergency_topic") or "",
+                            update_multi=False,
+                        )
+                    else:
+                        card = build_no_active_p0_session_card("end")
+                    st, body, _ = post_card_to_chat(chat_id, token, card)
+                    if st != 200:
+                        log.warning("no-session end prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).

@@ -39,6 +39,7 @@ consume_p1_prompt_for_confirm = session.consume_p1_prompt_for_confirm
 request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
 apply_p1_escalation_after_confirm = session.apply_p1_escalation_after_confirm
 decline_p1_escalation_end_as_p1 = session.decline_p1_escalation_end_as_p1
+get_last_ended_snapshot = session.get_last_ended_snapshot
 
 # Participants
 list_meeting_participants = participants.list_meeting_participants
@@ -68,6 +69,7 @@ get_support_map = support.get_support_map
 build_meeting_card = cards.build_meeting_card
 build_meeting_ended_card = cards.build_meeting_ended_card
 build_meeting_cancelled_card = cards.build_meeting_cancelled_card
+build_no_active_p0_session_card = cards.build_no_active_p0_session_card
 build_dm_instruction_card = cards.build_dm_instruction_card
 build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
@@ -109,6 +111,7 @@ __all__ = [
     "request_p1_meeting_confirmation",
     "apply_p1_escalation_after_confirm",
     "decline_p1_escalation_end_as_p1",
+    "get_last_ended_snapshot",
     "list_meeting_participants",
     "is_person_in_meeting",
     "add_meeting_participant",
@@ -128,6 +131,7 @@ __all__ = [
     "build_meeting_card",
     "build_meeting_ended_card",
     "build_meeting_cancelled_card",
+    "build_no_active_p0_session_card",
     "build_dm_instruction_card",
     "build_preview_card",
     "build_edit_overview_card",

@@ -218,6 +218,39 @@ def build_p1_escalated_card(meeting_no: str) -> Dict[str, Any]:
     }
 
 
+def build_no_active_p0_session_card(mode: str = "end") -> Dict[str, Any]:
+    """
+    Shown when user types end/cancel but there is no session and no stored ended snapshot.
+    Same grey style family as meeting-ended cards.
+    """
+    m = (mode or "end").strip().lower()
+    if m == "cancel":
+        title = "🛑 No active meeting"
+        body = (
+            "**There is no active P0/P1 session to cancel in this chat.**\n\n"
+            "It may have already ended or been cancelled, or the bot was restarted."
+        )
+    else:
+        title = "✅ No active meeting"
+        body = (
+            "**There is no active P0/P1 session to end in this chat.**\n\n"
+            "The meeting may have already ended, or the bot was restarted since it started."
+        )
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": title}},
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": body},
+                }
+            ],
+        },
+    }
+
+
 def build_meeting_ended_card(
     meeting_no: str,
     duration_text: str = "Not available",

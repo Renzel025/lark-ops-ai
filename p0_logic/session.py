@@ -28,6 +28,10 @@ _ESCALATION_TIMERS_LOCK = threading.Lock()
 P1_PROMPT_PENDING: Dict[str, Dict[str, Any]] = {}
 _P1_PROMPT_LOCK = threading.Lock()
 
+# Last successful ``end_p0_session`` fields per incident chat (in-memory) — replay ended card if user types "end" again.
+_LAST_ENDED_SNAPSHOT_BY_CHAT: Dict[str, Dict[str, str]] = {}
+_LAST_ENDED_SNAPSHOT_LOCK = threading.Lock()
+
 ONGOING_CARD_DELAY_SEC = _config.ONGOING_CARD_DELAY_SEC
 P1_TO_P0_ESCALATION_SEC = _config.P1_TO_P0_ESCALATION_SEC
 P0_COOLDOWN_SEC = _config.P0_COOLDOWN_SEC
@@ -185,6 +189,42 @@ def _patch_meeting_invite_to_terminal(
         return False
 
 
+def _store_last_ended_snapshot(
+    chat_id: str,
+    meeting_no: str,
+    duration_text: str,
+    priority: str,
+    emergency_topic: str,
+) -> None:
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    with _LAST_ENDED_SNAPSHOT_LOCK:
+        _LAST_ENDED_SNAPSHOT_BY_CHAT[chat_id] = {
+            "meeting_no": meeting_no or "",
+            "duration_text": (duration_text or "Not available").strip() or "Not available",
+            "priority": prio,
+            "emergency_topic": (emergency_topic or "").strip(),
+        }
+
+
+def _clear_last_ended_snapshot(chat_id: str) -> None:
+    chat_id = (chat_id or "").strip()
+    with _LAST_ENDED_SNAPSHOT_LOCK:
+        _LAST_ENDED_SNAPSHOT_BY_CHAT.pop(chat_id, None)
+
+
+def get_last_ended_snapshot(chat_id: str) -> Optional[Dict[str, str]]:
+    """Copy of last ``end_p0_session`` card fields for this chat, or None."""
+    chat_id = (chat_id or "").strip()
+    with _LAST_ENDED_SNAPSHOT_LOCK:
+        d = _LAST_ENDED_SNAPSHOT_BY_CHAT.get(chat_id)
+        return dict(d) if d else None
+
+
 def bind_live_meeting_id(meeting_ref: str) -> None:
     meeting_ref = (meeting_ref or "").strip()
     if not meeting_ref or not P0_SESSIONS:
@@ -200,6 +240,13 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
     sess = P0_SESSIONS.get(chat_id) or {}
     _cancel_ongoing_timer(chat_id)
     _cancel_escalation_timer(chat_id)
+    if sess:
+        meeting_no_snap = str(sess.get("meeting_no") or "").strip()
+        start_epoch_snap = int(sess.get("start_epoch") or 0)
+        duration_snap = _cards.format_duration(start_epoch_snap)
+        priority_snap = str(sess.get("priority") or "P0").strip().upper()
+        em_snap = str(sess.get("emergency_topic") or "").strip()
+        _store_last_ended_snapshot(chat_id, meeting_no_snap, duration_snap, priority_snap, em_snap)
     if token and sess:
         meeting_no = str(sess.get("meeting_no") or "").strip()
         start_epoch = int(sess.get("start_epoch") or 0)
@@ -230,6 +277,8 @@ def cancel_p0_session(
     sess = P0_SESSIONS.get(chat_id) or {}
     _cancel_ongoing_timer(chat_id)
     _cancel_escalation_timer(chat_id)
+    if sess:
+        _clear_last_ended_snapshot(chat_id)
     reserve_id = str(sess.get("reserve_id") or "").strip()
     meeting_id = str(sess.get("meeting_id") or "").strip()
     meeting_no = str(sess.get("meeting_no") or "").strip()
@@ -543,6 +592,7 @@ def start_p0(
     if not chat_id:
         return
     pop_p1_prompt_pending(chat_id)
+    _clear_last_ended_snapshot(chat_id)
     if p0_cooldown(chat_id):
         total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
         mins_label = "minute" if total_min == 1 else "minutes"
