@@ -230,19 +230,35 @@ def is_open_id(x: str) -> bool:
     return bool(OPEN_ID_RE.match((x or "").strip()))
 
 
+def get_host_and_dm_open_id() -> str:
+    """
+    One ``ou_`` for **both** VC organizer (primary owner) **and** DM instruction recipient.
+
+    Set ``P0_HOST_AND_DM_OPEN_ID=ou_...`` when a single duty user should host the meeting
+    and receive the bot DM. Used only as a **fallback** when the more specific vars below
+    are unset.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_HOST_AND_DM_OPEN_ID") or "").strip()
+    return v if v and is_open_id(v) else ""
+
+
 def get_owner_ids() -> List[str]:
     """
     Lark VC reserve `owner_id` (organizer). Set in .env — required for creating meetings.
 
     P0_OWNER_OPEN_IDS — comma-separated open_ids (first id is primary owner).
     P0_INVITEE_OPEN_IDS — legacy alias for the same variable.
+    If both empty: ``P0_HOST_AND_DM_OPEN_ID`` (single user) is used as the only owner.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_OWNER_OPEN_IDS") or os.getenv("P0_INVITEE_OPEN_IDS") or "").strip()
     if not raw:
-        return []
+        one = get_host_and_dm_open_id()
+        return [one] if one else []
     ids = [x.strip() for x in raw.split(",") if x and x.strip()]
-    return [x for x in ids if is_open_id(x)]
+    out = [x for x in ids if is_open_id(x)]
+    return out
 
 
 def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
@@ -265,6 +281,7 @@ def get_dm_instruction_open_ids() -> List[str]:
 
     P0_DM_INSTRUCTION_OPEN_IDS — comma-separated open_ids (ou_...), multiple recipients.
     P0_DM_INSTRUCTION_OPEN_ID — single open_id (legacy; use if OPEN_IDS is unset).
+    If those are unset: ``P0_HOST_AND_DM_OPEN_ID`` (same as single host + DM user).
     """
     reload_env_runtime()
     raw_multi = (os.getenv("P0_DM_INSTRUCTION_OPEN_IDS") or "").strip()
@@ -274,7 +291,8 @@ def get_dm_instruction_open_ids() -> List[str]:
     raw_single = (os.getenv("P0_DM_INSTRUCTION_OPEN_ID") or "").strip()
     if raw_single and is_open_id(raw_single):
         return [raw_single]
-    return []
+    one = get_host_and_dm_open_id()
+    return [one] if one else []
 
 
 def get_dm_instruction_open_id() -> str:

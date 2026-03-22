@@ -20,5 +20,8 @@ build/
 .vscode/
 *.swp
 
+# Local pip target (never commit — use venv or pip on server)
+.docx_deps/
+
 # Logs / local data
 *.log
