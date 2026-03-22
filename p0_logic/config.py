@@ -254,11 +254,12 @@ def get_dm_instruction_open_id() -> str:
 def get_dm_repost_instruction_after_reset() -> bool:
     """
     If True, after **Clear draft** (button or ``CLEAR_RE`` text) the bot reposts the DM
-    instruction card (and the short status text). **Cancel preview** always recalls the
+    instruction card. A **draft-cleared** text prompt (paste screenshots/text again) is
+    **always** sent regardless of this flag. **Cancel preview** always recalls the
     preview message and posts a fresh instruction card (not gated by this flag). Default
-    **False** for clear-draft paths; set ``P0_DM_REPOST_INSTRUCTION_AFTER_RESET=1`` for
-    the old clear-draft behavior. Older instruction cards in the thread usually still
-    accept button clicks.
+    **False** for instruction-card repost on clear-draft; set
+    ``P0_DM_REPOST_INSTRUCTION_AFTER_RESET=1`` to repost the card too. Older instruction
+    cards in the thread usually still accept button clicks.
     """
     reload_env_runtime()
     v = (os.getenv("P0_DM_REPOST_INSTRUCTION_AFTER_RESET") or "0").strip().lower()

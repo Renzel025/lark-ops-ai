@@ -18,6 +18,11 @@ from . import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
+# DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
+DM_DRAFT_CLEARED_PROMPT = (
+    "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
+)
+
 
 def _deep_get(d: Any, *path: str) -> Any:
     cur = d
@@ -261,10 +266,11 @@ def handle_dm_generate_overview(
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, DM_DRAFT_CLEARED_PROMPT)
             if _config.get_dm_repost_instruction_after_reset():
                 lab, pr = _dm_card_meta(sender_open_id)
                 _send_instruction_card(
-                    sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                    sender_open_id, tenant_token, None, priority=pr, source_chat_label=lab
                 )
             return
         if _config.STATUS_RE.match(src_text):
@@ -376,10 +382,11 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, DM_DRAFT_CLEARED_PROMPT)
             if _config.get_dm_repost_instruction_after_reset():
                 lab, pr = _dm_card_meta(sender_open_id)
                 _send_instruction_card(
-                    sender_open_id, tenant_token, "🗑️ Draft cleared.", priority=pr, source_chat_label=lab
+                    sender_open_id, tenant_token, None, priority=pr, source_chat_label=lab
                 )
             return
         if action_name == "show_participants":

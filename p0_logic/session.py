@@ -564,7 +564,10 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
 
 
 def decline_p1_escalation_end_as_p1(chat_id: str, token: str) -> bool:
-    """User clicked No: close incident as P1 (meeting ended card), no P0 escalation."""
+    """
+    User tapped **Still P1** on the 15-min card: keep the session as **P1**, do not escalate to P0,
+    and do **not** end the meeting. Posts a short notice in the incident group.
+    """
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
     if not chat_id or not token:
@@ -577,8 +580,17 @@ def decline_p1_escalation_end_as_p1(chat_id: str, token: str) -> bool:
     if not sess.get("awaiting_p1_p0_confirm"):
         return False
     sess["awaiting_p1_p0_confirm"] = False
-    log.info("P1 15min P0 escalation declined — ending session as P1 chat_id=%s", chat_id)
-    end_p0_session(chat_id, token)
+    msg = "The meeting is continuing as a P1 meeting."
+    st, body = _lark.post_text_to_chat(chat_id, token, msg)
+    if st != 200:
+        log.warning(
+            "Still P1 notice failed HTTP=%s chat_id=%s body=%s",
+            st,
+            chat_id,
+            (body or "")[:300],
+        )
+        return False
+    log.info("P1 15min: Still P1 — session continues (no P0 escalation) chat_id=%s", chat_id)
     return True
 
 

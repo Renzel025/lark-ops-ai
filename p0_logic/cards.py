@@ -138,7 +138,7 @@ def build_ongoing_meeting_card(
 
 
 def build_p1_fifteen_min_confirm_card(meeting_no: str) -> Dict[str, Any]:
-    """After 15 min on P1: ask whether to declare as P0 (Yes) or close as P1 (No)."""
+    """After 15 min on P1: declare as P0, or **Still P1** (continue without escalating)."""
     m = (meeting_no or "").strip() or "Not available"
     return {
         "schema": "2.0",
@@ -152,7 +152,8 @@ def build_p1_fifteen_min_confirm_card(meeting_no: str) -> Dict[str, Any]:
                         "tag": "lark_md",
                         "content": (
                             f"**Meeting ID:** {m}\n\n"
-                            "Please confirm if the meeting will be declared as **P0**."
+                            "Please confirm if the meeting will be declared as **P0**, "
+                            "or tap **Still P1** if the incident stays **P1**."
                         ),
                     },
                 },
@@ -183,7 +184,7 @@ def build_p1_fifteen_min_confirm_card(meeting_no: str) -> Dict[str, Any]:
                             "elements": [
                                 {
                                     "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Close as P1"},
+                                    "text": {"tag": "plain_text", "content": "Still P1"},
                                     "type": "default",
                                     "value": {"action": "p1_declare_p0_no"},
                                 },
