@@ -3,6 +3,7 @@ P0 session state: create, end, cancel, timers, and session lookup.
 """
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import threading
@@ -359,6 +360,66 @@ def _dm_instruction_targets(trigger_open_id: str) -> List[str]:
     return [t] if t else []
 
 
+def _send_dm_instruction_card_logged(
+    open_id: str,
+    tenant_token: str,
+    priority: str,
+    source_chat_label: str,
+    context: str = "",
+) -> None:
+    """
+    Send the overview / DM instruction card to one user (``receive_id_type=open_id``).
+
+    Logs HTTP status and Lark ``code``/``msg`` so silent failures (e.g. 200 + code 9499) are visible.
+    """
+    oid = (open_id or "").strip()
+    if not oid:
+        return
+    label = (context or "DM instruction").strip()
+    card = _cards.build_dm_instruction_card(priority, source_chat_label=source_chat_label)
+    try:
+        st, resp_body, mid = _lark.post_card_to_open_id(oid, tenant_token, card)
+        body_head = (resp_body or "")[:800]
+        if st != 200:
+            log.error(
+                "%s failed HTTP=%s priority=%s open_id=%s body=%s",
+                label,
+                st,
+                priority,
+                oid,
+                body_head,
+            )
+            return
+        try:
+            j = json.loads(resp_body) if resp_body else {}
+        except Exception:
+            j = {}
+        if isinstance(j, dict) and "code" in j:
+            try:
+                api_code = int(j.get("code"))
+            except (TypeError, ValueError):
+                api_code = -1
+            if api_code != 0:
+                log.error(
+                    "%s Lark API code=%s msg=%r priority=%s open_id=%s",
+                    label,
+                    j.get("code"),
+                    j.get("msg"),
+                    priority,
+                    oid,
+                )
+                return
+        log.info(
+            "%s sent OK priority=%s open_id=%s message_id=%s",
+            label,
+            priority,
+            oid,
+            (mid or "").strip() or "(none)",
+        )
+    except Exception as e:
+        log.error("%s exception priority=%s open_id=%s err=%s", label, priority, oid, e)
+
+
 def get_p1_prompt_pending(chat_id: str) -> Optional[Dict[str, Any]]:
     chat_id = (chat_id or "").strip()
     if not chat_id:
@@ -552,13 +613,16 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
     sess["priority"] = "P0"
     log.info("P1 escalated to P0 (user confirmed) chat_id=%s meeting_no=%s", chat_id, meeting_no)
     lab = str(sess.get("source_chat_name") or "").strip()
-    for dm_to in _dm_instruction_targets(trigger_open_id):
+    p1_p0_targets = _dm_instruction_targets(trigger_open_id)
+    log.info(
+        "P1->P0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id)",
+        len([x for x in p1_p0_targets if (x or "").strip()]),
+        [x for x in p1_p0_targets if (x or "").strip()],
+    )
+    for dm_to in p1_p0_targets:
         if not dm_to:
             continue
-        try:
-            _, _, _ = _lark.post_card_to_open_id(dm_to, token, _cards.build_dm_instruction_card("P0", source_chat_label=lab))
-        except Exception as e:
-            log.error("Failed to send P1->P0 DM instruction open_id=%s err=%s", dm_to, e)
+        _send_dm_instruction_card_logged(dm_to, token, "P0", lab, context="P1->P0 DM instruction")
     _schedule_ongoing_meeting_card(chat_id, token)
     return True
 
@@ -675,6 +739,11 @@ def start_p0(
     if invite_mid:
         P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
     dm_targets = _dm_instruction_targets(trigger_open_id)
+    log.info(
+        "start_p0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id gceda344-style)",
+        len([x for x in dm_targets if (x or "").strip()]),
+        [x for x in dm_targets if (x or "").strip()],
+    )
     for oid in dm_targets:
         if not oid:
             continue
@@ -685,17 +754,11 @@ def start_p0(
         for oid in dm_targets:
             if not oid:
                 continue
-            try:
-                _, _, _ = _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P0", source_chat_label=chat_label))
-            except Exception as e:
-                log.error("Failed to send P0 DM instruction open_id=%s err=%s", oid, e)
+            _send_dm_instruction_card_logged(oid, token, "P0", chat_label, context="start_p0 DM instruction")
         _schedule_ongoing_meeting_card(chat_id, token)
     elif priority == "P1":
         for oid in dm_targets:
             if not oid:
                 continue
-            try:
-                _, _, _ = _lark.post_card_to_open_id(oid, token, _cards.build_dm_instruction_card("P1", source_chat_label=chat_label))
-            except Exception as e:
-                log.error("Failed to send P1 DM instruction open_id=%s err=%s", oid, e)
+            _send_dm_instruction_card_logged(oid, token, "P1", chat_label, context="start_p0 DM instruction")
         _schedule_p1_escalation_card(chat_id, token)
