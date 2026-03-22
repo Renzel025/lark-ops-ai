@@ -193,6 +193,38 @@ P1_TO_P0_ESCALATION_SEC = int((os.getenv("P1_TO_P0_ESCALATION_SEC", "900") or "9
 P0_COOLDOWN_SEC = int((os.getenv("P0_COOLDOWN_SEC", "300") or "300").strip())
 SUPPORT_MAP_TTL_SEC = int((os.getenv("SUPPORT_MAP_TTL_SEC", "600") or "600").strip())
 
+# Lark VC ``reserves/apply``: ``end_time`` must be set for multi-person meetings; official cap ~30 days.
+_VC_RESERVE_MAX_OFFSET_SEC = 30 * 24 * 60 * 60
+_VC_RESERVE_MIN_OFFSET_SEC = 60 * 60
+
+
+def get_vc_reserve_end_offset_sec() -> int:
+    """
+    Seconds from **now** until the reserve ``end_time`` sent to Lark (not the same as “call must hang up”).
+
+    Default **30 days** — longest window Feishu documents for ``/vc/v1/reserves/apply`` (no fixed 2h cap).
+
+    Env: ``P0_VC_RESERVE_END_OFFSET_SEC`` (integer seconds), clamped between 1 hour and 30 days.
+    """
+    reload_env_runtime()
+    default = _VC_RESERVE_MAX_OFFSET_SEC
+    raw = (os.getenv("P0_VC_RESERVE_END_OFFSET_SEC") or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        log.warning("Invalid P0_VC_RESERVE_END_OFFSET_SEC=%r — using default %s", raw, default)
+        return default
+    if v < _VC_RESERVE_MIN_OFFSET_SEC or v > _VC_RESERVE_MAX_OFFSET_SEC:
+        log.warning(
+            "P0_VC_RESERVE_END_OFFSET_SEC=%s clamped to [%s, %s]",
+            v,
+            _VC_RESERVE_MIN_OFFSET_SEC,
+            _VC_RESERVE_MAX_OFFSET_SEC,
+        )
+    return max(_VC_RESERVE_MIN_OFFSET_SEC, min(v, _VC_RESERVE_MAX_OFFSET_SEC))
+
 
 def is_open_id(x: str) -> bool:
     return bool(OPEN_ID_RE.match((x or "").strip()))

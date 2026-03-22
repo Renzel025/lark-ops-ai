@@ -217,7 +217,7 @@ def create_vc_reserve(token: str, meeting_topic: str = "") -> Dict[str, str]:
     import time as _time
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     now_sec = int(_time.time())
-    end_sec = now_sec + 2 * 60 * 60
+    end_sec = now_sec + _config.get_vc_reserve_end_offset_sec()
     owner_id = get_primary_owner_id()
     if not owner_id:
         log.error("No owner id configured.")

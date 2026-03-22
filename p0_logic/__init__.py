@@ -87,6 +87,7 @@ get_p0_trigger_ignore_open_ids = config.get_p0_trigger_ignore_open_ids
 get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
 get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
+get_vc_reserve_end_offset_sec = config.get_vc_reserve_end_offset_sec
 
 __all__ = [
     "P0_SESSIONS",
@@ -147,4 +148,5 @@ __all__ = [
     "get_dm_instruction_open_id",
     "get_dm_instruction_open_ids",
     "get_dm_repost_instruction_after_reset",
+    "get_vc_reserve_end_offset_sec",
 ]
