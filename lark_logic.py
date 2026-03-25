@@ -5,7 +5,13 @@ from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
-from p0_logic.cards import build_meeting_ended_card, build_no_active_p0_session_card
+from p0_logic.cards import (
+    build_meeting_ended_card,
+    build_no_active_p0_session_card,
+    build_ongoing_meeting_card,
+    build_p1_fifteen_min_confirm_card,
+)
+from p0_logic.participants import departments_line_from_names
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic.session import get_last_ended_snapshot
 from p0_logic import (
@@ -45,6 +51,16 @@ P1_END_REGEX = re.compile(r"\b(p1\s*end|end\s*p1|close\s*p1|p1\s*resolved)\b", r
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
     r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel)\s*(.*)$",
+    re.IGNORECASE,
+)
+
+# Preview one card at a time (training / dry-run). Whole line only — checked before P0/P1 triggers.
+DEMO_ONGOING_P0_CARD_RE = re.compile(
+    r"^\s*(p0\s+demo\s+ongoing|demo\s+p0\s+ongoing(?:\s+card)?)\s*$",
+    re.IGNORECASE,
+)
+DEMO_P1_15MIN_CARD_RE = re.compile(
+    r"^\s*(p1\s+demo\s+15|demo\s+p1\s+15)(?:\s*mins?)?(?:\s+card)?\s*$",
     re.IGNORECASE,
 )
 
@@ -188,6 +204,39 @@ def process_message(
                         if mn:
                             line += f". Meeting ID: {mn}"
                         post_text_to_chat(chat_id, token, line)
+            return
+
+        # 📽 Ongoing P0 card only (uses live Meeting ID / depts if a session exists).
+        if DEMO_ONGOING_P0_CARD_RE.match(text_raw.strip()):
+            if not token:
+                log.warning("demo ongoing P0 card: no token chat_id=%s", chat_id)
+                return
+            sess = P0_SESSIONS.get(chat_id) or {}
+            meeting_no = str(sess.get("meeting_no") or "").strip() or "DEMO"
+            em_topic = str(sess.get("emergency_topic") or "").strip()
+            participants = list(sess.get("participants") or [])
+            dept_line = departments_line_from_names(participants, tenant_token)
+            o_card = build_ongoing_meeting_card(
+                meeting_no, dept_line, "P0", emergency_topic=em_topic
+            )
+            st, body, _ = post_card_to_chat(chat_id, token, o_card)
+            if st != 200:
+                log.warning("demo ongoing P0 card failed HTTP=%s body=%s", st, (body or "")[:300])
+            log.info("Posted demo ongoing P0 card chat_id=%s meeting_no=%s", chat_id, meeting_no)
+            return
+
+        # ⏱ P1 15 mins card only.
+        if DEMO_P1_15MIN_CARD_RE.match(text_raw.strip()):
+            if not token:
+                log.warning("demo P1 15min card: no token chat_id=%s", chat_id)
+                return
+            sess = P0_SESSIONS.get(chat_id) or {}
+            meeting_no = str(sess.get("meeting_no") or "").strip() or "DEMO"
+            p1_card = build_p1_fifteen_min_confirm_card(meeting_no)
+            st, body, _ = post_card_to_chat(chat_id, token, p1_card)
+            if st != 200:
+                log.warning("demo P1 15min card failed HTTP=%s body=%s", st, (body or "")[:300])
+            log.info("Posted demo P1 15min card chat_id=%s meeting_no=%s", chat_id, meeting_no)
             return
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
