@@ -18,6 +18,8 @@ from . import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
+_OPERATOR_DENY_DM = "🔒 Only the designated operator can use this button."
+
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
@@ -138,6 +140,15 @@ def _form_field_left_blank(manual: str) -> bool:
     """True if user did not enter a new value — keep preview field as-is."""
     s = (manual or "").strip()
     return (not s) or _text.is_not_specified(s)
+
+
+def _incident_group_operator_denied(sender_open_id: str, tenant_token: str) -> bool:
+    """If incident-group command restriction is enabled and user is not allowed, DM them and return True."""
+    if _config.can_use_incident_group_commands(sender_open_id):
+        return False
+    if sender_open_id:
+        _lark.post_text_to_open_id(sender_open_id, tenant_token, _OPERATOR_DENY_DM)
+    return True
 
 
 def _preview_priority(preview: Dict[str, Any]) -> str:
@@ -299,13 +310,15 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
                 return
-            if chat_id in _session.P0_SESSIONS:
+            if _incident_group_operator_denied(sender_open_id, tenant_token):
+                return
+            nonce = _extract_p1_confirm_nonce(payload)
+            err = _session.handle_p1_meeting_confirm_yes(chat_id, tenant_token, sender_open_id, nonce)
+            if err == "session_active":
                 if sender_open_id:
                     _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ A meeting session is already active.")
                 return
-            nonce = _extract_p1_confirm_nonce(payload)
-            pending = _session.consume_p1_prompt_for_confirm(chat_id, nonce)
-            if not pending:
+            if err == "stale":
                 if sender_open_id:
                     _lark.post_text_to_open_id(
                         sender_open_id,
@@ -313,41 +326,39 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
                 return
-            trigger = str(pending.get("trigger_open_id") or "").strip() or sender_open_id
-            _session.start_p0(chat_id, tenant_token, trigger, priority="P1")
             return
 
         if action_name == "p1_confirm_meeting_no":
             chat_id = _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 return
-            if chat_id in _session.P0_SESSIONS:
+            if _incident_group_operator_denied(sender_open_id, tenant_token):
+                return
+            nonce = _extract_p1_confirm_nonce(payload)
+            err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce)
+            if err == "session_active":
                 _lark.post_text_to_chat(
                     chat_id,
                     tenant_token,
                     "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
                 )
                 return
-            nonce = _extract_p1_confirm_nonce(payload)
-            pending = _session.consume_p1_prompt_for_confirm(chat_id, nonce)
-            if pending:
-                _lark.post_text_to_chat(
-                    chat_id,
-                    tenant_token,
-                    "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting.",
-                )
-            elif sender_open_id:
-                _lark.post_text_to_open_id(
-                    sender_open_id,
-                    tenant_token,
-                    "ℹ️ This P1 confirmation is out of date or was already answered.",
-                )
+            if err == "stale":
+                if sender_open_id:
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "ℹ️ This P1 confirmation is out of date or was already answered.",
+                    )
+                return
             return
 
         if action_name == "p1_declare_p0_yes":
             chat_id = _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 log.warning("p1_declare_p0_yes missing open_chat_id")
+                return
+            if _incident_group_operator_denied(sender_open_id, tenant_token):
                 return
             if not _session.apply_p1_escalation_after_confirm(chat_id, tenant_token):
                 if sender_open_id:
@@ -362,6 +373,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             chat_id = _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 log.warning("p1_declare_p0_no missing open_chat_id")
+                return
+            if _incident_group_operator_denied(sender_open_id, tenant_token):
                 return
             if not _session.decline_p1_escalation_end_as_p1(chat_id, tenant_token):
                 if sender_open_id:

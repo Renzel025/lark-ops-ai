@@ -498,6 +498,49 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     return True
 
 
+def handle_p1_meeting_confirm_yes(
+    chat_id: str, token: str, fallback_trigger_open_id: str, nonce: str
+) -> str:
+    """
+    Consume P1 "create meeting?" pending and start a P1 VC. Used by card **create** action and typed **create meeting**.
+
+    Returns ``""`` on success, or ``"session_active"`` / ``"stale"``.
+    """
+    chat_id = (chat_id or "").strip()
+    token = (token or "").strip()
+    if not chat_id or not token:
+        return "stale"
+    if chat_id in P0_SESSIONS:
+        return "session_active"
+    pending = consume_p1_prompt_for_confirm(chat_id, nonce)
+    if not pending:
+        return "stale"
+    trigger = str(pending.get("trigger_open_id") or "").strip() or (fallback_trigger_open_id or "").strip()
+    start_p0(chat_id, token, trigger, priority="P1")
+    return ""
+
+
+def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str) -> str:
+    """
+    Consume P1 prompt and skip VC. Returns ``""``, ``"session_active"``, or ``"stale"``.
+    """
+    chat_id = (chat_id or "").strip()
+    token = (token or "").strip()
+    if not chat_id or not token:
+        return "stale"
+    if chat_id in P0_SESSIONS:
+        return "session_active"
+    pending = consume_p1_prompt_for_confirm(chat_id, nonce)
+    if not pending:
+        return "stale"
+    _lark.post_text_to_chat(
+        chat_id,
+        token,
+        "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting.",
+    )
+    return ""
+
+
 def p0_cooldown(chat_id: str) -> bool:
     chat_id = (chat_id or "").strip()
     if not chat_id:
@@ -664,6 +707,8 @@ def start_p0(
     trigger_open_id: str,
     priority: str = "P0",
     source_chat_name: str = "",
+    *,
+    skip_cooldown: bool = False,
 ) -> None:
     from . import drafts as _drafts
     from . import participants as _participants
@@ -676,7 +721,7 @@ def start_p0(
         return
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
-    if p0_cooldown(chat_id):
+    if not skip_cooldown and p0_cooldown(chat_id):
         total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
         mins_label = "minute" if total_min == 1 else "minutes"
         msg = f"⚠️ Meeting was just created earlier — try again after {total_min} {mins_label}."

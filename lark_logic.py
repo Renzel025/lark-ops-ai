@@ -4,7 +4,12 @@ import logging
 from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
-from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
+from p0_logic.config import (
+    can_use_incident_group_commands,
+    get_incident_group_chat_ids,
+    get_p0_trigger_ignore_open_ids,
+)
+from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import (
     build_meeting_ended_card,
     build_no_active_p0_session_card,
@@ -64,6 +69,24 @@ DEMO_P1_15MIN_CARD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Restart: new P0 VC after a session ended (skips cooldown). Whole line only.
+RESTART_P0_MEETING_RE = re.compile(
+    r"^\s*(p0\s+restart|restart\s+p0|restart\s+meeting|meeting\s+restart)\s*$",
+    re.IGNORECASE,
+)
+
+# While P1 "create meeting?" is pending — typed confirm / decline (card has **Not needed** only).
+P1_PENDING_CREATE_RE = re.compile(
+    r"^\s*(create\s+meeting|p1\s+create|yes)\s*$",
+    re.IGNORECASE,
+)
+P1_PENDING_DECLINE_RE = re.compile(
+    r"^\s*(not\s+needed|don'?t\s+need|no)\s*$",
+    re.IGNORECASE,
+)
+
+_GROUP_CMD_DENY = "🔒 Only the designated operator can use this command."
+
 
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
     out: List[str] = []
@@ -100,6 +123,15 @@ def _clean_mention_names(raw_mentions: Any) -> List[str]:
         deduped.append(x)
 
     return deduped
+
+
+def _incident_command_denied_in_group(user_id: str, chat_id: str, token: str) -> bool:
+    """If restriction is enabled and user is not the operator, post a group notice and return True."""
+    if can_use_incident_group_commands(user_id):
+        return False
+    if token:
+        post_text_to_chat(chat_id, token, _GROUP_CMD_DENY)
+    return True
 
 
 def _get_active_session_chat_id() -> str:
@@ -150,9 +182,50 @@ def process_message(
         if not text_raw:
             return
 
+        # Typed P1 prompt reply (before cancel/end so "no" does not collide with other routes)
+        pend = get_p1_prompt_pending(chat_id)
+        if pend:
+            nonce = str(pend.get("nonce") or "").strip()
+            if P1_PENDING_CREATE_RE.match(text_raw.strip()):
+                if _incident_command_denied_in_group(user_id, chat_id, token):
+                    return
+                err = handle_p1_meeting_confirm_yes(chat_id, token, user_id, nonce)
+                if err == "session_active":
+                    post_text_to_chat(
+                        chat_id,
+                        token,
+                        "ℹ️ A meeting session is already active in this chat.",
+                    )
+                elif err == "stale":
+                    post_text_to_chat(
+                        chat_id,
+                        token,
+                        "ℹ️ This P1 confirmation is out of date or was already answered.",
+                    )
+                return
+            if P1_PENDING_DECLINE_RE.match(text_raw.strip()):
+                if _incident_command_denied_in_group(user_id, chat_id, token):
+                    return
+                err = handle_p1_meeting_confirm_no(chat_id, token, nonce)
+                if err == "session_active":
+                    post_text_to_chat(
+                        chat_id,
+                        token,
+                        "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
+                    )
+                elif err == "stale":
+                    post_text_to_chat(
+                        chat_id,
+                        token,
+                        "ℹ️ This P1 confirmation is out of date or was already answered.",
+                    )
+                return
+
         # Cancel command (optional reason after the keyword phrase)
         cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
         if cancel_m:
+            if _incident_command_denied_in_group(user_id, chat_id, token):
+                return
             tail = (cancel_m.group(2) or "").strip()
             cancel_reason = tail if tail else "Unspecified"
             if chat_id in P0_SESSIONS:
@@ -177,6 +250,8 @@ def process_message(
 
         # End command
         if P0_END_REGEX.search(text_lower) or P1_END_REGEX.search(text_lower):
+            if _incident_command_denied_in_group(user_id, chat_id, token):
+                return
             if chat_id in P0_SESSIONS:
                 log.info("Incident group: ending active session chat_id=%s", chat_id)
                 end_p0_session(chat_id, token)
@@ -204,6 +279,35 @@ def process_message(
                         if mn:
                             line += f". Meeting ID: {mn}"
                         post_text_to_chat(chat_id, token, line)
+            return
+
+        # Restart P0 meeting (no active session; skips cooldown). / 重启会议：无进行中会话时新建 P0 会议（跳过冷却）
+        if RESTART_P0_MEETING_RE.match(text_raw.strip()):
+            if _incident_command_denied_in_group(user_id, chat_id, token):
+                return
+            if get_p1_prompt_pending(chat_id):
+                post_text_to_chat(
+                    chat_id,
+                    token,
+                    "ℹ️ A P1 meeting prompt is open. Use **create meeting** / **Not needed** first, or wait until it is cleared.",
+                )
+                return
+            if chat_id in P0_SESSIONS:
+                post_text_to_chat(
+                    chat_id,
+                    token,
+                    "ℹ️ A meeting is already active. Use **end meeting** or **cancel meeting** first, then you can **restart meeting**.",
+                )
+                return
+            log.info("Incident group: restart P0 meeting chat_id=%s user_id=%s", chat_id, user_id)
+            start_p0(
+                chat_id,
+                token,
+                user_id,
+                priority="P0",
+                source_chat_name=source_chat_name,
+                skip_cooldown=True,
+            )
             return
 
         # 📽 Ongoing P0 card only (uses live Meeting ID / depts if a session exists).

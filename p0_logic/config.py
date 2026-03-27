@@ -275,6 +275,32 @@ def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
     return frozenset(x for x in ids if is_open_id(x))
 
 
+def get_incident_group_command_open_ids() -> FrozenSet[str]:
+    """
+    If non-empty, only these open_ids may use incident-group **control** actions:
+    cancel/end/restart meeting, P1 confirmation (card + typed create/decline), and P1→P0 15‑min card buttons.
+
+    If empty, any member who can message the bot may use those actions (legacy behavior).
+
+    P0_INCIDENT_GROUP_COMMAND_OPEN_IDS — comma-separated Lark user open_ids (ou_...).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_INCIDENT_GROUP_COMMAND_OPEN_IDS") or "").strip()
+    if not raw:
+        return frozenset()
+    ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(x for x in ids if is_open_id(x))
+
+
+def can_use_incident_group_commands(user_open_id: str) -> bool:
+    """When ``get_incident_group_command_open_ids()`` is empty, everyone may use control commands."""
+    allowed = get_incident_group_command_open_ids()
+    if not allowed:
+        return True
+    uid = (user_open_id or "").strip()
+    return bool(uid and uid in allowed)
+
+
 def get_dm_instruction_open_ids() -> List[str]:
     """
     If non-empty, P0/P1 DM instruction cards are sent to these users instead of whoever typed p0/p1.

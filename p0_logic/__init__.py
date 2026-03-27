@@ -85,6 +85,8 @@ get_target_group_chat_id = config.get_target_group_chat_id
 get_owner_ids = config.get_owner_ids
 get_host_and_dm_open_id = config.get_host_and_dm_open_id
 get_p0_trigger_ignore_open_ids = config.get_p0_trigger_ignore_open_ids
+get_incident_group_command_open_ids = config.get_incident_group_command_open_ids
+can_use_incident_group_commands = config.can_use_incident_group_commands
 get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
 get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
@@ -147,6 +149,8 @@ __all__ = [
     "get_owner_ids",
     "get_host_and_dm_open_id",
     "get_p0_trigger_ignore_open_ids",
+    "get_incident_group_command_open_ids",
+    "can_use_incident_group_commands",
     "get_dm_instruction_open_id",
     "get_dm_instruction_open_ids",
     "get_dm_repost_instruction_after_reset",
