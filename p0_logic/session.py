@@ -360,6 +360,28 @@ def _dm_instruction_targets(trigger_open_id: str) -> List[str]:
     return [t] if t else []
 
 
+def _parse_lark_api_code(raw: Any) -> int:
+    """Lark responses use numeric ``code`` (often int, sometimes str). Never raises."""
+    if raw is None:
+        return -1
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return -1
+        try:
+            return int(s)
+        except ValueError:
+            return -1
+    try:
+        return int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return -1
+
+
 def _send_dm_instruction_card_logged(
     open_id: str,
     tenant_token: str,
@@ -395,10 +417,7 @@ def _send_dm_instruction_card_logged(
         except Exception:
             j = {}
         if isinstance(j, dict) and "code" in j:
-            try:
-                api_code = int(j.get("code"))
-            except (TypeError, ValueError):
-                api_code = -1
+            api_code = _parse_lark_api_code(j.get("code"))
             if api_code != 0:
                 log.error(
                     "%s Lark API code=%s msg=%r priority=%s open_id=%s",
@@ -729,7 +748,8 @@ def start_p0(
         return
     now = int(time.time())
     emergency_topic = _config.get_emergency_topic_for_source_chat(chat_id)
-    vc = _lark.create_vc_reserve(token, meeting_topic=emergency_topic)
+    vc_meeting_topic = _config.get_vc_meeting_topic_for_source_chat(chat_id)
+    vc = _lark.create_vc_reserve(token, meeting_topic=vc_meeting_topic)
     link = (vc.get("link") or "").strip()
     if not link:
         _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")

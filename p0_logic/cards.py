@@ -120,8 +120,7 @@ def build_ongoing_meeting_card(
                         "content": (
                             f"**{_build_emergency_title(prio, emergency_topic)}**\n\n"
                             f"**Meeting ID:** {meeting_no}\n\n"
-                            "Meeting is already 10 minutes ongoing.\n"
-                            "Kindly ask them if need to contact Sir David and Sir Eason."
+                            "Meeting is already 10 minutes ongoing."
                         ),
                     },
                 },

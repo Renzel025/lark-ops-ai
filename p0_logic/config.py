@@ -115,6 +115,35 @@ def get_emergency_topic_for_source_chat(chat_id: str) -> str:
         if key == cid and val:
             return val
     return default
+
+
+# Prefix for Lark VC / recorded meeting title (same string sent to ``create_vc_reserve``).
+VIDEO_MEETING_TOPIC_PREFIX = (os.getenv("VIDEO_MEETING_TOPIC_PREFIX") or "Video meeting—").strip()
+
+
+def get_vc_meeting_topic_for_source_chat(chat_id: str) -> str:
+    """
+    Topic string for Lark video conference reserve (shows on recorded / meeting UI).
+
+    Format: ``{VIDEO_MEETING_TOPIC_PREFIX}{emergency label}``, e.g.
+    ``Video meeting—CP-Emergency feedback紧急问题反馈群`` or
+    ``Video meeting—Game urgent-游戏紧急群`` (from ``INCIDENT_GROUP_EMERGENCY_TOPICS`` / ``MEETING_TOPIC``).
+
+    If the stored label already starts with ``video meeting`` (case-insensitive), it is returned unchanged.
+    """
+    reload_env_runtime()
+    tail = get_emergency_topic_for_source_chat(chat_id).strip()
+    if not tail:
+        tail = (os.getenv("MEETING_TOPIC") or "CP-Emergency feedback紧急问题反馈群").strip()
+    low = tail.lower()
+    if low.startswith("video meeting"):
+        return tail
+    prefix = (os.getenv("VIDEO_MEETING_TOPIC_PREFIX") or VIDEO_MEETING_TOPIC_PREFIX).strip() or "Video meeting—"
+    if not prefix.endswith("—") and not prefix.endswith("-"):
+        prefix = prefix + "—"
+    return f"{prefix}{tail}"
+
+
 LARK_BASE = "https://open-sg.larksuite.com/open-apis"
 
 SHEETS_BASES = [
