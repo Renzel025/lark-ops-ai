@@ -587,6 +587,19 @@ def p0_cooldown_remaining_sec(chat_id: str) -> int:
         return int(P0_COOLDOWN_SEC - elapsed)
 
 
+def clear_p0_cooldown(chat_id: str) -> None:
+    """
+    Drop the per-chat cooldown timestamp so **p0** / **p1** keywords can fire again
+    without waiting — does **not** start a meeting.
+    """
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return
+    with _LAST_P0_LOCK:
+        _LAST_P0_BY_CHAT.pop(chat_id, None)
+    log.info("clear_p0_cooldown chat_id=%s", chat_id)
+
+
 def _schedule_ongoing_meeting_card(chat_id: str, token: str) -> None:
     chat_id = (chat_id or "").strip()
     if not chat_id:
@@ -726,8 +739,6 @@ def start_p0(
     trigger_open_id: str,
     priority: str = "P0",
     source_chat_name: str = "",
-    *,
-    skip_cooldown: bool = False,
 ) -> None:
     from . import drafts as _drafts
     from . import participants as _participants
@@ -740,7 +751,7 @@ def start_p0(
         return
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
-    if not skip_cooldown and p0_cooldown(chat_id):
+    if p0_cooldown(chat_id):
         total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
         mins_label = "minute" if total_min == 1 else "minutes"
         msg = f"⚠️ Meeting was just created earlier — try again after {total_min} {mins_label}."

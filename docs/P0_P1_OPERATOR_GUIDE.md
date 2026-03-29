@@ -106,4 +106,63 @@ See **`env.example`** in the repo for the full template.
 
 ---
 
+## 9. Complete command reference (typed text)
+
+Unless noted, matching is **case-insensitive**. **Incident group** = chats listed in `INCIDENT_GROUP_ID` / `INCIDENT_GROUP_IDS`.
+
+### Incident group — declare / trigger
+
+| What | How |
+|------|-----|
+| **P0 meeting** | **`p0`** or **`priority 0`** anywhere in the message (word boundaries). Ignored if the line looks like a pasted meeting-card footer (`P0 declared - created a meeting…`). |
+| **P1 prompt (“create meeting?”)** | **`p1`** or **`priority 1`** anywhere (same footer rule for `P1 declared - …`). |
+
+### Incident group — whole line only
+
+| Command | Aliases / notes |
+|---------|------------------|
+| **Cooldown reset** (no new VC) | `cooldown reset`, `reset cooldown`, `clear cooldown`, `p0 cooldown reset` |
+| **Demo — ongoing P0 card** | `p0 demo ongoing`, `demo p0 ongoing`, optional `card` |
+| **Demo — P1 15‑min card** | `p1 demo 15`, `demo p1 15`, optional `mins` / `card` |
+
+### Incident group — cancel / end
+
+| Command | Pattern |
+|---------|---------|
+| **Cancel** | Line starts with `cancel meeting`, `cancel p0`, `cancel p1`, or `cancel` — optional free text after as **reason**. |
+| **End P0** | `p0 end`, `end p0`, `close p0`, `p0 resolved` (anywhere in message). |
+| **End P1** | `p1 end`, `end p1`, `close p1`, `p1 resolved` (anywhere in message). |
+
+### Incident group — while P1 “create meeting?” is open
+
+| Intent | Typed line |
+|--------|------------|
+| Create meeting | `create meeting`, `p1 create`, or `yes` |
+| Decline | `not needed`, `don't need`, `dont need`, or `no` |
+
+### DM (duty / overview) — whole line
+
+| Command | Aliases |
+|---------|---------|
+| Draft status | `status`, `draft`, `check` |
+| Clear draft | `clear`, `reset`, `discard`, `cancel` |
+| Build overview | `generate`, `preview`, `create overview` |
+| Who is in the meeting | `who is in the meeting`, `who are in the meeting`, `participants`, `list participants`, `sino nasa meeting` |
+| Is someone in the meeting? | `is <name> in the meeting?` (e.g. `is Alice in the meeting?`) |
+
+### Wiki group (`WIKI_GROUP_CHAT_ID`)
+
+- **Any message text** in that chat is sent to **wiki AI** (Groq + linked Doc); no fixed slash-commands.
+
+### Card buttons (not typed)
+
+- **DM:** Build overview, Clear draft, Participants, preview (**Send to group**, **Generate**, **Edit**, **Cancel**), edit form (**Save**, **Back**).
+- **Group:** P1 **Create meeting** / **Not needed**; P1 15‑min **Declare as P0** / **Still P1**; overview/edit flows as implemented in `p0_logic/handlers.py`.
+
+### Operator restriction (optional)
+
+If **`P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`** is set, **cancel / end / cooldown reset** and some **P1 typed** controls may be limited to those `ou_` users. Declaring **`p0` / `p1`** in the group is **not** gated by that list (see also **`P0_TRIGGER_IGNORE_OPEN_IDS`** for separate ignore behavior).
+
+---
+
 *Generated/refined from: `P0_P1 meeting and overview automation.docx` + current `lark-ops-ai` / `p0_logic` behavior.*

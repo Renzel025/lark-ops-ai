@@ -27,6 +27,7 @@ cancel_p0_session_by_meeting_no = session.cancel_p0_session_by_meeting_no
 bind_live_meeting_id = session.bind_live_meeting_id
 p0_cooldown = session.p0_cooldown
 p0_cooldown_remaining_sec = session.p0_cooldown_remaining_sec
+clear_p0_cooldown = session.clear_p0_cooldown
 find_session_by_meeting_ref = session.find_session_by_meeting_ref
 find_session_by_meeting_no = session.find_session_by_meeting_no
 find_session_by_target_chat = session.find_session_by_target_chat
@@ -104,6 +105,7 @@ __all__ = [
     "bind_live_meeting_id",
     "p0_cooldown",
     "p0_cooldown_remaining_sec",
+    "clear_p0_cooldown",
     "find_session_by_meeting_ref",
     "find_session_by_meeting_no",
     "find_session_by_target_chat",

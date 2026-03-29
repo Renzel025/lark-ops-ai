@@ -307,7 +307,7 @@ def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
 def get_incident_group_command_open_ids() -> FrozenSet[str]:
     """
     If non-empty, only these open_ids may use incident-group **control** actions:
-    cancel/end/restart meeting, P1 confirmation (card + typed create/decline), and P1→P0 15‑min card buttons.
+    cancel/end meeting, **cooldown reset** (typed), P1 confirmation (card + typed create/decline), and P1→P0 15‑min card buttons.
 
     If empty, any member who can message the bot may use those actions (legacy behavior).
 

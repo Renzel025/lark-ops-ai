@@ -354,7 +354,7 @@ Subscribed event types (typical for this project):
 - [ ] Lark **app secret** rotation procedure documented.
 - [ ] **App availability** in Lark includes every user who must receive **bot DMs** (otherwise API **230013** — “Bot has NO availability to this user”).
 - [ ] **`GROQ_API_KEY`** in `.env` only; never commit; rotate if leaked.
-- [ ] Optional: **`P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`** — comma-separated `ou_` users allowed to cancel/end/restart and use P1 control buttons (see `p0_logic/config.py`).
+- [ ] Optional: **`P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`** — comma-separated `ou_` users allowed to cancel/end, **cooldown reset**, and use P1 control buttons (see `p0_logic/config.py`).
 
 ---
 

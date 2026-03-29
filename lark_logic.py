@@ -23,6 +23,7 @@ from p0_logic import (
     start_p0,
     end_p0_session,
     cancel_p0_session,
+    clear_p0_cooldown,
     P0_SESSIONS,
     handle_dm_generate_overview,
     get_p1_prompt_pending,
@@ -69,9 +70,9 @@ DEMO_P1_15MIN_CARD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Restart: new P0 VC after a session ended (skips cooldown). Whole line only.
-RESTART_P0_MEETING_RE = re.compile(
-    r"^\s*(p0\s+restart|restart\s+p0|restart\s+meeting|meeting\s+restart)\s*$",
+# Clear cooldown only (no new VC). Whole line only. / 仅清除冷却，不新建会议
+COOLDOWN_RESET_RE = re.compile(
+    r"^\s*(p0\s+cooldown\s+reset|cooldown\s+reset|reset\s+cooldown|clear\s+cooldown)\s*$",
     re.IGNORECASE,
 )
 
@@ -281,33 +282,17 @@ def process_message(
                         post_text_to_chat(chat_id, token, line)
             return
 
-        # Restart P0 meeting (no active session; skips cooldown). / 重启会议：无进行中会话时新建 P0 会议（跳过冷却）
-        if RESTART_P0_MEETING_RE.match(text_raw.strip()):
+        # Cooldown reset only — no new VC. / 只清冷却，不创建会议
+        if COOLDOWN_RESET_RE.match(text_raw.strip()):
             if _incident_command_denied_in_group(user_id, chat_id, token):
                 return
-            if get_p1_prompt_pending(chat_id):
+            clear_p0_cooldown(chat_id)
+            if token:
                 post_text_to_chat(
                     chat_id,
                     token,
-                    "ℹ️ A P1 meeting prompt is open. Use **create meeting** / **Not needed** first, or wait until it is cleared.",
+                    "ℹ️ Cooldown cleared for this group. You can type **p0** or **p1** again (no new meeting was started).",
                 )
-                return
-            if chat_id in P0_SESSIONS:
-                post_text_to_chat(
-                    chat_id,
-                    token,
-                    "ℹ️ A meeting is already active. Use **end meeting** or **cancel meeting** first, then you can **restart meeting**.",
-                )
-                return
-            log.info("Incident group: restart P0 meeting chat_id=%s user_id=%s", chat_id, user_id)
-            start_p0(
-                chat_id,
-                token,
-                user_id,
-                priority="P0",
-                source_chat_name=source_chat_name,
-                skip_cooldown=True,
-            )
             return
 
         # 📽 Ongoing P0 card only (uses live Meeting ID / depts if a session exists).

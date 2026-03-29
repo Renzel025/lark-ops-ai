@@ -88,7 +88,7 @@ Messages are handled in this **order** (incident group):
 1. Optional **P1 pending** replies (`create meeting`, `yes`, `not needed`, …) if a P1 prompt is open.
 2. **Cancel** (`cancel meeting`, …).
 3. **End** (`p0 end`, `p1 end`, …).
-4. **Restart** (`restart meeting`, …) — new P0 VC, skips cooldown when allowed.
+4. **Cooldown reset** (`cooldown reset`, `clear cooldown`, …) — clears P0 cooldown only; does **not** start a VC.
 5. Demo commands (ongoing / P1-15 demo cards).
 6. **P0** keyword → `start_p0` (if no session, not ignored user, …).
 7. **P1** keyword → P1 confirmation card + pending state (if no session, …).
@@ -104,7 +104,7 @@ flowchart TD
   T[Incoming text] --> IG{Incident group?}
   IG -->|yes| P1P[P1 pending?]
   P1P -->|yes + create/decline| P1H[handle_p1_meeting_confirm_*]
-  P1P -->|no| CAN[cancel / end / restart / demo]
+  P1P -->|no| CAN[cancel / end / cooldown reset / demo]
   CAN --> KW{p0 / p1 keyword?}
   KW -->|p0| SP0[start_p0]
   KW -->|p1| RP1[request_p1_meeting_confirmation]
@@ -126,7 +126,7 @@ flowchart TD
 ```mermaid
 stateDiagram-v2
   [*] --> Idle
-  Idle --> P0_Active: p0 keyword / restart
+  Idle --> P0_Active: p0 keyword
   Idle --> P1_Prompt: p1 keyword
   P1_Prompt --> P1_Active: create meeting confirmed
   P1_Prompt --> Idle: Not needed / decline
@@ -167,7 +167,7 @@ sequenceDiagram
 
 If **`P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`** is set in `.env`, **only those `ou_` users** may use:
 
-- cancel / end / restart meeting (typed commands),
+- cancel / end meeting, cooldown reset (typed commands),
 - P1 prompt responses (typed + **Not needed**),
 - **Declare as P0** / **Still P1** buttons.
 
