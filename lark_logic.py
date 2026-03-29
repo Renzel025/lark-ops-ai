@@ -291,7 +291,7 @@ def process_message(
                 post_text_to_chat(
                     chat_id,
                     token,
-                    "ℹ️ Cooldown cleared for this group. You can type **p0** or **p1** again (no new meeting was started).",
+                    "ℹ️ Cooldown cleared for this group. The next **p0** or **p1** declaration in this chat will no longer be blocked by cooldown — this command did not start a meeting.",
                 )
             return
 
