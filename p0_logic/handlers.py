@@ -230,13 +230,13 @@ def handle_dm_generate_overview(
     message_id = (message_id or "").strip()
     target_chat = _session.get_active_target_chat()
     if not target_chat:
-        target_chat = _config.get_overview_post_chat_id()
+        target_chat = _config.get_dm_overview_target_chat_id()
     if not target_chat:
         _lark.post_text_to_open_id(
             sender_open_id,
             tenant_token,
-            "⚠️ Cannot start a DM overview yet: trigger **p0** in the incident group first, "
-            "or set **OVERVIEW_TARGET_GROUP_CHAT_ID** / **P0_OVERVIEW_POST_CHAT_ID** in `.env` (the «oc_…» chat where overviews are posted).",
+            "⚠️ Can't link this overview to a group yet — no active meeting and several incident groups are configured. "
+            "Type **p0** once in the incident group you use, then paste again — or ask an admin to set a default overview group.",
         )
         return
     src_text = _text.clean_pasted_text(text)

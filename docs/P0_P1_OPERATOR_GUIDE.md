@@ -7,7 +7,7 @@ English operator doc (refined from internal SOP). Button labels match the curren
 ## 1. What this automation does
 
 - **Incident group:** When someone declares **P0** or **P1** (e.g. types `p0`, `p1`, `priority 0`, `priority 1`), the bot can **create a Lark video meeting** and post a **Join** card.
-- **DM (duty / on-call):** The bot messages configured user(s) with an **instruction card** to build a **bilingual incident overview** from pasted **text** and **screenshots** (OCR), then **send it to the target group**. The DM draft must be tied to a **target** group: usually an **active P0/P1 session** (after someone types **p0** / **p1** in the incident group), **or** set **`OVERVIEW_TARGET_GROUP_CHAT_ID`** / **`P0_OVERVIEW_POST_CHAT_ID`** in `.env` so overviews can be built **without** a live session.
+- **DM (duty / on-call):** The bot messages configured user(s) with an **instruction card** to build a **bilingual incident overview** from pasted **text** and **screenshots** (OCR), then **send it to the target group**. The DM draft is tied to a **target** group: **active P0/P1 session** if any; otherwise **one** configured incident group is used automatically; optional env **`OVERVIEW_TARGET_GROUP_CHAT_ID`** overrides; **multiple** incident groups without env need a live **p0** session or an admin-configured default.
 
 Which groups count as “incident” and which DM recipients get the card are set in **`.env`** (see §7).
 

@@ -67,6 +67,24 @@ def get_target_group_chat_id() -> str:
     return get_overview_post_chat_id()
 
 
+def get_dm_overview_target_chat_id() -> str:
+    """
+    Where DM drafts / \"Send overview\" attach when **no** active P0 session.
+
+    Order: ``OVERVIEW_TARGET_GROUP_CHAT_ID`` / ``P0_OVERVIEW_POST_CHAT_ID`` if set;
+    else if exactly **one** incident group is configured, use that ``oc_`` id (common single-group deploys);
+    else empty (multiple groups — need env or a live session).
+    """
+    reload_env_runtime()
+    env_id = get_overview_post_chat_id()
+    if env_id:
+        return env_id
+    ids = list(get_incident_group_chat_ids())
+    if len(ids) == 1:
+        return ids[0]
+    return ""
+
+
 REQ_TIMEOUT_ENV = (os.getenv("REQ_TIMEOUT", "15") or "15").strip()
 try:
     REQ_TIMEOUT = float(REQ_TIMEOUT_ENV)

@@ -249,6 +249,14 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
         em_snap = str(sess.get("emergency_topic") or "").strip()
         _store_last_ended_snapshot(chat_id, meeting_no_snap, duration_snap, priority_snap, em_snap)
     if token and sess:
+        # End the live VC on Lark (same as user clicking End in the client) so recording / Meeting Assistant flows run.
+        meeting_id = str(sess.get("meeting_id") or "").strip()
+        reserve_id = str(sess.get("reserve_id") or "").strip()
+        if meeting_id:
+            if not _lark.end_vc_meeting(token, meeting_id):
+                log.warning("end_p0_session: end_vc_meeting did not succeed meeting_id=%s", meeting_id)
+        elif reserve_id:
+            _lark.delete_vc_reserve(token, reserve_id)
         meeting_no = str(sess.get("meeting_no") or "").strip()
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()

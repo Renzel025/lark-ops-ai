@@ -83,6 +83,7 @@ get_incident_group_chat_ids = config.get_incident_group_chat_ids
 get_emergency_topic_for_source_chat = config.get_emergency_topic_for_source_chat
 get_vc_meeting_topic_for_source_chat = config.get_vc_meeting_topic_for_source_chat
 get_overview_post_chat_id = config.get_overview_post_chat_id
+get_dm_overview_target_chat_id = config.get_dm_overview_target_chat_id
 get_target_group_chat_id = config.get_target_group_chat_id
 get_owner_ids = config.get_owner_ids
 get_host_and_dm_open_id = config.get_host_and_dm_open_id
@@ -149,6 +150,7 @@ __all__ = [
     "get_emergency_topic_for_source_chat",
     "get_vc_meeting_topic_for_source_chat",
     "get_overview_post_chat_id",
+    "get_dm_overview_target_chat_id",
     "get_target_group_chat_id",
     "get_owner_ids",
     "get_host_and_dm_open_id",
