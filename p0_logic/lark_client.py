@@ -184,6 +184,12 @@ def delete_vc_reserve(token: str, reserve_id: str) -> bool:
 
 
 def end_vc_meeting(token: str, meeting_id: str) -> bool:
+    """
+    ``POST /vc/v1/meetings/{meeting_id}/end``.
+
+    ``meeting_id`` may be the join-event id **or** the numeric ``meeting_no`` from reserve,
+    depending on tenant — callers try both (see ``end_p0_session``).
+    """
     meeting_id = (meeting_id or "").strip()
     if not meeting_id:
         return False

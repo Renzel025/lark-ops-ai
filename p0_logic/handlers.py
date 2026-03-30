@@ -19,6 +19,10 @@ from . import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
+# Avoid spamming the same DM when user taps Build overview repeatedly with no overview target (multi-group, etc.).
+_DM_NO_OVERVIEW_TARGET_DEBOUNCE: Dict[str, float] = {}
+_DM_NO_OVERVIEW_TARGET_DEBOUNCE_SEC = 120.0
+
 _OPERATOR_DENY_DM = "🔒 Only the designated operator can use this button."
 
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
@@ -232,12 +236,21 @@ def handle_dm_generate_overview(
     if not target_chat:
         target_chat = _config.get_dm_overview_target_chat_id()
     if not target_chat:
-        _lark.post_text_to_open_id(
-            sender_open_id,
-            tenant_token,
-            "⚠️ Can't link this overview to a group yet — no active meeting and several incident groups are configured. "
-            "Type **p0** once in the incident group you use, then paste again — or ask an admin to set a default overview group.",
-        )
+        now = time.time()
+        last = _DM_NO_OVERVIEW_TARGET_DEBOUNCE.get(sender_open_id, 0.0)
+        if now - last >= _DM_NO_OVERVIEW_TARGET_DEBOUNCE_SEC:
+            _DM_NO_OVERVIEW_TARGET_DEBOUNCE[sender_open_id] = now
+            _lark.post_text_to_open_id(
+                sender_open_id,
+                tenant_token,
+                "⚠️ Can't link this overview to a group yet — no active meeting, or the meeting has already ended. "
+                "Type **p0** in the incident group you use, then paste again — or ask an admin to set a default overview group.",
+            )
+        else:
+            log.info(
+                "DM overview: no target chat (debounced, no repeat DM) open_id=%s",
+                sender_open_id[-8:] if sender_open_id else "",
+            )
         return
     src_text = _text.clean_pasted_text(text)
     preview = _drafts.get_preview(sender_open_id) or {}

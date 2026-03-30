@@ -249,15 +249,24 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
         em_snap = str(sess.get("emergency_topic") or "").strip()
         _store_last_ended_snapshot(chat_id, meeting_no_snap, duration_snap, priority_snap, em_snap)
     if token and sess:
-        # End the live VC on Lark (same as user clicking End in the client) so recording / Meeting Assistant flows run.
+        # End the live VC on Lark so recording / Video Meeting Assistant can finalize (same as End in the client).
+        # Join webhooks often set ``meeting_id``; if missing, try ``meeting_no`` from reserve (9-digit) — many tenants accept it for ``/meetings/{id}/end``.
         meeting_id = str(sess.get("meeting_id") or "").strip()
-        reserve_id = str(sess.get("reserve_id") or "").strip()
-        if meeting_id:
-            if not _lark.end_vc_meeting(token, meeting_id):
-                log.warning("end_p0_session: end_vc_meeting did not succeed meeting_id=%s", meeting_id)
-        elif reserve_id:
-            _lark.delete_vc_reserve(token, reserve_id)
         meeting_no = str(sess.get("meeting_no") or "").strip()
+        reserve_id = str(sess.get("reserve_id") or "").strip()
+        vc_ended = False
+        if meeting_id:
+            vc_ended = _lark.end_vc_meeting(token, meeting_id)
+            if not vc_ended:
+                log.warning("end_p0_session: end_vc_meeting failed meeting_id=%s", meeting_id)
+        if not vc_ended and meeting_no:
+            vc_ended = _lark.end_vc_meeting(token, meeting_no)
+            if vc_ended:
+                log.info("end_p0_session: ended VC via meeting_no=%s", meeting_no)
+            else:
+                log.warning("end_p0_session: end_vc_meeting failed meeting_no=%s", meeting_no)
+        if not vc_ended and reserve_id:
+            _lark.delete_vc_reserve(token, reserve_id)
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
