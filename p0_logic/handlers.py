@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
@@ -197,11 +198,11 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No active target chat found.")
         return False
     _chat_id, sess = _session.find_session_by_target_chat(target_chat)
-    if not sess:
-        _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No active P0 session found.")
-        return False
-    import time
-    start_epoch = int(sess.get("start_epoch") or time.time())
+    if sess:
+        start_epoch = int(sess.get("start_epoch") or time.time())
+    else:
+        # Draft tied to ``OVERVIEW_TARGET_GROUP_CHAT_ID`` only — no live P0 row; use wall clock for overview header.
+        start_epoch = int(time.time())
     md = _drafts.build_preview_from_draft(sender_open_id=sender_open_id, tenant_token=tenant_token, target_chat=target_chat, start_epoch=start_epoch, draft=draft)
     if not md:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Draft is empty.")
@@ -224,14 +225,19 @@ def handle_dm_generate_overview(
     mention_names: Optional[List[str]] = None,
     message_id: Optional[str] = None,
 ) -> None:
-    import time
-
     sender_open_id = (sender_open_id or "").strip()
     mention_names = mention_names or []
     message_id = (message_id or "").strip()
     target_chat = _session.get_active_target_chat()
     if not target_chat:
-        _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No active P0 session. Trigger p0 in the incident group first.")
+        target_chat = _config.get_overview_post_chat_id()
+    if not target_chat:
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "⚠️ Cannot start a DM overview yet: trigger **p0** in the incident group first, "
+            "or set **OVERVIEW_TARGET_GROUP_CHAT_ID** / **P0_OVERVIEW_POST_CHAT_ID** in `.env` (the «oc_…» chat where overviews are posted).",
+        )
         return
     src_text = _text.clean_pasted_text(text)
     preview = _drafts.get_preview(sender_open_id) or {}

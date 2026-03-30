@@ -273,9 +273,10 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             if not target_chat:
                 return
             _chat_id, sess = _session.find_session_by_target_chat(target_chat)
-            if not sess:
-                return
-            start_epoch = int(sess.get("start_epoch") or time.time())
+            if sess:
+                start_epoch = int(sess.get("start_epoch") or time.time())
+            else:
+                start_epoch = int(time.time())
             md = _build_preview_from_draft(sender_open_id=sender_open_id, tenant_token=tenant_token, target_chat=target_chat, start_epoch=start_epoch, draft=draft)
             if not md:
                 return

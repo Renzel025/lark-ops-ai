@@ -7,7 +7,7 @@ English operator doc (refined from internal SOP). Button labels match the curren
 ## 1. What this automation does
 
 - **Incident group:** When someone declares **P0** or **P1** (e.g. types `p0`, `p1`, `priority 0`, `priority 1`), the bot can **create a Lark video meeting** and post a **Join** card.
-- **DM (duty / on-call):** The bot messages configured user(s) with an **instruction card** to build a **bilingual incident overview** from pasted **text** and **screenshots** (OCR), then **send it to the target group**.
+- **DM (duty / on-call):** The bot messages configured user(s) with an **instruction card** to build a **bilingual incident overview** from pasted **text** and **screenshots** (OCR), then **send it to the target group**. The DM draft must be tied to a **target** group: usually an **active P0/P1 session** (after someone types **p0** / **p1** in the incident group), **or** set **`OVERVIEW_TARGET_GROUP_CHAT_ID`** / **`P0_OVERVIEW_POST_CHAT_ID`** in `.env` so overviews can be built **without** a live session.
 
 Which groups count as “incident” and which DM recipients get the card are set in **`.env`** (see §7).
 
@@ -60,7 +60,7 @@ You can also type in DM (whole line, case-insensitive):
 
 ### Ending / cancelling
 
-- **End:** phrases like **`p0 end`**, **`end p0`**, **`p1 end`**, etc. → invite card becomes **✅ meeting ended** (when possible) + chat line: *Meeting ended. Duration: … Meeting ID: …*
+- **End:** phrases like **`p0 end`**, **`end p0`**, **`p1 end`**, **`end meeting`** (whole line), etc. → invite card becomes **✅ meeting ended** (when possible) + chat line: *Meeting ended. Duration: … Meeting ID: …*
 - **Cancel:** **`cancel meeting`** — optional reason after the phrase; if omitted, reason is *Unspecified*.
 - Typing **end** again with no active session may **replay** the last ended card (if the bot still has it in memory) or show a **no active meeting** card.
 
@@ -132,6 +132,7 @@ Unless noted, matching is **case-insensitive**. **Incident group** = chats liste
 | **Cancel** | Line starts with `cancel meeting`, `cancel p0`, `cancel p1`, or `cancel` — optional free text after as **reason**. |
 | **End P0** | `p0 end`, `end p0`, `close p0`, `p0 resolved` (anywhere in message). |
 | **End P1** | `p1 end`, `end p1`, `close p1`, `p1 resolved` (anywhere in message). |
+| **End (any active)** | `end meeting` — whole line only; ends whichever P0/P1 session is active in this chat. |
 
 ### Incident group — while P1 “create meeting?” is open
 

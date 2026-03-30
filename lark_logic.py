@@ -49,9 +49,12 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     t = (text or "").strip().lower()
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
 
-# End commands
+# End commands (``p0``/``p1`` must appear in the phrase for these patterns)
 P0_END_REGEX = re.compile(r"\b(p0\s*end|end\s*p0|close\s*p0|p0\s*resolved)\b", re.IGNORECASE)
 P1_END_REGEX = re.compile(r"\b(p1\s*end|end\s*p1|close\s*p1|p1\s*resolved)\b", re.IGNORECASE)
+# Whole line only — same as ending the active session (many operators type this instead of ``end p0``).
+# Optional trailing period / punctuation (operators often type ``end meeting.``)
+END_MEETING_LINE_RE = re.compile(r"^\s*end\s+meeting\.?\s*$", re.IGNORECASE)
 
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
@@ -249,8 +252,12 @@ def process_message(
                         log.warning("no-session cancel prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
-        # End command
-        if P0_END_REGEX.search(text_lower) or P1_END_REGEX.search(text_lower):
+        # End command (``end meeting`` alone is treated like end for the active P0/P1 session)
+        if (
+            P0_END_REGEX.search(text_lower)
+            or P1_END_REGEX.search(text_lower)
+            or END_MEETING_LINE_RE.match(text_raw.strip())
+        ):
             if _incident_command_denied_in_group(user_id, chat_id, token):
                 return
             if chat_id in P0_SESSIONS:
