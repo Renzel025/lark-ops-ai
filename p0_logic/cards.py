@@ -327,10 +327,12 @@ def build_meeting_cancelled_card(
 
 
 def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
-    """Shown when someone says P1 — type ``create meeting`` to open VC, or tap **Not needed**."""
+    """Shown when someone says P1 — **Create meeting** or **Don't need** (typed ``create meeting`` still works)."""
     nonce = (confirm_nonce or "").strip()
+    val_yes: Dict[str, Any] = {"action": "p1_confirm_meeting_yes"}
     val_no: Dict[str, Any] = {"action": "p1_confirm_meeting_no"}
     if nonce:
+        val_yes["p1_nonce"] = nonce
         val_no["p1_nonce"] = nonce
     return {
         "schema": "2.0",
@@ -342,11 +344,7 @@ def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
                     "tag": "div",
                     "text": {
                         "tag": "lark_md",
-                        "content": (
-                            "P1 was mentioned in this chat.\n\n"
-                            "Type **create meeting** (or **p1 create**) here to start a Lark video meeting, "
-                            "or tap **Not needed** to skip."
-                        ),
+                        "content": "P1 was mentioned in this chat. Do you want to create a Lark video meeting now?",
                     },
                 },
                 {"tag": "hr"},
@@ -363,7 +361,20 @@ def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
                             "elements": [
                                 {
                                     "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Not needed"},
+                                    "text": {"tag": "plain_text", "content": "Create meeting"},
+                                    "type": "primary",
+                                    "value": val_yes,
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "Don't need"},
                                     "type": "default",
                                     "value": val_no,
                                 },

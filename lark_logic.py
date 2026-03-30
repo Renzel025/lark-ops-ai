@@ -79,7 +79,7 @@ COOLDOWN_RESET_RE = re.compile(
     re.IGNORECASE,
 )
 
-# While P1 "create meeting?" is pending — typed confirm / decline (card has **Not needed** only).
+# While P1 "create meeting?" is pending — typed confirm / decline (card has **Create meeting** / **Don't need**).
 P1_PENDING_CREATE_RE = re.compile(
     r"^\s*(create\s+meeting|p1\s+create|yes)\s*$",
     re.IGNORECASE,
