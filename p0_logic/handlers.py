@@ -243,8 +243,7 @@ def handle_dm_generate_overview(
             _lark.post_text_to_open_id(
                 sender_open_id,
                 tenant_token,
-                "⚠️ Can't link this overview to a group yet — no active meeting, or the meeting has already ended. "
-                "Type **p0** in the incident group you use, then paste again — or ask an admin to set a default overview group.",
+                "⚠️ No active P0 session. Trigger p0 in the incident group first.",
             )
         else:
             log.info(
