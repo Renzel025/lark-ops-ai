@@ -23,8 +23,6 @@ log = logging.getLogger("lark-ops-ai")
 _DM_NO_OVERVIEW_TARGET_DEBOUNCE: Dict[str, float] = {}
 _DM_NO_OVERVIEW_TARGET_DEBOUNCE_SEC = 120.0
 
-_OPERATOR_DENY_DM = "🔒 Only the designated operator can use this button."
-
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
@@ -147,12 +145,18 @@ def _form_field_left_blank(manual: str) -> bool:
     return (not s) or _text.is_not_specified(s)
 
 
-def _incident_group_operator_denied(sender_open_id: str, tenant_token: str) -> bool:
-    """If incident-group command restriction is enabled and user is not allowed, DM them and return True."""
+def _incident_group_operator_denied(sender_open_id: str, tenant_token: str, chat_id: str = "") -> bool:
+    """If incident-group command restriction is enabled and user is not allowed, post to the group (no DM)."""
     if _config.can_use_incident_group_commands(sender_open_id):
         return False
-    if sender_open_id:
-        _lark.post_text_to_open_id(sender_open_id, tenant_token, _OPERATOR_DENY_DM)
+    cid = (chat_id or "").strip()
+    if cid and tenant_token:
+        _lark.post_text_to_chat(cid, tenant_token, _config.INCIDENT_OPERATOR_DENY_TEXT)
+    elif tenant_token and sender_open_id:
+        log.warning(
+            "operator denied but missing open_chat_id (no group notice posted) open_id=%s",
+            sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
+        )
     return True
 
 
@@ -328,7 +332,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token):
+            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
                 return
             nonce = _extract_p1_confirm_nonce(payload)
             err = _session.handle_p1_meeting_confirm_yes(chat_id, tenant_token, sender_open_id, nonce)
@@ -350,7 +354,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             chat_id = _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token):
+            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
                 return
             nonce = _extract_p1_confirm_nonce(payload)
             err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce)
@@ -376,7 +380,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 log.warning("p1_declare_p0_yes missing open_chat_id")
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token):
+            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
                 return
             if not _session.apply_p1_escalation_after_confirm(chat_id, tenant_token):
                 if sender_open_id:
@@ -392,7 +396,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 log.warning("p1_declare_p0_no missing open_chat_id")
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token):
+            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
                 return
             if not _session.decline_p1_escalation_end_as_p1(chat_id, tenant_token):
                 if sender_open_id:

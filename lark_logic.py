@@ -5,6 +5,7 @@ from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
+    INCIDENT_OPERATOR_DENY_TEXT,
     can_use_incident_group_commands,
     get_incident_group_chat_ids,
     get_p0_trigger_ignore_open_ids,
@@ -89,9 +90,6 @@ P1_PENDING_DECLINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_GROUP_CMD_DENY = "🔒 Only the designated operator can use this command."
-
-
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
     out: List[str] = []
     if not raw_mentions:
@@ -134,7 +132,7 @@ def _incident_command_denied_in_group(user_id: str, chat_id: str, token: str) ->
     if can_use_incident_group_commands(user_id):
         return False
     if token:
-        post_text_to_chat(chat_id, token, _GROUP_CMD_DENY)
+        post_text_to_chat(chat_id, token, INCIDENT_OPERATOR_DENY_TEXT)
     return True
 
 

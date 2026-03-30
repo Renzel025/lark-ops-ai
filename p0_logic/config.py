@@ -348,6 +348,10 @@ def can_use_incident_group_commands(user_open_id: str) -> bool:
     return bool(uid and uid in allowed)
 
 
+# Shown in the incident group when a non-operator uses a restricted typed command or card action (no DM).
+INCIDENT_OPERATOR_DENY_TEXT = "🔒 Only the designated operator can use this command."
+
+
 def get_dm_instruction_open_ids() -> List[str]:
     """
     If non-empty, P0/P1 DM instruction cards are sent to these users instead of whoever typed p0/p1.
