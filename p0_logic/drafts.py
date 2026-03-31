@@ -34,10 +34,44 @@ def _ensure_draft(sender_open_id: str, target_chat: str) -> Dict[str, Any]:
     with _P0_DRAFTS_LOCK:
         draft = P0_DRAFTS.get(sender_open_id)
         if not draft or draft.get("target_chat") != target_chat:
-            draft = {"target_chat": target_chat, "texts": [], "images": [], "mention_names": [], "updated_at": now}
+            draft = {
+                "target_chat": target_chat,
+                "source_incident_chat_id": "",
+                "draft_priority": "",
+                "texts": [],
+                "images": [],
+                "mention_names": [],
+                "updated_at": now,
+            }
             P0_DRAFTS[sender_open_id] = draft
         draft["updated_at"] = now
         return draft
+
+
+def seed_draft_for_incident(
+    sender_open_id: str,
+    target_chat: str,
+    source_incident_chat_id: str,
+    draft_priority: str = "",
+) -> None:
+    """Reset DM draft to an empty shell for one incident / queue slot (see session.enqueue_dm_instruction_if_needed)."""
+    sender_open_id = (sender_open_id or "").strip()
+    target_chat = (target_chat or "").strip()
+    src = (source_incident_chat_id or "").strip()
+    prio = (draft_priority or "").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = ""
+    now = int(time.time())
+    with _P0_DRAFTS_LOCK:
+        P0_DRAFTS[sender_open_id] = {
+            "target_chat": target_chat,
+            "source_incident_chat_id": src,
+            "draft_priority": prio,
+            "texts": [],
+            "images": [],
+            "mention_names": [],
+            "updated_at": now,
+        }
 
 
 def _append_unique_strs(base: List[str], items: List[str]) -> List[str]:
@@ -144,6 +178,7 @@ def _save_preview(
     support: str,
     awaiting_edit_input: bool = False,
     priority: str = "P0",
+    source_incident_chat_id: str = "",
 ) -> None:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -167,6 +202,7 @@ def _save_preview(
             "md": _cards.build_bilingual_overview_md(start_epoch, issue, impact, support, priority=prio),
             "awaiting_edit_input": awaiting_edit_input,
             "updated_at": int(time.time()),
+            "source_incident_chat_id": (source_incident_chat_id or "").strip(),
         }
         if old_mid:
             row["preview_message_id"] = old_mid
@@ -217,13 +253,29 @@ def take_edit_message_id(sender_open_id: str) -> str:
         return mid
 
 
+def _draft_priority_for_preview(draft: Dict[str, Any], target_chat: str) -> str:
+    dp = str((draft or {}).get("draft_priority") or "").strip().upper()
+    if dp in ("P0", "P1"):
+        return dp
+    src_inc = str((draft or {}).get("source_incident_chat_id") or "").strip()
+    if src_inc and src_inc == _session.STANDALONE_DM_SOURCE_CHAT_ID:
+        return "P0"
+    if src_inc:
+        sess = _session.P0_SESSIONS.get(src_inc)
+        if sess:
+            pr = str(sess.get("priority") or "P0").strip().upper()
+            if pr in ("P0", "P1"):
+                return pr
+    _chat_id, sess = _session.find_session_by_target_chat(target_chat)
+    pr = str((sess or {}).get("priority") or "P0").strip().upper()
+    return pr if pr in ("P0", "P1") else "P0"
+
+
 def _build_preview_from_draft(
     sender_open_id: str, tenant_token: str, target_chat: str, start_epoch: int, draft: Dict[str, Any]
 ) -> str:
-    _chat_id, sess = _session.find_session_by_target_chat(target_chat)
-    prio = str((sess or {}).get("priority") or "P0").strip().upper()
-    if prio not in ("P0", "P1"):
-        prio = "P0"
+    prio = _draft_priority_for_preview(draft, target_chat)
+    src_inc = str(draft.get("source_incident_chat_id") or "").strip()
     combined_text, combined_mentions = _compose_combined_source_text(draft)
     if not combined_text.strip():
         return ""
@@ -246,6 +298,7 @@ def _build_preview_from_draft(
         impact=impact,
         support=support,
         priority=prio,
+        source_incident_chat_id=src_inc,
     )
     preview = get_preview(sender_open_id) or {}
     return str(preview.get("md") or "").strip()
@@ -280,10 +333,7 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             md = _build_preview_from_draft(sender_open_id=sender_open_id, tenant_token=tenant_token, target_chat=target_chat, start_epoch=start_epoch, draft=draft)
             if not md:
                 return
-            prev = get_preview(sender_open_id) or {}
-            pr = str(prev.get("priority") or "P0").strip().upper()
-            if pr not in ("P0", "P1"):
-                pr = "P0"
+            pr = _draft_priority_for_preview(draft, target_chat)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
             post_or_patch_preview_card(sender_open_id, tenant_token, card)
@@ -327,6 +377,7 @@ def save_preview(
     support: str,
     awaiting_edit_input: bool = False,
     priority: str = "P0",
+    source_incident_chat_id: str = "",
 ) -> None:
     """Persist preview state for the sender."""
     _save_preview(
@@ -340,6 +391,7 @@ def save_preview(
         support=support,
         awaiting_edit_input=awaiting_edit_input,
         priority=priority,
+        source_incident_chat_id=source_incident_chat_id,
     )
 
 

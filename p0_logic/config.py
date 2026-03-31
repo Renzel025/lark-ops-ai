@@ -188,7 +188,9 @@ NOT_SPECIFIED_RE = re.compile(r"^\s*(not specified|n/?a|none|unknown|-)?\s*$", r
 
 CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel)\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check)\s*$", re.IGNORECASE)
-GENERATE_RE = re.compile(r"^\s*(generate|preview|create overview)\s*$", re.IGNORECASE)
+
+# DM whole line: queue standalone overview (no meeting). Building a preview from a draft is buttons-only.
+STANDALONE_OVERVIEW_DM_RE = re.compile(r"^\s*create\s+overview\s*$", re.IGNORECASE)
 
 WHO_IN_MEETING_RE = re.compile(
     r"^\s*(who\s+(is|are)\s+in\s+the\s+meeting|who\s+is\s+in\s+meeting|participants|list\s+participants|sino\s+nasa\s+meeting)\s*$",

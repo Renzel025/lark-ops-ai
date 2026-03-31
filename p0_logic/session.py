@@ -37,6 +37,171 @@ ONGOING_CARD_DELAY_SEC = _config.ONGOING_CARD_DELAY_SEC
 P1_TO_P0_ESCALATION_SEC = _config.P1_TO_P0_ESCALATION_SEC
 P0_COOLDOWN_SEC = _config.P0_COOLDOWN_SEC
 
+# Sentinel for DM overview queue items that are not tied to a live P0 session row.
+STANDALONE_DM_SOURCE_CHAT_ID = "__standalone__"
+
+# Per operator (open_id): one active DM instruction slot; further incidents queue until overview is sent.
+_DM_INSTR_QUEUE: Dict[str, List[Dict[str, Any]]] = {}
+_DM_ACTIVE_ITEM: Dict[str, Dict[str, Any]] = {}
+_DM_INSTR_LOCK = threading.Lock()
+
+# DM text when a second+ incident queues while the operator is still on the first overview.
+_DM_CONCURRENT_MEETINGS_NOTICE = (
+    "ℹ️ Multiple meetings were declared around the same time.\n"
+    "Finish the first overview first: Build overview → Send overview to the group.\n"
+    "The next DM instruction card will appear here automatically after that.\n"
+    "—\n"
+    "若同时有多起：请先完成第一条概览并发到群，下一条说明卡片会在完成后自动出现。"
+)
+
+
+def _post_dm_concurrent_meetings_notice(operator_open_id: str, token: str, queued_label: str) -> None:
+    oid = (operator_open_id or "").strip()
+    token = (token or "").strip()
+    if not oid or not token:
+        return
+    tail = (queued_label or "").strip()
+    extra = f"\n📌 Next in queue — {tail}" if tail else ""
+    try:
+        st, body = _lark.post_text_to_open_id(oid, token, _DM_CONCURRENT_MEETINGS_NOTICE + extra)
+        if st != 200:
+            log.warning(
+                "concurrent meetings notice failed HTTP=%s open_id_tail=%s body=%s",
+                st,
+                oid[-8:] if len(oid) > 8 else oid,
+                (body or "")[:400],
+            )
+    except Exception as e:
+        log.warning("concurrent meetings notice exception open_id_tail=%s err=%s", oid[-8:] if len(oid) > 8 else oid, e)
+
+
+def note_if_standalone_create_overview_blocked(operator_open_id: str) -> str:
+    """
+    If non-empty, DM this text instead of enqueueing another standalone ``create overview``.
+    Covers: active incident slot, duplicate standalone, draft tied to a live incident.
+    """
+    oid = (operator_open_id or "").strip()
+    if not oid:
+        return ""
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if active:
+            cid = str(active.get("chat_id") or "").strip()
+            if cid == STANDALONE_DM_SOURCE_CHAT_ID:
+                return (
+                    "ℹ️ Standalone overview is already active. Paste your content and tap "
+                    "Build overview on the DM card."
+                )
+            return "ℹ️ For this incident use the Build overview button on the DM card."
+    from . import drafts as _drafts
+
+    d = _drafts.get_draft(oid) or {}
+    src = str(d.get("source_incident_chat_id") or "").strip()
+    if src and src != STANDALONE_DM_SOURCE_CHAT_ID:
+        return "ℹ️ For this incident use the Build overview button on the DM card."
+    return ""
+
+
+def get_dm_target_chat_for_operator(operator_open_id: str) -> str:
+    """Target ``oc_`` for DM drafts while a queued slot is active (avoids wrong session when multiple P0 exist)."""
+    oid = (operator_open_id or "").strip()
+    if not oid:
+        return ""
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if active:
+            return str(active.get("target_chat") or "").strip()
+    return get_active_target_chat() or _config.get_dm_overview_target_chat_id()
+
+
+def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Dict[str, Any]) -> None:
+    """
+    Post at most one DM instruction card per operator at a time. Additional incidents are queued FIFO
+    until ``release_dm_after_overview_sent`` runs after a successful Send overview.
+    """
+    oid = (operator_open_id or "").strip()
+    token = (token or "").strip()
+    if not oid or not token:
+        log.warning("enqueue_dm_instruction_if_needed: missing operator_open_id or token")
+        return
+    chat_id = (item.get("chat_id") or "").strip()
+    target_chat = (item.get("target_chat") or "").strip()
+    priority = (item.get("priority") or "P0").strip().upper()
+    if priority not in ("P0", "P1"):
+        priority = "P0"
+    label = str(item.get("label") or "").strip()
+    norm = {"chat_id": chat_id, "target_chat": target_chat, "priority": priority, "label": label}
+    send_now = False
+    with _DM_INSTR_LOCK:
+        if oid not in _DM_ACTIVE_ITEM:
+            _DM_ACTIVE_ITEM[oid] = norm
+            send_now = True
+            log.info(
+                "DM instruction active (immediate) open_id_tail=%s incident=%s target=%s",
+                oid[-8:] if len(oid) > 8 else oid,
+                chat_id,
+                target_chat,
+            )
+        else:
+            _DM_INSTR_QUEUE.setdefault(oid, []).append(norm)
+            log.info(
+                "DM instruction queued open_id_tail=%s queue_len=%s incident=%s",
+                oid[-8:] if len(oid) > 8 else oid,
+                len(_DM_INSTR_QUEUE.get(oid) or []),
+                chat_id,
+            )
+    if not send_now:
+        _post_dm_concurrent_meetings_notice(oid, token, label)
+        return
+    from . import drafts as _drafts
+
+    _drafts.clear_draft(oid)
+    _drafts.clear_preview(oid)
+    _drafts.cancel_preview_timer(oid)
+    _drafts.seed_draft_for_incident(oid, target_chat, chat_id, draft_priority=priority)
+    _send_dm_instruction_card_logged(oid, token, priority, label, context="DM instruction")
+
+
+def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_source_incident_chat_id: str) -> None:
+    """After overview is posted to the group: advance the FIFO queue and post the next instruction card if any."""
+    oid = (operator_open_id or "").strip()
+    token = (token or "").strip()
+    sent = (sent_source_incident_chat_id or "").strip()
+    next_item: Optional[Dict[str, Any]] = None
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if not active:
+            return
+        exp = str(active.get("chat_id") or "").strip()
+        if sent and exp and sent != exp:
+            log.warning(
+                "release_dm_after_overview_sent: source mismatch expected=%s got=%s open_id_tail=%s",
+                exp,
+                sent,
+                oid[-8:] if len(oid) > 8 else oid,
+            )
+            return
+        del _DM_ACTIVE_ITEM[oid]
+        q = list(_DM_INSTR_QUEUE.get(oid) or [])
+        if q:
+            next_item = q.pop(0)
+            _DM_INSTR_QUEUE[oid] = q
+            _DM_ACTIVE_ITEM[oid] = next_item
+    from . import drafts as _drafts
+
+    _drafts.clear_draft(oid)
+    _drafts.clear_preview(oid)
+    _drafts.cancel_preview_timer(oid)
+    if next_item:
+        tc = str(next_item.get("target_chat") or "").strip()
+        cid = str(next_item.get("chat_id") or "").strip()
+        pr = str(next_item.get("priority") or "P0").strip().upper()
+        if pr not in ("P0", "P1"):
+            pr = "P0"
+        lab = str(next_item.get("label") or "").strip()
+        _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
+        _send_dm_instruction_card_logged(oid, token, pr, lab, context="queued DM instruction")
+
 
 def _safe_match_ref(val: Any, meeting_ref: str) -> bool:
     s = str(val or "").strip()
@@ -705,16 +870,18 @@ def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
     sess["priority"] = "P0"
     log.info("P1 escalated to P0 (user confirmed) chat_id=%s meeting_no=%s", chat_id, meeting_no)
     lab = str(sess.get("source_chat_name") or "").strip()
+    target_chat = str(sess.get("target_chat") or "").strip() or _config.get_overview_post_chat_id() or chat_id
     p1_p0_targets = _dm_instruction_targets(trigger_open_id)
     log.info(
         "P1->P0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id)",
         len([x for x in p1_p0_targets if (x or "").strip()]),
         [x for x in p1_p0_targets if (x or "").strip()],
     )
+    item = {"chat_id": chat_id, "target_chat": target_chat, "priority": "P0", "label": lab}
     for dm_to in p1_p0_targets:
         if not dm_to:
             continue
-        _send_dm_instruction_card_logged(dm_to, token, "P0", lab, context="P1->P0 DM instruction")
+        enqueue_dm_instruction_if_needed(dm_to, token, item)
     _schedule_ongoing_meeting_card(chat_id, token)
     return True
 
@@ -757,7 +924,6 @@ def start_p0(
     priority: str = "P0",
     source_chat_name: str = "",
 ) -> None:
-    from . import drafts as _drafts
     from . import participants as _participants
 
     _config.reload_env_runtime()
@@ -837,21 +1003,21 @@ def start_p0(
         len([x for x in dm_targets if (x or "").strip()]),
         [x for x in dm_targets if (x or "").strip()],
     )
-    for oid in dm_targets:
-        if not oid:
-            continue
-        _drafts.clear_draft(oid)
-        _drafts.clear_preview(oid)
-        _drafts.cancel_preview_timer(oid)
+    item = {
+        "chat_id": chat_id,
+        "target_chat": target_chat,
+        "priority": priority,
+        "label": chat_label,
+    }
     if priority == "P0":
         for oid in dm_targets:
             if not oid:
                 continue
-            _send_dm_instruction_card_logged(oid, token, "P0", chat_label, context="start_p0 DM instruction")
+            enqueue_dm_instruction_if_needed(oid, token, item)
         _schedule_ongoing_meeting_card(chat_id, token)
     elif priority == "P1":
         for oid in dm_targets:
             if not oid:
                 continue
-            _send_dm_instruction_card_logged(oid, token, "P1", chat_label, context="start_p0 DM instruction")
+            enqueue_dm_instruction_if_needed(oid, token, item)
         _schedule_p1_escalation_card(chat_id, token)

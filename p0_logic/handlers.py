@@ -236,7 +236,38 @@ def handle_dm_generate_overview(
     sender_open_id = (sender_open_id or "").strip()
     mention_names = mention_names or []
     message_id = (message_id or "").strip()
-    target_chat = _session.get_active_target_chat()
+    if text:
+        cmd = _text.clean_pasted_text(text).strip()
+        if _config.STANDALONE_OVERVIEW_DM_RE.match(cmd):
+            blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id)
+            if blocked:
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, blocked)
+                return
+            tc = _config.get_dm_overview_target_chat_id()
+            if not tc:
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "⚠️ No overview target group configured. Set OVERVIEW_TARGET_GROUP_CHAT_ID (or a single INCIDENT_GROUP_ID).",
+                )
+                return
+            _session.enqueue_dm_instruction_if_needed(
+                sender_open_id,
+                tenant_token,
+                {
+                    "chat_id": _session.STANDALONE_DM_SOURCE_CHAT_ID,
+                    "target_chat": tc,
+                    "priority": "P0",
+                    "label": "Standalone (no meeting)",
+                },
+            )
+            return
+
+    draft_existing = _drafts.get_draft(sender_open_id)
+    if draft_existing and str(draft_existing.get("target_chat") or "").strip():
+        target_chat = str(draft_existing.get("target_chat") or "").strip()
+    else:
+        target_chat = _session.get_dm_target_chat_for_operator(sender_open_id)
     if not target_chat:
         target_chat = _config.get_dm_overview_target_chat_id()
     if not target_chat:
@@ -312,9 +343,6 @@ def handle_dm_generate_overview(
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No active draft yet.")
                 return
             _lark.post_text_to_open_id(sender_open_id, tenant_token, _drafts.draft_summary_text(draft))
-            return
-        if _config.GENERATE_RE.match(src_text):
-            _generate_preview_now(sender_open_id, tenant_token)
             return
         _drafts.add_text_to_draft(sender_open_id=sender_open_id, target_chat=target_chat, text=src_text, mention_names=mention_names)
         return
@@ -462,6 +490,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
+            prev_src = str(preview.get("source_incident_chat_id") or "").strip()
+            _session.release_dm_after_overview_sent(sender_open_id, tenant_token, prev_src)
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
@@ -488,6 +518,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 support=support,
                 awaiting_edit_input=False,
                 priority=pri,
+                source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
@@ -547,6 +578,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 support=new_support,
                 awaiting_edit_input=False,
                 priority=pri,
+                source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
             lab = _session.get_source_chat_label_for_target_chat(target_chat)

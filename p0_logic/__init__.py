@@ -41,6 +41,10 @@ request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
 apply_p1_escalation_after_confirm = session.apply_p1_escalation_after_confirm
 decline_p1_escalation_end_as_p1 = session.decline_p1_escalation_end_as_p1
 get_last_ended_snapshot = session.get_last_ended_snapshot
+get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
+enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
+release_dm_after_overview_sent = session.release_dm_after_overview_sent
+STANDALONE_DM_SOURCE_CHAT_ID = session.STANDALONE_DM_SOURCE_CHAT_ID
 
 # Participants
 list_meeting_participants = participants.list_meeting_participants
@@ -120,6 +124,10 @@ __all__ = [
     "apply_p1_escalation_after_confirm",
     "decline_p1_escalation_end_as_p1",
     "get_last_ended_snapshot",
+    "get_dm_target_chat_for_operator",
+    "enqueue_dm_instruction_if_needed",
+    "release_dm_after_overview_sent",
+    "STANDALONE_DM_SOURCE_CHAT_ID",
     "list_meeting_participants",
     "is_person_in_meeting",
     "add_meeting_participant",

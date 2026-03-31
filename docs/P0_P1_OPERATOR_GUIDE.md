@@ -16,7 +16,7 @@ Which groups count as “incident” and which DM recipients get the card are se
 ## 2. End-to-end flow (short)
 
 1. **Group:** Declare **P0/P1** → meeting card (and DM instruction, if configured).
-2. **DM:** Paste details / screenshots → tap **Build overview** (or type `generate` / `preview` / `create overview`).
+2. **DM:** Paste details / screenshots → tap **Build overview** (typed build commands removed — use the button).
 3. **Preview card:** Review → **Send to group**, **Generate** (refresh issue), **Edit**, or **Cancel**.
 4. **Group:** When the incident is done → **`p0 end` / `p1 end`** (or VC ends) → **meeting ended** card + summary line with **duration**.
 
@@ -34,7 +34,7 @@ You can also type in DM (whole line, case-insensitive):
 
 - `status` / `draft` / `check` — draft summary  
 - `clear` / `reset` / `discard` / `cancel` — same idea as **Clear draft**  
-- `generate` / `preview` / `create overview` — same as **Build overview**
+- `create overview` — **only** to start a **standalone** overview when there is **no** live P0/P1 meeting (requires a configured overview target group). For normal incidents, use **Build overview** on the card.
 
 ---
 
