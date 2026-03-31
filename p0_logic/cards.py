@@ -565,9 +565,11 @@ def build_edit_overview_card(
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
-    default_issue = "" if _text.is_not_specified(current_issue) else (current_issue or "")
-    default_impact = "" if _text.is_not_specified(current_impact) else (current_impact or "")
-    default_support = "" if _text.is_not_specified(current_support) else (current_support or "")
+    # Prefill each field with generated text; leave a field empty only when that value is the
+    # sentinel (e.g. "Not specified") so operators see a blank box just for that section.
+    default_issue = "" if _text.is_not_specified(current_issue) else (current_issue or "").strip()
+    default_impact = "" if _text.is_not_specified(current_impact) else (current_impact or "").strip()
+    default_support = "" if _text.is_not_specified(current_support) else (current_support or "").strip()
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
