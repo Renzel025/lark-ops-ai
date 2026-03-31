@@ -48,22 +48,17 @@ _DM_INSTR_LOCK = threading.Lock()
 # DM text when a second+ incident queues while the operator is still on the first overview.
 _DM_CONCURRENT_MEETINGS_NOTICE = (
     "ℹ️ Multiple meetings were declared around the same time.\n"
-    "Finish the first overview first: Build overview → Send overview to the group.\n"
-    "The next DM instruction card will appear here automatically after that.\n"
-    "—\n"
-    "若同时有多起：请先完成第一条概览并发到群，下一条说明卡片会在完成后自动出现。"
+    "Finish the first overview first then it will proceed to other one"
 )
 
 
-def _post_dm_concurrent_meetings_notice(operator_open_id: str, token: str, queued_label: str) -> None:
+def _post_dm_concurrent_meetings_notice(operator_open_id: str, token: str) -> None:
     oid = (operator_open_id or "").strip()
     token = (token or "").strip()
     if not oid or not token:
         return
-    tail = (queued_label or "").strip()
-    extra = f"\n📌 Next in queue — {tail}" if tail else ""
     try:
-        st, body = _lark.post_text_to_open_id(oid, token, _DM_CONCURRENT_MEETINGS_NOTICE + extra)
+        st, body = _lark.post_text_to_open_id(oid, token, _DM_CONCURRENT_MEETINGS_NOTICE)
         if st != 200:
             log.warning(
                 "concurrent meetings notice failed HTTP=%s open_id_tail=%s body=%s",
@@ -151,7 +146,7 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
                 chat_id,
             )
     if not send_now:
-        _post_dm_concurrent_meetings_notice(oid, token, label)
+        _post_dm_concurrent_meetings_notice(oid, token)
         return
     from . import drafts as _drafts
 

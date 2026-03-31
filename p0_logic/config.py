@@ -85,6 +85,51 @@ def get_dm_overview_target_chat_id() -> str:
     return ""
 
 
+def _parse_standalone_overview_tags_env() -> Dict[str, str]:
+    """
+    ``P0_STANDALONE_OVERVIEW_TAGS`` / ``STANDALONE_OVERVIEW_TAGS``:
+    ``emergency=oc_aaa,game=oc_bbb`` (comma-separated ``tag=oc_...``).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_STANDALONE_OVERVIEW_TAGS") or os.getenv("STANDALONE_OVERVIEW_TAGS") or "").strip()
+    out: Dict[str, str] = {}
+    if not raw:
+        return out
+    for seg in raw.split(","):
+        seg = seg.strip()
+        if "=" not in seg:
+            continue
+        k, _, v = seg.partition("=")
+        k, v = k.strip().lower(), v.strip()
+        if k in ("emergency", "game") and v.startswith("oc_"):
+            out[k] = v
+    return out
+
+
+def get_standalone_overview_target_chat_id_for_tag(tag: str) -> str:
+    """
+    Resolve ``oc_`` for DM command ``create overview emergency|game`` (no live meeting).
+
+    1. Explicit ``P0_STANDALONE_OVERVIEW_TAGS=emergency=oc_...,game=oc_...`` if set.
+    2. Else match ``INCIDENT_GROUP_EMERGENCY_TOPICS`` labels: ``emergency`` → label contains
+       ``emergency``; ``game`` → label contains ``game`` or ``游戏``.
+    """
+    t = (tag or "").strip().lower()
+    if t not in ("emergency", "game"):
+        return ""
+    explicit = _parse_standalone_overview_tags_env()
+    if t in explicit:
+        return explicit[t]
+    for oc_id in sorted(get_incident_group_chat_ids()):
+        label = get_emergency_topic_for_source_chat(oc_id)
+        lo = label.lower()
+        if t == "emergency" and "emergency" in lo:
+            return oc_id
+        if t == "game" and ("game" in lo or "游戏" in label):
+            return oc_id
+    return ""
+
+
 REQ_TIMEOUT_ENV = (os.getenv("REQ_TIMEOUT", "15") or "15").strip()
 try:
     REQ_TIMEOUT = float(REQ_TIMEOUT_ENV)
@@ -189,8 +234,11 @@ NOT_SPECIFIED_RE = re.compile(r"^\s*(not specified|n/?a|none|unknown|-)?\s*$", r
 CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel)\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check)\s*$", re.IGNORECASE)
 
-# DM whole line: queue standalone overview (no meeting). Building a preview from a draft is buttons-only.
-STANDALONE_OVERVIEW_DM_RE = re.compile(r"^\s*create\s+overview\s*$", re.IGNORECASE)
+# DM whole line: ``create overview emergency|game`` — queue standalone overview (no meeting). Buttons-only for preview build.
+STANDALONE_OVERVIEW_DM_RE = re.compile(
+    r"^\s*create\s+overview\s+(emergency|game)\s*$",
+    re.IGNORECASE,
+)
 
 WHO_IN_MEETING_RE = re.compile(
     r"^\s*(who\s+(is|are)\s+in\s+the\s+meeting|who\s+is\s+in\s+meeting|participants|list\s+participants|sino\s+nasa\s+meeting)\s*$",

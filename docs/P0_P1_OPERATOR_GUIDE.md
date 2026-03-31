@@ -34,7 +34,7 @@ You can also type in DM (whole line, case-insensitive):
 
 - `status` / `draft` / `check` — draft summary  
 - `clear` / `reset` / `discard` / `cancel` — same idea as **Clear draft**  
-- `create overview` — **only** to start a **standalone** overview when there is **no** live P0/P1 meeting (requires a configured overview target group). For normal incidents, use **Build overview** on the card.
+- `create overview emergency` or `create overview game` — start a **standalone** overview (no live meeting) for that incident group. Routing uses `P0_STANDALONE_OVERVIEW_TAGS` or label matching on `INCIDENT_GROUP_EMERGENCY_TOPICS`. For normal P0/P1 sessions, use **Build overview** on the card.
 
 ---
 
@@ -147,7 +147,8 @@ Unless noted, matching is **case-insensitive**. **Incident group** = chats liste
 |---------|---------|
 | Draft status | `status`, `draft`, `check` |
 | Clear draft | `clear`, `reset`, `discard`, `cancel` |
-| Build overview | `generate`, `preview`, `create overview` |
+| Build overview | _(button only — no typed aliases)_ |
+| Standalone overview (no meeting) | `create overview emergency`, `create overview game` |
 | Who is in the meeting | `who is in the meeting`, `who are in the meeting`, `participants`, `list participants`, `sino nasa meeting` |
 | Is someone in the meeting? | `is <name> in the meeting?` (e.g. `is Alice in the meeting?`) |
 

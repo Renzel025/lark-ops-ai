@@ -238,19 +238,24 @@ def handle_dm_generate_overview(
     message_id = (message_id or "").strip()
     if text:
         cmd = _text.clean_pasted_text(text).strip()
-        if _config.STANDALONE_OVERVIEW_DM_RE.match(cmd):
+        m_co = _config.STANDALONE_OVERVIEW_DM_RE.match(cmd)
+        if m_co:
             blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id)
             if blocked:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, blocked)
                 return
-            tc = _config.get_dm_overview_target_chat_id()
+            tag = (m_co.group(1) or "").strip().lower()
+            tc = _config.get_standalone_overview_target_chat_id_for_tag(tag)
             if not tc:
                 _lark.post_text_to_open_id(
                     sender_open_id,
                     tenant_token,
-                    "⚠️ No overview target group configured. Set OVERVIEW_TARGET_GROUP_CHAT_ID (or a single INCIDENT_GROUP_ID).",
+                    f'⚠️ Could not resolve the overview group for "{tag}". '
+                    "Set P0_STANDALONE_OVERVIEW_TAGS=emergency=oc_...,game=oc_... "
+                    'or INCIDENT_GROUP_EMERGENCY_TOPICS so one label contains "emergency" and one contains "game" (or 游戏).',
                 )
                 return
+            lab = _config.get_emergency_topic_for_source_chat(tc).strip() or f"{tag} overview"
             _session.enqueue_dm_instruction_if_needed(
                 sender_open_id,
                 tenant_token,
@@ -258,7 +263,7 @@ def handle_dm_generate_overview(
                     "chat_id": _session.STANDALONE_DM_SOURCE_CHAT_ID,
                     "target_chat": tc,
                     "priority": "P0",
-                    "label": "Standalone (no meeting)",
+                    "label": lab,
                 },
             )
             return
@@ -491,16 +496,11 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
-            _session.release_dm_after_overview_sent(sender_open_id, tenant_token, prev_src)
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "✅ Overview sent to the target group chat.")
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            _send_instruction_card(
-                sender_open_id,
-                tenant_token,
-                "✅ Overview sent to the target group chat.",
-                repost_instruction_card=False,
-            )
+            _session.release_dm_after_overview_sent(sender_open_id, tenant_token, prev_src)
             return
         if action_name == "generate_again":
             if not combined_text:
