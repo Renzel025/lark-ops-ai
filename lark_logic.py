@@ -6,12 +6,10 @@ from typing import Any, List
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
-from p0_logic.cards import build_meeting_ended_card, build_no_active_p0_session_card
+from p0_logic.cards import build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
-from p0_logic.session import get_last_ended_snapshot
 from p0_logic import (
     start_p0,
-    end_p0_session,
     cancel_p0_session,
     clear_p0_cooldown,
     P0_SESSIONS,
@@ -38,13 +36,6 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     """
     t = (text or "").strip().lower()
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
-
-# End commands (``p0``/``p1`` must appear in the phrase for these patterns)
-P0_END_REGEX = re.compile(r"\b(p0\s*end|end\s*p0|close\s*p0|p0\s*resolved)\b", re.IGNORECASE)
-P1_END_REGEX = re.compile(r"\b(p1\s*end|end\s*p1|close\s*p1|p1\s*resolved)\b", re.IGNORECASE)
-# Whole line only — same as ending the active session (many operators type this instead of ``end p0``).
-# Optional trailing period / punctuation (operators often type ``end meeting.``)
-END_MEETING_LINE_RE = re.compile(r"^\s*end\s+meeting\.?\s*$", re.IGNORECASE)
 
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
@@ -123,7 +114,6 @@ def process_message(
     **kwargs: Any,
 ) -> None:
     text_raw = (incoming_text or "").strip()
-    text_lower = text_raw.lower() if text_raw else ""
 
     message_type = str(kwargs.get("message_type") or "").strip().lower()
     message_id = str(kwargs.get("message_id") or "").strip()
@@ -154,7 +144,7 @@ def process_message(
         if not text_raw:
             return
 
-        # Typed P1 prompt reply (before cancel/end so "no" does not collide with other routes)
+        # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
         pend = get_p1_prompt_pending(chat_id)
         if pend:
             nonce = str(pend.get("nonce") or "").strip()
@@ -212,41 +202,6 @@ def process_message(
                     )
                     if st != 200:
                         log.warning("no-session cancel prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
-            return
-
-        # End command (``end meeting`` alone is treated like end for the active P0/P1 session)
-        if (
-            P0_END_REGEX.search(text_lower)
-            or P1_END_REGEX.search(text_lower)
-            or END_MEETING_LINE_RE.match(text_raw.strip())
-        ):
-            if chat_id in P0_SESSIONS:
-                log.info("Incident group: ending active session chat_id=%s", chat_id)
-                end_p0_session(chat_id, token)
-            else:
-                log.info("Incident group: end requested but no active session chat_id=%s", chat_id)
-                if token:
-                    snap = get_last_ended_snapshot(chat_id)
-                    if snap:
-                        card = build_meeting_ended_card(
-                            snap.get("meeting_no") or "",
-                            snap.get("duration_text") or "Not available",
-                            snap.get("priority") or "P0",
-                            emergency_topic=snap.get("emergency_topic") or "",
-                            update_multi=False,
-                        )
-                    else:
-                        card = build_no_active_p0_session_card("end")
-                    st, body, _ = post_card_to_chat(chat_id, token, card)
-                    if st != 200:
-                        log.warning("no-session end prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
-                    if snap:
-                        dur = (snap.get("duration_text") or "Not available").strip() or "Not available"
-                        line = f"ℹ️ Meeting already ended. Duration: {dur}"
-                        mn = (snap.get("meeting_no") or "").strip()
-                        if mn:
-                            line += f". Meeting ID: {mn}"
-                        post_text_to_chat(chat_id, token, line)
             return
 
         # Cooldown reset only — no new VC. / 只清冷却，不创建会议
