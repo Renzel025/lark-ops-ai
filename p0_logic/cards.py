@@ -15,6 +15,17 @@ PHT = _config.PHT
 MEETING_TOPIC = _config.MEETING_TOPIC
 
 
+def _incident_time_line_lark_md(start_epoch: int) -> str:
+    """Same clock as ``build_bilingual_overview_md`` (PHT) for preview / edit cards."""
+    if start_epoch <= 0:
+        return ""
+    try:
+        t = datetime.fromtimestamp(int(start_epoch), tz=PHT).strftime("%Y-%m-%d %H:%M")
+        return f"🕒 **Incident start:** {t} (PHT)"
+    except (OSError, ValueError, OverflowError):
+        return ""
+
+
 def _build_emergency_title(priority: str, topic_line: str = "") -> str:
     prio = (priority or "P0").strip().upper()
     tail = (topic_line or "").strip() or MEETING_TOPIC
@@ -471,6 +482,7 @@ def build_preview_card(
     source_chat_label: str = "",
     *,
     update_multi: bool = True,
+    start_epoch: int = 0,
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -479,14 +491,19 @@ def build_preview_card(
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
+    time_line = _incident_time_line_lark_md(start_epoch)
+    preview_elements: List[Dict[str, Any]] = []
+    if time_line:
+        preview_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": time_line}})
+    preview_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": safe_md}})
+    preview_elements.append({"tag": "hr"})
     return {
         "schema": "2.0",
         "config": cfg,
         "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview Preview{_title_group_suffix(source_chat_label)}"}},
         "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": safe_md}},
-                {"tag": "hr"},
+            "elements": preview_elements
+                + [
                 {
                     "tag": "column_set",
                     "flex_mode": "none",
@@ -560,6 +577,7 @@ def build_edit_overview_card(
     source_chat_label: str = "",
     *,
     update_multi: bool = True,
+    start_epoch: int = 0,
 ) -> Dict[str, Any]:
     """Single card to edit Issue, Impact Scope, and Support Request."""
     prio = (priority or "P0").strip().upper()
@@ -573,6 +591,90 @@ def build_edit_overview_card(
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
+    time_line = _incident_time_line_lark_md(start_epoch)
+    form_elements: List[Dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": "Update Issue, Impact Scope, and Support Request below, then tap Save.",
+            },
+        },
+    ]
+    if time_line:
+        form_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": time_line}})
+    form_elements.extend(
+        [
+            {
+                "tag": "div",
+                "text": {"tag": "plain_text", "content": "🔥 Issue (short summary)"},
+            },
+            {
+                "tag": "input",
+                "name": "issue_input",
+                "placeholder": {"tag": "plain_text", "content": "What is wrong?"},
+                "value": default_issue,
+            },
+            {
+                "tag": "div",
+                "text": {"tag": "plain_text", "content": "🎯 Impact scope (e.g. 2 players, EU shard)"},
+            },
+            {
+                "tag": "input",
+                "name": "impact_input",
+                "placeholder": {"tag": "plain_text", "content": "e.g. 2 players"},
+                "value": default_impact,
+            },
+            {
+                "tag": "div",
+                "text": {"tag": "plain_text", "content": "👥 Support request (e.g. FPMS, FE, CPMS)"},
+            },
+            {
+                "tag": "input",
+                "name": "support_input",
+                "placeholder": {"tag": "plain_text", "content": "e.g. FPMS"},
+                "value": default_support,
+            },
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "top",
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "name": "save_edit_btn",
+                                "text": {"tag": "plain_text", "content": "Save"},
+                                "type": "primary",
+                                "action_type": "form_submit",
+                                "value": {"action": "save_edit"},
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "top",
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Back"},
+                                "type": "default",
+                                "value": {"action": "back_to_preview"},
+                            },
+                        ],
+                    },
+                ],
+            },
+        ]
+    )
     return {
         "schema": "2.0",
         "config": cfg,
@@ -585,83 +687,7 @@ def build_edit_overview_card(
                 {
                     "tag": "form",
                     "name": "overview_edit_form",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "Update Issue, Impact Scope, and Support Request below, then tap Save.",
-                            },
-                        },
-                        {
-                            "tag": "div",
-                            "text": {"tag": "plain_text", "content": "🔥 Issue (short summary)"},
-                        },
-                        {
-                            "tag": "input",
-                            "name": "issue_input",
-                            "placeholder": {"tag": "plain_text", "content": "What is wrong?"},
-                            "value": default_issue,
-                        },
-                        {
-                            "tag": "div",
-                            "text": {"tag": "plain_text", "content": "🎯 Impact scope (e.g. 2 players, EU shard)"},
-                        },
-                        {
-                            "tag": "input",
-                            "name": "impact_input",
-                            "placeholder": {"tag": "plain_text", "content": "e.g. 2 players"},
-                            "value": default_impact,
-                        },
-                        {
-                            "tag": "div",
-                            "text": {"tag": "plain_text", "content": "👥 Support request (e.g. FPMS, FE, CPMS)"},
-                        },
-                        {
-                            "tag": "input",
-                            "name": "support_input",
-                            "placeholder": {"tag": "plain_text", "content": "e.g. FPMS"},
-                            "value": default_support,
-                        },
-                        {
-                            "tag": "column_set",
-                            "flex_mode": "none",
-                            "background_style": "default",
-                            "horizontal_spacing": "8px",
-                            "columns": [
-                                {
-                                    "tag": "column",
-                                    "width": "weighted",
-                                    "weight": 1,
-                                    "vertical_align": "top",
-                                    "elements": [
-                                        {
-                                            "tag": "button",
-                                            "name": "save_edit_btn",
-                                            "text": {"tag": "plain_text", "content": "Save"},
-                                            "type": "primary",
-                                            "action_type": "form_submit",
-                                            "value": {"action": "save_edit"},
-                                        },
-                                    ],
-                                },
-                                {
-                                    "tag": "column",
-                                    "width": "weighted",
-                                    "weight": 1,
-                                    "vertical_align": "top",
-                                    "elements": [
-                                        {
-                                            "tag": "button",
-                                            "text": {"tag": "plain_text", "content": "Back"},
-                                            "type": "default",
-                                            "value": {"action": "back_to_preview"},
-                                        },
-                                    ],
-                                },
-                            ],
-                        },
-                    ],
+                    "elements": form_elements,
                 },
             ]
         },

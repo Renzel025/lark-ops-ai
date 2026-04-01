@@ -374,12 +374,8 @@ def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
 
 def get_incident_group_command_open_ids() -> FrozenSet[str]:
     """
-    If non-empty, only these open_ids may use incident-group **control** actions:
-    cancel/end meeting, **cooldown reset** (typed), P1 confirmation (card + typed create/decline), and P1→P0 15‑min card buttons.
-
-    If empty, any member who can message the bot may use those actions (legacy behavior).
-
-    P0_INCIDENT_GROUP_COMMAND_OPEN_IDS — comma-separated Lark user open_ids (ou_...).
+    Parsed from ``P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`` (comma-separated ``ou_...``).
+    **No longer used for gating** — incident-group controls are available to all chat members who can message the bot.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_INCIDENT_GROUP_COMMAND_OPEN_IDS") or "").strip()
@@ -390,16 +386,8 @@ def get_incident_group_command_open_ids() -> FrozenSet[str]:
 
 
 def can_use_incident_group_commands(user_open_id: str) -> bool:
-    """When ``get_incident_group_command_open_ids()`` is empty, everyone may use control commands."""
-    allowed = get_incident_group_command_open_ids()
-    if not allowed:
-        return True
-    uid = (user_open_id or "").strip()
-    return bool(uid and uid in allowed)
-
-
-# Shown in the incident group when a non-operator uses a restricted typed command or card action (no DM).
-INCIDENT_OPERATOR_DENY_TEXT = "🔒 Only the designated operator can use this command."
+    """Incident-group control commands are available to all members who can message the bot."""
+    return True
 
 
 def get_dm_instruction_open_ids() -> List[str]:

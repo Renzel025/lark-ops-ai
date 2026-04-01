@@ -38,8 +38,6 @@ set_p1_prompt_pending = session.set_p1_prompt_pending
 pop_p1_prompt_pending = session.pop_p1_prompt_pending
 consume_p1_prompt_for_confirm = session.consume_p1_prompt_for_confirm
 request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
-apply_p1_escalation_after_confirm = session.apply_p1_escalation_after_confirm
-decline_p1_escalation_end_as_p1 = session.decline_p1_escalation_end_as_p1
 get_last_ended_snapshot = session.get_last_ended_snapshot
 get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
 enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
@@ -122,8 +120,6 @@ __all__ = [
     "pop_p1_prompt_pending",
     "consume_p1_prompt_for_confirm",
     "request_p1_meeting_confirmation",
-    "apply_p1_escalation_after_confirm",
-    "decline_p1_escalation_end_as_p1",
     "get_last_ended_snapshot",
     "get_dm_target_chat_for_operator",
     "enqueue_dm_instruction_if_needed",

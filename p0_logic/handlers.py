@@ -145,21 +145,6 @@ def _form_field_left_blank(manual: str) -> bool:
     return (not s) or _text.is_not_specified(s)
 
 
-def _incident_group_operator_denied(sender_open_id: str, tenant_token: str, chat_id: str = "") -> bool:
-    """If incident-group command restriction is enabled and user is not allowed, post to the group (no DM)."""
-    if _config.can_use_incident_group_commands(sender_open_id):
-        return False
-    cid = (chat_id or "").strip()
-    if cid and tenant_token:
-        _lark.post_text_to_chat(cid, tenant_token, _config.INCIDENT_OPERATOR_DENY_TEXT)
-    elif tenant_token and sender_open_id:
-        log.warning(
-            "operator denied but missing open_chat_id (no group notice posted) open_id=%s",
-            sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
-        )
-    return True
-
-
 def _preview_priority(preview: Dict[str, Any]) -> str:
     pr = str((preview or {}).get("priority") or "P0").strip().upper()
     return pr if pr in ("P0", "P1") else "P0"
@@ -218,7 +203,9 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
     prev = _drafts.get_preview(sender_open_id) or {}
     pr = _preview_priority(prev)
     lab = _session.get_source_chat_label_for_target_chat(target_chat)
-    card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
+    card = _cards.build_preview_card(
+        md, priority=pr, source_chat_label=lab, update_multi=True, start_epoch=start_epoch
+    )
     if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send or update preview card.")
         return False
@@ -365,8 +352,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
-                return
             nonce = _extract_p1_confirm_nonce(payload)
             err = _session.handle_p1_meeting_confirm_yes(chat_id, tenant_token, sender_open_id, nonce)
             if err == "session_active":
@@ -387,8 +372,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             chat_id = _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 return
-            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
-                return
             nonce = _extract_p1_confirm_nonce(payload)
             err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce)
             if err == "session_active":
@@ -406,38 +389,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
                 return
-            return
-
-        if action_name == "p1_declare_p0_yes":
-            chat_id = _extract_card_action_open_chat_id(payload)
-            if not chat_id:
-                log.warning("p1_declare_p0_yes missing open_chat_id")
-                return
-            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
-                return
-            if not _session.apply_p1_escalation_after_confirm(chat_id, tenant_token):
-                if sender_open_id:
-                    _lark.post_text_to_open_id(
-                        sender_open_id,
-                        tenant_token,
-                        "ℹ️ Could not declare P0 (session ended, not in P1, or already answered).",
-                    )
-            return
-
-        if action_name == "p1_declare_p0_no":
-            chat_id = _extract_card_action_open_chat_id(payload)
-            if not chat_id:
-                log.warning("p1_declare_p0_no missing open_chat_id")
-                return
-            if _incident_group_operator_denied(sender_open_id, tenant_token, chat_id):
-                return
-            if not _session.decline_p1_escalation_end_as_p1(chat_id, tenant_token):
-                if sender_open_id:
-                    _lark.post_text_to_open_id(
-                        sender_open_id,
-                        tenant_token,
-                        "ℹ️ Could not complete action (session ended, not in P1, or already answered).",
-                    )
             return
 
         if not sender_open_id or not action_name:
@@ -522,11 +473,13 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            se = int(new_preview.get("start_epoch") or 0)
             card = _cards.build_preview_card(
                 str(new_preview.get("md") or ""),
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
+                start_epoch=se,
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
@@ -534,7 +487,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if str(new_preview.get("edit_message_id") or "").strip():
                 lab2 = _session.get_source_chat_label_for_target_chat(target_chat)
                 edit_c = _cards.build_edit_overview_card(
-                    new_issue, impact, support, priority=pri, source_chat_label=lab2
+                    new_issue, impact, support, priority=pri, source_chat_label=lab2, start_epoch=se
                 )
                 if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_c):
                     log.warning("generate_again: failed to refresh edit card open_id=%s", sender_open_id)
@@ -542,7 +495,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if action_name == "edit_preview":
             _drafts.set_preview_edit_waiting(sender_open_id, True)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            edit_card = _cards.build_edit_overview_card(issue, impact, support, priority=pri, source_chat_label=lab)
+            edit_card = _cards.build_edit_overview_card(
+                issue, impact, support, priority=pri, source_chat_label=lab, start_epoch=start_epoch
+            )
             if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_card):
                 log.error("edit_preview failed open_id=%s", sender_open_id)
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to open the edit card.")
@@ -582,17 +537,19 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
+            se2 = int(new_preview.get("start_epoch") or 0)
             card = _cards.build_preview_card(
                 str(new_preview.get("md") or ""),
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
+                start_epoch=se2,
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
                 return
             edit_refresh = _cards.build_edit_overview_card(
-                new_issue, new_impact, new_support, priority=pri, source_chat_label=lab
+                new_issue, new_impact, new_support, priority=pri, source_chat_label=lab, start_epoch=se2
             )
             if str(new_preview.get("edit_message_id") or "").strip():
                 if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh):
@@ -611,7 +568,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     )
             _drafts.clear_preview_edit_flags(sender_open_id)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            card = _cards.build_preview_card(md, priority=pri, source_chat_label=lab, update_multi=True)
+            card = _cards.build_preview_card(
+                md, priority=pri, source_chat_label=lab, update_multi=True, start_epoch=start_epoch
+            )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to restore preview card.")
             return

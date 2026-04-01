@@ -20,10 +20,6 @@ log = logging.getLogger("lark-ops-ai")
 P0_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _LAST_P0_BY_CHAT: Dict[str, int] = {}
 _LAST_P0_LOCK = threading.Lock()
-_ONGOING_TIMERS: Dict[str, threading.Timer] = {}
-_ONGOING_TIMERS_LOCK = threading.Lock()
-_ESCALATION_TIMERS: Dict[str, threading.Timer] = {}
-_ESCALATION_TIMERS_LOCK = threading.Lock()
 
 # P1 keyword: waiting for Yes/No on "create meeting?" card (keyed by incident group chat_id)
 P1_PROMPT_PENDING: Dict[str, Dict[str, Any]] = {}
@@ -33,8 +29,6 @@ _P1_PROMPT_LOCK = threading.Lock()
 _LAST_ENDED_SNAPSHOT_BY_CHAT: Dict[str, Dict[str, str]] = {}
 _LAST_ENDED_SNAPSHOT_LOCK = threading.Lock()
 
-ONGOING_CARD_DELAY_SEC = _config.ONGOING_CARD_DELAY_SEC
-P1_TO_P0_ESCALATION_SEC = _config.P1_TO_P0_ESCALATION_SEC
 P0_COOLDOWN_SEC = _config.P0_COOLDOWN_SEC
 
 # Sentinel for DM overview queue items that are not tied to a live P0 session row.
@@ -244,36 +238,6 @@ def find_session_by_target_chat(target_chat: str) -> Tuple[str, Dict[str, Any]]:
     return "", {}
 
 
-def _cancel_ongoing_timer(chat_id: str) -> None:
-    chat_id = (chat_id or "").strip()
-    with _ONGOING_TIMERS_LOCK:
-        t = _ONGOING_TIMERS.pop(chat_id, None)
-    if t:
-        try:
-            t.cancel()
-        except Exception:
-            pass
-
-
-def _cancel_escalation_timer(chat_id: str) -> None:
-    chat_id = (chat_id or "").strip()
-    with _ESCALATION_TIMERS_LOCK:
-        t = _ESCALATION_TIMERS.pop(chat_id, None)
-    if t:
-        try:
-            t.cancel()
-        except Exception:
-            pass
-
-
-def _participant_teams_text(sess: Dict[str, Any], tenant_token: str) -> str:
-    """Ongoing-meeting card: unique departments from SUPPORT sheet (A=name, B=dept), e.g. ``FPMS, FE``."""
-    from . import participants as _participants
-
-    participants = list(sess.get("participants") or [])
-    return _participants.departments_line_from_names(participants, tenant_token)
-
-
 def get_active_session_key() -> str:
     if not P0_SESSIONS:
         return ""
@@ -399,8 +363,6 @@ def bind_live_meeting_id(meeting_ref: str) -> None:
 def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
-    _cancel_ongoing_timer(chat_id)
-    _cancel_escalation_timer(chat_id)
     if sess:
         meeting_no_snap = str(sess.get("meeting_no") or "").strip()
         start_epoch_snap = int(sess.get("start_epoch") or 0)
@@ -460,8 +422,6 @@ def cancel_p0_session(
 ) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
-    _cancel_ongoing_timer(chat_id)
-    _cancel_escalation_timer(chat_id)
     if sess:
         _clear_last_ended_snapshot(chat_id)
     reserve_id = str(sess.get("reserve_id") or "").strip()
@@ -777,141 +737,6 @@ def clear_p0_cooldown(chat_id: str) -> None:
     log.info("clear_p0_cooldown chat_id=%s", chat_id)
 
 
-def _schedule_ongoing_meeting_card(chat_id: str, token: str) -> None:
-    chat_id = (chat_id or "").strip()
-    if not chat_id:
-        return
-    _cancel_ongoing_timer(chat_id)
-
-    def run() -> None:
-        try:
-            sess = P0_SESSIONS.get(chat_id) or {}
-            if not sess:
-                return
-            if str(sess.get("priority") or "").strip().upper() != "P0":
-                return
-            meeting_no = str(sess.get("meeting_no") or "").strip()
-            participant_depts_line = _participant_teams_text(sess, token)
-            em_topic = str(sess.get("emergency_topic") or "").strip()
-            card = _cards.build_ongoing_meeting_card(
-                meeting_no, participant_depts_line, "P0", emergency_topic=em_topic
-            )
-            st, body, _ = _lark.post_card_to_chat(chat_id, token, card)
-            if st != 200:
-                log.error("ongoing meeting card failed HTTP=%s body=%s", st, (body or "")[:500])
-        finally:
-            with _ONGOING_TIMERS_LOCK:
-                _ONGOING_TIMERS.pop(chat_id, None)
-
-    timer = threading.Timer(ONGOING_CARD_DELAY_SEC, run)
-    timer.daemon = True
-    with _ONGOING_TIMERS_LOCK:
-        _ONGOING_TIMERS[chat_id] = timer
-    timer.start()
-
-
-def _schedule_p1_escalation_card(chat_id: str, token: str) -> None:
-    chat_id = (chat_id or "").strip()
-    if not chat_id:
-        return
-    _cancel_escalation_timer(chat_id)
-
-    def run() -> None:
-        try:
-            sess = P0_SESSIONS.get(chat_id) or {}
-            if not sess:
-                return
-            if str(sess.get("priority") or "").strip().upper() != "P1":
-                return
-            meeting_no = str(sess.get("meeting_no") or "").strip()
-            sess["awaiting_p1_p0_confirm"] = True
-            st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_fifteen_min_confirm_card(meeting_no))
-            if st != 200:
-                log.error("p1 15min confirm card failed HTTP=%s body=%s", st, (body or "")[:500])
-                sess.pop("awaiting_p1_p0_confirm", None)
-                return
-            log.info("Posted P1 15min P0 confirmation card chat_id=%s meeting_no=%s", chat_id, meeting_no)
-        finally:
-            with _ESCALATION_TIMERS_LOCK:
-                _ESCALATION_TIMERS.pop(chat_id, None)
-
-    timer = threading.Timer(P1_TO_P0_ESCALATION_SEC, run)
-    timer.daemon = True
-    with _ESCALATION_TIMERS_LOCK:
-        _ESCALATION_TIMERS[chat_id] = timer
-    timer.start()
-
-
-def apply_p1_escalation_after_confirm(chat_id: str, token: str) -> bool:
-    """User clicked Yes on the 15-min P1 card: post P1→P0 notice, set session to P0, DM + ongoing timer."""
-    chat_id = (chat_id or "").strip()
-    token = (token or "").strip()
-    if not chat_id or not token:
-        return False
-    sess = P0_SESSIONS.get(chat_id) or {}
-    if not sess:
-        return False
-    if str(sess.get("priority") or "").strip().upper() != "P1":
-        return False
-    if not sess.get("awaiting_p1_p0_confirm"):
-        return False
-    meeting_no = str(sess.get("meeting_no") or "").strip()
-    trigger_open_id = str(sess.get("trigger_open_id") or "").strip()
-    st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_escalated_card(meeting_no))
-    if st != 200:
-        log.error("apply_p1_escalation_after_confirm card failed HTTP=%s body=%s", st, (body or "")[:500])
-        return False
-    sess["awaiting_p1_p0_confirm"] = False
-    sess["priority"] = "P0"
-    log.info("P1 escalated to P0 (user confirmed) chat_id=%s meeting_no=%s", chat_id, meeting_no)
-    lab = str(sess.get("source_chat_name") or "").strip()
-    target_chat = str(sess.get("target_chat") or "").strip() or _config.get_overview_post_chat_id() or chat_id
-    p1_p0_targets = _dm_instruction_targets(trigger_open_id)
-    log.info(
-        "P1->P0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id)",
-        len([x for x in p1_p0_targets if (x or "").strip()]),
-        [x for x in p1_p0_targets if (x or "").strip()],
-    )
-    item = {"chat_id": chat_id, "target_chat": target_chat, "priority": "P0", "label": lab}
-    for dm_to in p1_p0_targets:
-        if not dm_to:
-            continue
-        enqueue_dm_instruction_if_needed(dm_to, token, item)
-    _schedule_ongoing_meeting_card(chat_id, token)
-    return True
-
-
-def decline_p1_escalation_end_as_p1(chat_id: str, token: str) -> bool:
-    """
-    User tapped **Still P1** on the 15-min card: keep the session as **P1**, do not escalate to P0,
-    and do **not** end the meeting. Posts a short notice in the incident group.
-    """
-    chat_id = (chat_id or "").strip()
-    token = (token or "").strip()
-    if not chat_id or not token:
-        return False
-    sess = P0_SESSIONS.get(chat_id) or {}
-    if not sess:
-        return False
-    if str(sess.get("priority") or "").strip().upper() != "P1":
-        return False
-    if not sess.get("awaiting_p1_p0_confirm"):
-        return False
-    sess["awaiting_p1_p0_confirm"] = False
-    msg = "The meeting is continuing as a P1 meeting."
-    st, body = _lark.post_text_to_chat(chat_id, token, msg)
-    if st != 200:
-        log.warning(
-            "Still P1 notice failed HTTP=%s chat_id=%s body=%s",
-            st,
-            chat_id,
-            (body or "")[:300],
-        )
-        return False
-    log.info("P1 15min: Still P1 — session continues (no P0 escalation) chat_id=%s", chat_id)
-    return True
-
-
 def start_p0(
     chat_id: str,
     token: str,
@@ -1004,15 +829,7 @@ def start_p0(
         "priority": priority,
         "label": chat_label,
     }
-    if priority == "P0":
-        for oid in dm_targets:
-            if not oid:
-                continue
-            enqueue_dm_instruction_if_needed(oid, token, item)
-        _schedule_ongoing_meeting_card(chat_id, token)
-    elif priority == "P1":
-        for oid in dm_targets:
-            if not oid:
-                continue
-            enqueue_dm_instruction_if_needed(oid, token, item)
-        _schedule_p1_escalation_card(chat_id, token)
+    for oid in dm_targets:
+        if not oid:
+            continue
+        enqueue_dm_instruction_if_needed(oid, token, item)

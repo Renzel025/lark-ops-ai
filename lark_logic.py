@@ -4,20 +4,9 @@ import logging
 from typing import Any, List
 
 from wiki_ai_logic import handle_wiki_ai
-from p0_logic.config import (
-    INCIDENT_OPERATOR_DENY_TEXT,
-    can_use_incident_group_commands,
-    get_incident_group_chat_ids,
-    get_p0_trigger_ignore_open_ids,
-)
+from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
-from p0_logic.cards import (
-    build_meeting_ended_card,
-    build_no_active_p0_session_card,
-    build_ongoing_meeting_card,
-    build_p1_fifteen_min_confirm_card,
-)
-from p0_logic.participants import departments_line_from_names
+from p0_logic.cards import build_meeting_ended_card, build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic.session import get_last_ended_snapshot
 from p0_logic import (
@@ -61,16 +50,6 @@ END_MEETING_LINE_RE = re.compile(r"^\s*end\s+meeting\.?\s*$", re.IGNORECASE)
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
     r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel)\s*(.*)$",
-    re.IGNORECASE,
-)
-
-# Preview one card at a time (training / dry-run). Whole line only — checked before P0/P1 triggers.
-DEMO_ONGOING_P0_CARD_RE = re.compile(
-    r"^\s*(p0\s+demo\s+ongoing|demo\s+p0\s+ongoing(?:\s+card)?)\s*$",
-    re.IGNORECASE,
-)
-DEMO_P1_15MIN_CARD_RE = re.compile(
-    r"^\s*(p1\s+demo\s+15|demo\s+p1\s+15)(?:\s*mins?)?(?:\s+card)?\s*$",
     re.IGNORECASE,
 )
 
@@ -127,15 +106,6 @@ def _clean_mention_names(raw_mentions: Any) -> List[str]:
     return deduped
 
 
-def _incident_command_denied_in_group(user_id: str, chat_id: str, token: str) -> bool:
-    """If restriction is enabled and user is not the operator, post a group notice and return True."""
-    if can_use_incident_group_commands(user_id):
-        return False
-    if token:
-        post_text_to_chat(chat_id, token, INCIDENT_OPERATOR_DENY_TEXT)
-    return True
-
-
 def _get_active_session_chat_id() -> str:
     if not P0_SESSIONS:
         return ""
@@ -189,8 +159,6 @@ def process_message(
         if pend:
             nonce = str(pend.get("nonce") or "").strip()
             if P1_PENDING_CREATE_RE.match(text_raw.strip()):
-                if _incident_command_denied_in_group(user_id, chat_id, token):
-                    return
                 err = handle_p1_meeting_confirm_yes(chat_id, token, user_id, nonce)
                 if err == "session_active":
                     post_text_to_chat(
@@ -206,8 +174,6 @@ def process_message(
                     )
                 return
             if P1_PENDING_DECLINE_RE.match(text_raw.strip()):
-                if _incident_command_denied_in_group(user_id, chat_id, token):
-                    return
                 err = handle_p1_meeting_confirm_no(chat_id, token, nonce)
                 if err == "session_active":
                     post_text_to_chat(
@@ -226,8 +192,6 @@ def process_message(
         # Cancel command (optional reason after the keyword phrase)
         cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
         if cancel_m:
-            if _incident_command_denied_in_group(user_id, chat_id, token):
-                return
             tail = (cancel_m.group(2) or "").strip()
             cancel_reason = tail if tail else "Unspecified"
             if chat_id in P0_SESSIONS:
@@ -256,8 +220,6 @@ def process_message(
             or P1_END_REGEX.search(text_lower)
             or END_MEETING_LINE_RE.match(text_raw.strip())
         ):
-            if _incident_command_denied_in_group(user_id, chat_id, token):
-                return
             if chat_id in P0_SESSIONS:
                 log.info("Incident group: ending active session chat_id=%s", chat_id)
                 end_p0_session(chat_id, token)
@@ -289,8 +251,6 @@ def process_message(
 
         # Cooldown reset only — no new VC. / 只清冷却，不创建会议
         if COOLDOWN_RESET_RE.match(text_raw.strip()):
-            if _incident_command_denied_in_group(user_id, chat_id, token):
-                return
             clear_p0_cooldown(chat_id)
             if token:
                 post_text_to_chat(
@@ -298,39 +258,6 @@ def process_message(
                     token,
                     "ℹ️ Cooldown cleared for this group. The next **p0** or **p1** declaration in this chat will no longer be blocked by cooldown.",
                 )
-            return
-
-        # 📽 Ongoing P0 card only (uses live Meeting ID / depts if a session exists).
-        if DEMO_ONGOING_P0_CARD_RE.match(text_raw.strip()):
-            if not token:
-                log.warning("demo ongoing P0 card: no token chat_id=%s", chat_id)
-                return
-            sess = P0_SESSIONS.get(chat_id) or {}
-            meeting_no = str(sess.get("meeting_no") or "").strip() or "DEMO"
-            em_topic = str(sess.get("emergency_topic") or "").strip()
-            participants = list(sess.get("participants") or [])
-            dept_line = departments_line_from_names(participants, tenant_token)
-            o_card = build_ongoing_meeting_card(
-                meeting_no, dept_line, "P0", emergency_topic=em_topic
-            )
-            st, body, _ = post_card_to_chat(chat_id, token, o_card)
-            if st != 200:
-                log.warning("demo ongoing P0 card failed HTTP=%s body=%s", st, (body or "")[:300])
-            log.info("Posted demo ongoing P0 card chat_id=%s meeting_no=%s", chat_id, meeting_no)
-            return
-
-        # ⏱ P1 15 mins card only.
-        if DEMO_P1_15MIN_CARD_RE.match(text_raw.strip()):
-            if not token:
-                log.warning("demo P1 15min card: no token chat_id=%s", chat_id)
-                return
-            sess = P0_SESSIONS.get(chat_id) or {}
-            meeting_no = str(sess.get("meeting_no") or "").strip() or "DEMO"
-            p1_card = build_p1_fifteen_min_confirm_card(meeting_no)
-            st, body, _ = post_card_to_chat(chat_id, token, p1_card)
-            if st != 200:
-                log.warning("demo P1 15min card failed HTTP=%s body=%s", st, (body or "")[:300])
-            log.info("Posted demo P1 15min card chat_id=%s meeting_no=%s", chat_id, meeting_no)
             return
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
