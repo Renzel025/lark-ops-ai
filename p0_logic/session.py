@@ -78,8 +78,8 @@ def note_if_standalone_create_overview_blocked(operator_open_id: str) -> str:
             cid = str(active.get("chat_id") or "").strip()
             if cid == STANDALONE_DM_SOURCE_CHAT_ID:
                 return (
-                    "ℹ️ Standalone overview is already active. Paste your content and tap "
-                    "Build overview on the DM card."
+                    "ℹ️ Standalone overview is already active. Finish the first request then proceed to "
+                    "trigger again create overview."
                 )
             return "ℹ️ For this incident use the Build overview button on the DM card."
     from . import drafts as _drafts

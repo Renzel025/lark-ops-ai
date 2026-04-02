@@ -458,7 +458,18 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
+            preview_mid = str(preview.get("preview_message_id") or "").strip()
             _lark.post_text_to_open_id(sender_open_id, tenant_token, "✅ Overview sent to the target group chat.")
+            # Remove the preview card from the DM so "Send to group" cannot be tapped again (state was cleared).
+            if preview_mid:
+                st_pv, body_pv = _lark.recall_im_message(tenant_token, preview_mid)
+                if st_pv != 200:
+                    log.warning(
+                        "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
+                        st_pv,
+                        sender_open_id,
+                        (body_pv or "")[:400],
+                    )
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
