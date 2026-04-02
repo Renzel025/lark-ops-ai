@@ -42,7 +42,9 @@ get_last_ended_snapshot = session.get_last_ended_snapshot
 get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
 enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
 release_dm_after_overview_sent = session.release_dm_after_overview_sent
+release_dm_slots_for_incident_chat = session.release_dm_slots_for_incident_chat
 release_standalone_overview_cancel = session.release_standalone_overview_cancel
+chat_has_active_session = session.chat_has_active_session
 STANDALONE_DM_SOURCE_CHAT_ID = session.STANDALONE_DM_SOURCE_CHAT_ID
 
 # Participants
@@ -127,7 +129,9 @@ __all__ = [
     "get_dm_target_chat_for_operator",
     "enqueue_dm_instruction_if_needed",
     "release_dm_after_overview_sent",
+    "release_dm_slots_for_incident_chat",
     "release_standalone_overview_cancel",
+    "chat_has_active_session",
     "STANDALONE_DM_SOURCE_CHAT_ID",
     "list_meeting_participants",
     "is_person_in_meeting",

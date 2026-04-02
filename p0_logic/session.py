@@ -160,6 +160,22 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
     )
 
 
+def release_dm_slots_for_incident_chat(source_incident_chat_id: str, token: str) -> None:
+    """
+    When a P0/P1 session ends (end / cancel) without sending an overview, the operator's DM instruction
+    slot must still advance — otherwise the next ``p1`` looks like a second concurrent incident and
+    triggers the \"Multiple meetings\" notice.
+    """
+    src = (source_incident_chat_id or "").strip()
+    tok = (token or "").strip()
+    if not src or not tok:
+        return
+    with _DM_INSTR_LOCK:
+        oids = [oid for oid, a in _DM_ACTIVE_ITEM.items() if str(a.get("chat_id") or "").strip() == src]
+    for oid in oids:
+        release_dm_after_overview_sent(oid, tok, src)
+
+
 def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_source_incident_chat_id: str) -> None:
     """After overview is posted to the group: advance the FIFO queue and post the next instruction card if any."""
     oid = (operator_open_id or "").strip()
@@ -488,6 +504,8 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
             log.warning("post_text meeting ended summary failed chat_id=%s err=%s", chat_id, e)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
+    if token:
+        release_dm_slots_for_incident_chat(chat_id, token)
 
 
 def cancel_p0_session(
@@ -538,6 +556,8 @@ def cancel_p0_session(
                 log.error("Failed to post meeting cancelled card (fallback): %s", e)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
+    if token:
+        release_dm_slots_for_incident_chat(chat_id, token)
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:
@@ -742,7 +762,7 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     return True
 
 
-def _chat_has_active_session(chat_id: str) -> bool:
+def chat_has_active_session(chat_id: str) -> bool:
     cid = (chat_id or "").strip()
     if not cid:
         return False
@@ -768,7 +788,7 @@ def handle_p1_meeting_confirm_yes(
     token = (token or "").strip()
     if not chat_id or not token:
         return "stale"
-    if _chat_has_active_session(chat_id):
+    if chat_has_active_session(chat_id):
         return "session_active"
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:
@@ -786,7 +806,7 @@ def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str) -> str:
     token = (token or "").strip()
     if not chat_id or not token:
         return "stale"
-    if _chat_has_active_session(chat_id):
+    if chat_has_active_session(chat_id):
         return "session_active"
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:

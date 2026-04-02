@@ -13,6 +13,7 @@ from p0_logic import (
     cancel_p0_session,
     clear_p0_cooldown,
     P0_SESSIONS,
+    chat_has_active_session,
     handle_dm_generate_overview,
     get_p1_prompt_pending,
     set_p1_prompt_pending,
@@ -184,7 +185,7 @@ def process_message(
         if cancel_m:
             tail = (cancel_m.group(2) or "").strip()
             cancel_reason = tail if tail else "Unspecified"
-            if chat_id in P0_SESSIONS:
+            if chat_has_active_session(chat_id):
                 sess = P0_SESSIONS.get(chat_id) or {}
                 priority = str(sess.get("priority") or "P0").strip().upper()
                 log.info(
@@ -220,7 +221,7 @@ def process_message(
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
-            if chat_id in P0_SESSIONS:
+            if chat_has_active_session(chat_id):
                 log.info("Incident group: session already active chat_id=%s", chat_id)
                 return
 
@@ -233,7 +234,7 @@ def process_message(
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
-            if chat_id in P0_SESSIONS:
+            if chat_has_active_session(chat_id):
                 log.info("Incident group: session already active chat_id=%s", chat_id)
                 return
             if get_p1_prompt_pending(chat_id):
