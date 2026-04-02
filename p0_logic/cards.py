@@ -26,6 +26,40 @@ def _incident_time_line_lark_md(start_epoch: int) -> str:
         return ""
 
 
+def initial_datetime_for_picker(start_epoch: int) -> str:
+    """``yyyy-MM-dd HH:mm`` in PHT for ``picker_datetime.initial_datetime`` (Lark card)."""
+    try:
+        ts = int(start_epoch) if int(start_epoch) > 0 else int(time.time())
+        return datetime.fromtimestamp(ts, tz=PHT).strftime("%Y-%m-%d %H:%M")
+    except (OSError, ValueError, OverflowError):
+        return datetime.fromtimestamp(time.time(), tz=PHT).strftime("%Y-%m-%d %H:%M")
+
+
+def parse_lark_datetime_picker_value(raw: str) -> int:
+    """
+    Parse Lark ``picker_datetime`` form value to Unix epoch seconds.
+    Accepts values like ``2025-06-10 19:19 +0800`` (with offset) or ``2026-04-02 14:55`` (interpreted as PHT).
+    Returns 0 if empty or unparseable.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return 0
+    for fmt in ("%Y-%m-%d %H:%M %z", "%Y-%m-%d %H:%M:%S %z"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return int(dt.timestamp())
+        except ValueError:
+            continue
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            dt = dt.replace(tzinfo=PHT)
+            return int(dt.timestamp())
+        except ValueError:
+            continue
+    return 0
+
+
 def _build_emergency_title(priority: str, topic_line: str = "") -> str:
     prio = (priority or "P0").strip().upper()
     tail = (topic_line or "").strip() or MEETING_TOPIC
@@ -591,18 +625,37 @@ def build_edit_overview_card(
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
-    time_line = _incident_time_line_lark_md(start_epoch)
     form_elements: List[Dict[str, Any]] = [
         {
             "tag": "div",
             "text": {
                 "tag": "plain_text",
-                "content": "Update Issue, Impact Scope, and Support Request below, then tap Save.",
+                "content": "Only Incident start uses the calendar/date-time picker. Issue, Impact, and Support are plain text fields. Tap Save when done.",
             },
         },
     ]
-    if time_line:
-        form_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": time_line}})
+    # Calendar picker applies to incident start only; issue/impact/support stay ``input`` fields below.
+    form_elements.append(
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": "🕒 Incident start (PHT) — calendar & time",
+            },
+        }
+    )
+    form_elements.append(
+        {
+            "tag": "picker_datetime",
+            "element_id": "inc_start_pick",
+            "name": "incident_start_datetime",
+            "required": False,
+            "width": "fill",
+            "initial_datetime": initial_datetime_for_picker(start_epoch),
+            "placeholder": {"tag": "plain_text", "content": "Select date & time"},
+            "behaviors": [{"type": "callback", "value": {"scope": "incident_start"}}],
+        }
+    )
     form_elements.extend(
         [
             {

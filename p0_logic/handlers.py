@@ -139,6 +139,19 @@ def _extract_issue_input_value(payload: Dict[str, Any]) -> str:
     return _extract_form_field(payload, "issue_input")
 
 
+def _extract_incident_start_datetime_value(payload: Dict[str, Any]) -> str:
+    """Lark ``picker_datetime`` in forms: string or ``{ option: ... }`` in form_value."""
+    s = _extract_form_field(payload, "incident_start_datetime")
+    if s:
+        return s
+    fv = _deep_get(payload, "event", "action", "form_value", "incident_start_datetime")
+    if isinstance(fv, dict):
+        return str(fv.get("option") or fv.get("value") or "").strip()
+    if isinstance(fv, str) and fv.strip():
+        return fv.strip()
+    return ""
+
+
 def _form_field_left_blank(manual: str) -> bool:
     """True if user did not enter a new value — keep preview field as-is."""
     s = (manual or "").strip()
@@ -506,6 +519,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             manual_issue = _extract_issue_input_value(payload)
             manual_impact = _extract_impact_input_value(payload)
             manual_support = _extract_support_input_value(payload)
+            raw_dt = _extract_incident_start_datetime_value(payload)
+            parsed_epoch = _cards.parse_lark_datetime_picker_value(raw_dt) if raw_dt else 0
+            new_start_epoch = parsed_epoch if parsed_epoch > 0 else start_epoch
             # Blank / placeholder = do not overwrite generated preview values
             new_issue = (
                 issue
@@ -525,7 +541,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _drafts.save_preview(
                 sender_open_id=sender_open_id,
                 target_chat=target_chat,
-                start_epoch=start_epoch,
+                start_epoch=new_start_epoch,
                 combined_text=combined_text,
                 mention_names=mention_names,
                 issue=new_issue,
@@ -549,7 +565,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
                 return
             edit_refresh = _cards.build_edit_overview_card(
-                new_issue, new_impact, new_support, priority=pri, source_chat_label=lab, start_epoch=se2
+                new_issue,
+                new_impact,
+                new_support,
+                priority=pri,
+                source_chat_label=lab,
+                start_epoch=se2,
             )
             if str(new_preview.get("edit_message_id") or "").strip():
                 if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh):
