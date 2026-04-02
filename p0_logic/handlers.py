@@ -16,6 +16,7 @@ from . import participants as _participants
 from . import session as _session
 from . import support as _support
 from . import text_processing as _text
+from .perf_log import perf_log
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -354,9 +355,10 @@ def handle_dm_generate_overview(
 def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     from . import issues as _issues
 
+    action_name = (_extract_card_action_name(payload) or "").strip() or "unknown"
+    t0 = time.perf_counter()
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
-        action_name = _extract_card_action_name(payload)
 
         if action_name == "p1_confirm_meeting_yes":
             chat_id = _extract_card_action_open_chat_id(payload)
@@ -654,6 +656,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         log.warning("Unknown card action: %s", action_name)
     except Exception as e:
         log.error("handle_lark_card_action error: %s", e, exc_info=True)
+    finally:
+        perf_log(f"card_action action={action_name}", t0)
 
 
 def handle_p0_submit(*args: Any, **kwargs: Any) -> None:

@@ -12,6 +12,7 @@ from urllib.parse import quote
 import requests
 
 from . import config as _config
+from .perf_log import perf_log
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -31,10 +32,13 @@ def _timeout_kw() -> Dict[str, Any]:
 
 
 def get_tenant_token(app_id: str, app_secret: str) -> str:
+    t0 = time.perf_counter()
     now = int(time.time())
     with _TOKEN_LOCK:
         if _TOKEN_CACHE["token"] and now < _TOKEN_CACHE["exp"]:
+            perf_log("tenant_token cache_hit", t0)
             return _TOKEN_CACHE["token"]
+    t_fetch = time.perf_counter()
     try:
         url = f"{LARK_BASE}/auth/v3/tenant_access_token/internal"
         resp = requests.post(url, json={"app_id": app_id, "app_secret": app_secret}, **_timeout_kw())
@@ -53,6 +57,8 @@ def get_tenant_token(app_id: str, app_secret: str) -> str:
     except Exception as e:
         log.error("Tenant token fetch error: %s", e)
         return ""
+    finally:
+        perf_log("tenant_token fetch", t_fetch)
 
 
 def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:

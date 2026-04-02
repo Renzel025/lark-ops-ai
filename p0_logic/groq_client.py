@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from typing import Optional
 
 import requests
 
 from . import config as _config
+from .perf_log import perf_log
 from . import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
@@ -39,19 +41,23 @@ def groq_chat_once(system_prompt: str, user_content: str, max_tokens: int, model
             {"role": "user", "content": user_content},
         ],
     }
+    t0 = time.perf_counter()
     try:
-        r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
-    except Exception as e:
-        log.error("Groq request error: %s", e)
-        return ""
-    if r.status_code != 200:
-        log.error("Groq API error: %s - %s", r.status_code, (r.text or "")[:200])
-        return ""
-    try:
-        j = r.json() if r.text else {}
-        return (j.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-    except Exception:
-        return ""
+        try:
+            r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
+        except Exception as e:
+            log.error("Groq request error: %s", e)
+            return ""
+        if r.status_code != 200:
+            log.error("Groq API error: %s - %s", r.status_code, (r.text or "")[:200])
+            return ""
+        try:
+            j = r.json() if r.text else {}
+            return (j.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        except Exception:
+            return ""
+    finally:
+        perf_log(f"groq_chat_once model={model or GROQ_MODEL}", t0)
 
 
 def groq_vision_ocr(image_bytes: bytes) -> str:
@@ -87,20 +93,24 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
             },
         ],
     }
+    t0 = time.perf_counter()
     try:
-        r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
-    except Exception as e:
-        log.error("Groq vision request error: %s", e)
-        return ""
-    if r.status_code != 200:
-        log.error("Groq vision error HTTP=%s head=%s", r.status_code, (r.text or "")[:300])
-        return ""
-    try:
-        j = r.json() if r.text else {}
-        return (j.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-    except Exception as e:
-        log.error("Groq vision parse error: %s", e)
-        return ""
+        try:
+            r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
+        except Exception as e:
+            log.error("Groq vision request error: %s", e)
+            return ""
+        if r.status_code != 200:
+            log.error("Groq vision error HTTP=%s head=%s", r.status_code, (r.text or "")[:300])
+            return ""
+        try:
+            j = r.json() if r.text else {}
+            return (j.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        except Exception as e:
+            log.error("Groq vision parse error: %s", e)
+            return ""
+    finally:
+        perf_log(f"groq_vision_ocr model={GROQ_VISION_MODEL}", t0)
 
 
 def translate_to_zh(text: str) -> str:

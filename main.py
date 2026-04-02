@@ -3,6 +3,7 @@ import json
 import base64
 import logging
 import hashlib
+import time
 from typing import Any, Dict, Tuple, List
 
 import requests
@@ -20,6 +21,8 @@ from p0_logic import (
     end_p0_session_by_meeting_ref,
     bind_live_meeting_id,
 )
+
+from p0_logic.perf_log import perf_log
 
 try:
     from p0_logic import strip_seeded_host_placeholder_for_open_id
@@ -374,6 +377,17 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
         evt = payload.get("event", {}) or {}
         event_type = (callback_type or "").strip()
 
+        if event_type == "card.action.trigger":
+            t_card = time.perf_counter()
+            tenant_token = get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
+            if not tenant_token:
+                log.error("No tenant token; cannot process.")
+                return
+            log.info("card.action.trigger payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
+            handle_lark_card_action(payload, tenant_token)
+            perf_log("lark_webhook card.action.trigger token+handler", t_card)
+            return
+
         tenant_token = get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
         if not tenant_token:
             log.error("No tenant token; cannot process.")
@@ -381,11 +395,6 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
 
         if event_type.startswith("vc."):
             log.info("VC EVENT type=%s raw=%s", event_type, json.dumps(evt, ensure_ascii=False)[:4000])
-
-        if event_type == "card.action.trigger":
-            log.info("card.action.trigger payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
-            handle_lark_card_action(payload, tenant_token)
-            return
 
         if event_type == "vc.meeting.join_meeting_v1":
             meeting_ref = _extract_vc_meeting_ref(evt)
@@ -479,6 +488,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             )
 
             if text:
+                t_dm = time.perf_counter()
                 handle_dm_generate_overview(
                     sender_open_id=sender_open_id,
                     tenant_token=tenant_token,
@@ -487,10 +497,12 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                     mention_names=mention_names,
                     message_id=message_id,
                 )
+                perf_log("lark_webhook dm_generate_overview text", t_dm)
 
             for image_key in image_keys:
                 if not image_key:
                     continue
+                t_dm = time.perf_counter()
                 handle_dm_generate_overview(
                     sender_open_id=sender_open_id,
                     tenant_token=tenant_token,
@@ -499,6 +511,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                     mention_names=mention_names,
                     message_id=message_id,
                 )
+                perf_log("lark_webhook dm_generate_overview image", t_dm)
             return
 
         # Group chat: Lark may send "text" or "post" (rich). Only "text" was handled before,
