@@ -15,17 +15,6 @@ PHT = _config.PHT
 MEETING_TOPIC = _config.MEETING_TOPIC
 
 
-def _incident_time_line_lark_md(start_epoch: int) -> str:
-    """Same clock as ``build_bilingual_overview_md`` (PHT) for preview / edit cards."""
-    if start_epoch <= 0:
-        return ""
-    try:
-        t = datetime.fromtimestamp(int(start_epoch), tz=PHT).strftime("%Y-%m-%d %H:%M")
-        return f"🕒 **Incident start:** {t} (PHT)"
-    except (OSError, ValueError, OverflowError):
-        return ""
-
-
 def initial_datetime_for_picker(start_epoch: int) -> str:
     """``yyyy-MM-dd HH:mm`` in PHT for ``picker_datetime.initial_datetime`` (Lark card)."""
     try:
@@ -516,7 +505,6 @@ def build_preview_card(
     source_chat_label: str = "",
     *,
     update_multi: bool = True,
-    start_epoch: int = 0,
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -525,12 +513,11 @@ def build_preview_card(
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
-    time_line = _incident_time_line_lark_md(start_epoch)
-    preview_elements: List[Dict[str, Any]] = []
-    if time_line:
-        preview_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": time_line}})
-    preview_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": safe_md}})
-    preview_elements.append({"tag": "hr"})
+    # Incident time lives inside ``md`` (bilingual overview); no extra line above the body.
+    preview_elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": safe_md}},
+        {"tag": "hr"},
+    ]
     return {
         "schema": "2.0",
         "config": cfg,

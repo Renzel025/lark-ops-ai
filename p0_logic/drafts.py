@@ -335,9 +335,7 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
                 return
             pr = _draft_priority_for_preview(draft, target_chat)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            card = _cards.build_preview_card(
-                md, priority=pr, source_chat_label=lab, update_multi=True, start_epoch=start_epoch
-            )
+            card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
             post_or_patch_preview_card(sender_open_id, tenant_token, card)
         finally:
             with _PREVIEW_TIMERS_LOCK:

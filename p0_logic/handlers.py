@@ -216,9 +216,7 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
     prev = _drafts.get_preview(sender_open_id) or {}
     pr = _preview_priority(prev)
     lab = _session.get_source_chat_label_for_target_chat(target_chat)
-    card = _cards.build_preview_card(
-        md, priority=pr, source_chat_label=lab, update_multi=True, start_epoch=start_epoch
-    )
+    card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
     if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send or update preview card.")
         return False
@@ -492,7 +490,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
-                start_epoch=se,
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
@@ -559,7 +556,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
-                start_epoch=se2,
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
@@ -589,9 +585,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     )
             _drafts.clear_preview_edit_flags(sender_open_id)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            card = _cards.build_preview_card(
-                md, priority=pri, source_chat_label=lab, update_multi=True, start_epoch=start_epoch
-            )
+            card = _cards.build_preview_card(md, priority=pri, source_chat_label=lab, update_multi=True)
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to restore preview card.")
             return
