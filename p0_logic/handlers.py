@@ -54,6 +54,27 @@ def _extract_card_action_sender_open_id(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _extract_dm_scope_from_card_payload(payload: Dict[str, Any]) -> Tuple[str, str, str]:
+    val = _deep_get(payload, "event", "action", "value")
+    if val is None:
+        val = _deep_get(payload, "action", "value")
+    if not isinstance(val, dict):
+        return "", "", ""
+    tc = str(val.get("target_chat") or "").strip()
+    src = str(val.get("source_incident_chat_id") or "").strip()
+    pr = str(val.get("draft_priority") or "").strip()
+    return tc, src, pr
+
+
+def _maybe_merge_dm_scope_from_card(sender_open_id: str, payload: Dict[str, Any]) -> None:
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return
+    tc, src_inc, pr_scope = _extract_dm_scope_from_card_payload(payload)
+    if tc.startswith("oc_"):
+        _drafts.merge_dm_scope_from_card(oid, tc, src_inc, pr_scope)
+
+
 def _extract_card_action_name(payload: Dict[str, Any]) -> str:
     candidates = [
         _deep_get(payload, "event", "action", "value", "action"),
@@ -188,10 +209,18 @@ def _send_instruction_card(
     if note:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, note)
     if repost_instruction_card:
+        d = _drafts.get_draft(sender_open_id) or {}
+        tc = str(d.get("target_chat") or "").strip()
+        src = str(d.get("source_incident_chat_id") or "").strip()
         _, _, _ = _lark.post_card_to_open_id(
             sender_open_id,
             tenant_token,
-            _cards.build_dm_instruction_card(priority, source_chat_label=source_chat_label),
+            _cards.build_dm_instruction_card(
+                priority,
+                source_chat_label=source_chat_label,
+                target_chat=tc,
+                source_incident_chat_id=src,
+            ),
         )
 
 
@@ -217,7 +246,14 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
     prev = _drafts.get_preview(sender_open_id) or {}
     pr = _preview_priority(prev)
     lab = _session.get_source_chat_label_for_target_chat(target_chat)
-    card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
+    card = _cards.build_preview_card(
+        md,
+        priority=pr,
+        source_chat_label=lab,
+        update_multi=True,
+        target_chat=target_chat,
+        source_incident_chat_id=str(draft.get("source_incident_chat_id") or "").strip(),
+    )
     if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send or update preview card.")
         return False
@@ -273,6 +309,9 @@ def handle_dm_generate_overview(
     else:
         target_chat = _session.get_dm_target_chat_for_operator(sender_open_id)
     if not target_chat:
+        pv = _drafts.get_preview(sender_open_id) or {}
+        target_chat = str(pv.get("target_chat") or "").strip()
+    if not target_chat:
         target_chat = _config.get_dm_overview_target_chat_id()
     if not target_chat:
         now = time.time()
@@ -282,7 +321,10 @@ def handle_dm_generate_overview(
             _lark.post_text_to_open_id(
                 sender_open_id,
                 tenant_token,
-                "⚠️ No active P0 session. Trigger p0 in the incident group first.",
+                "⚠️ No incident target for this DM. In the incident group, type **p0** again, then open the new green "
+                "card and tap **Build overview** once (that attaches the group id for this server). "
+                "If you run multiple bot instances, set env **OVERVIEW_TARGET_GROUP_CHAT_ID** to your incident group "
+                "`oc_...` id.",
             )
         else:
             log.info(
@@ -359,6 +401,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     t0 = time.perf_counter()
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
+        _maybe_merge_dm_scope_from_card(sender_open_id, payload)
 
         if action_name == "p1_confirm_meeting_yes":
             chat_id = _extract_card_action_open_chat_id(payload)
@@ -503,6 +546,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
+                target_chat=target_chat,
+                source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
@@ -569,6 +614,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 priority=_preview_priority(new_preview),
                 source_chat_label=lab,
                 update_multi=True,
+                target_chat=target_chat,
+                source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
@@ -598,7 +645,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     )
             _drafts.clear_preview_edit_flags(sender_open_id)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            card = _cards.build_preview_card(md, priority=pri, source_chat_label=lab, update_multi=True)
+            card = _cards.build_preview_card(
+                md,
+                priority=pri,
+                source_chat_label=lab,
+                update_multi=True,
+                target_chat=target_chat,
+                source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
+            )
             if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to restore preview card.")
             return

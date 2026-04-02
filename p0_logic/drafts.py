@@ -48,6 +48,46 @@ def _ensure_draft(sender_open_id: str, target_chat: str) -> Dict[str, Any]:
         return draft
 
 
+def merge_dm_scope_from_card(
+    sender_open_id: str,
+    target_chat: str,
+    source_incident_chat_id: str = "",
+    draft_priority: str = "",
+) -> None:
+    """
+    Restore ``target_chat`` on this worker when card buttons carry ``oc_...`` in ``value``
+    (multi-replica: P0/draft lived on another instance).
+    """
+    sender_open_id = (sender_open_id or "").strip()
+    target_chat = (target_chat or "").strip()
+    if not sender_open_id or not target_chat.startswith("oc_"):
+        return
+    prio = (draft_priority or "").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = ""
+    src = (source_incident_chat_id or "").strip()
+    now = int(time.time())
+    with _P0_DRAFTS_LOCK:
+        d = P0_DRAFTS.get(sender_open_id)
+        if not d:
+            P0_DRAFTS[sender_open_id] = {
+                "target_chat": target_chat,
+                "source_incident_chat_id": src,
+                "draft_priority": prio,
+                "texts": [],
+                "images": [],
+                "mention_names": [],
+                "updated_at": now,
+            }
+            return
+        d["target_chat"] = target_chat
+        if src:
+            d["source_incident_chat_id"] = src
+        if prio:
+            d["draft_priority"] = prio
+        d["updated_at"] = now
+
+
 def seed_draft_for_incident(
     sender_open_id: str,
     target_chat: str,
@@ -335,7 +375,14 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
                 return
             pr = _draft_priority_for_preview(draft, target_chat)
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
-            card = _cards.build_preview_card(md, priority=pr, source_chat_label=lab, update_multi=True)
+            card = _cards.build_preview_card(
+                md,
+                priority=pr,
+                source_chat_label=lab,
+                update_multi=True,
+                target_chat=target_chat,
+                source_incident_chat_id=str(draft.get("source_incident_chat_id") or "").strip(),
+            )
             post_or_patch_preview_card(sender_open_id, tenant_token, card)
         finally:
             with _PREVIEW_TIMERS_LOCK:

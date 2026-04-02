@@ -421,10 +421,49 @@ def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
     }
 
 
-def build_dm_instruction_card(priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
+def _dm_scope_button_fields(
+    *,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
+    draft_priority: str = "",
+) -> Dict[str, Any]:
+    """Embed in interactive ``value`` so any app instance can recover ``oc_`` (multi-replica)."""
+    out: Dict[str, Any] = {}
+    tc = (target_chat or "").strip()
+    if tc.startswith("oc_"):
+        out["target_chat"] = tc
+    src = (source_incident_chat_id or "").strip()
+    if src:
+        out["source_incident_chat_id"] = src
+    dp = (draft_priority or "").strip().upper()
+    if dp in ("P0", "P1"):
+        out["draft_priority"] = dp
+    return out
+
+
+def _dm_button_value(action: str, **scope: Any) -> Dict[str, Any]:
+    v: Dict[str, Any] = {"action": action}
+    v.update(
+        _dm_scope_button_fields(
+            target_chat=str(scope.get("target_chat") or ""),
+            source_incident_chat_id=str(scope.get("source_incident_chat_id") or ""),
+            draft_priority=str(scope.get("draft_priority") or ""),
+        )
+    )
+    return v
+
+
+def build_dm_instruction_card(
+    priority: str = "P0",
+    source_chat_label: str = "",
+    *,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
+) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
+    sc = dict(target_chat=target_chat, source_incident_chat_id=source_incident_chat_id, draft_priority=prio)
     title = f"🧾 Send {prio} incident details (DM){_title_group_suffix(source_chat_label)}"
     return {
         "schema": "2.0",
@@ -450,7 +489,7 @@ def build_dm_instruction_card(priority: str = "P0", source_chat_label: str = "")
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Build overview"},
                                     "type": "primary",
-                                    "value": {"action": "generate_preview"},
+                                    "value": _dm_button_value("generate_preview", **sc),
                                 },
                             ],
                         },
@@ -463,7 +502,7 @@ def build_dm_instruction_card(priority: str = "P0", source_chat_label: str = "")
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Clear draft"},
                                     "type": "default",
-                                    "value": {"action": "clear_draft"},
+                                    "value": _dm_button_value("clear_draft", **sc),
                                 },
                             ],
                         },
@@ -476,7 +515,7 @@ def build_dm_instruction_card(priority: str = "P0", source_chat_label: str = "")
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Participants"},
                                     "type": "default",
-                                    "value": {"action": "show_participants"},
+                                    "value": _dm_button_value("show_participants", **sc),
                                 },
                             ],
                         },
@@ -505,10 +544,13 @@ def build_preview_card(
     source_chat_label: str = "",
     *,
     update_multi: bool = True,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
+    sc = dict(target_chat=target_chat, source_incident_chat_id=source_incident_chat_id, draft_priority=prio)
     safe_md = (md or "").strip()[:3500]
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
@@ -540,7 +582,7 @@ def build_preview_card(
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Send to group"},
                                     "type": "primary",
-                                    "value": {"action": "send_preview"},
+                                    "value": _dm_button_value("send_preview", **sc),
                                 },
                             ],
                         },
@@ -553,7 +595,7 @@ def build_preview_card(
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Generate"},
                                     "type": "default",
-                                    "value": {"action": "generate_again"},
+                                    "value": _dm_button_value("generate_again", **sc),
                                 },
                             ],
                         },
@@ -566,7 +608,7 @@ def build_preview_card(
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Edit"},
                                     "type": "default",
-                                    "value": {"action": "edit_preview"},
+                                    "value": _dm_button_value("edit_preview", **sc),
                                 },
                             ],
                         },
@@ -579,7 +621,7 @@ def build_preview_card(
                                     "tag": "button",
                                     "text": {"tag": "plain_text", "content": "Cancel"},
                                     "type": "danger",
-                                    "value": {"action": "cancel_preview"},
+                                    "value": _dm_button_value("cancel_preview", **sc),
                                 },
                             ],
                         },

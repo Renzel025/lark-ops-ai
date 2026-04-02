@@ -148,7 +148,15 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
     _drafts.clear_preview(oid)
     _drafts.cancel_preview_timer(oid)
     _drafts.seed_draft_for_incident(oid, target_chat, chat_id, draft_priority=priority)
-    _send_dm_instruction_card_logged(oid, token, priority, label, context="DM instruction")
+    _send_dm_instruction_card_logged(
+        oid,
+        token,
+        priority,
+        label,
+        context="DM instruction",
+        target_chat=target_chat,
+        source_incident_chat_id=chat_id,
+    )
 
 
 def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_source_incident_chat_id: str) -> None:
@@ -189,7 +197,15 @@ def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_sourc
             pr = "P0"
         lab = str(next_item.get("label") or "").strip()
         _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
-        _send_dm_instruction_card_logged(oid, token, pr, lab, context="queued DM instruction")
+        _send_dm_instruction_card_logged(
+            oid,
+            token,
+            pr,
+            lab,
+            context="queued DM instruction",
+            target_chat=tc,
+            source_incident_chat_id=cid,
+        )
 
 
 def release_standalone_overview_cancel(operator_open_id: str, token: str) -> None:
@@ -226,7 +242,15 @@ def release_standalone_overview_cancel(operator_open_id: str, token: str) -> Non
             pr = "P0"
         lab = str(next_item.get("label") or "").strip()
         _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
-        _send_dm_instruction_card_logged(oid, token, pr, lab, context="queued DM after standalone cancel")
+        _send_dm_instruction_card_logged(
+            oid,
+            token,
+            pr,
+            lab,
+            context="queued DM after standalone cancel",
+            target_chat=tc,
+            source_incident_chat_id=cid,
+        )
 
 
 def _safe_match_ref(val: Any, meeting_ref: str) -> bool:
@@ -562,6 +586,9 @@ def _send_dm_instruction_card_logged(
     priority: str,
     source_chat_label: str,
     context: str = "",
+    *,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
 ) -> None:
     """
     Send the overview / DM instruction card to one user (``receive_id_type=open_id``).
@@ -572,7 +599,12 @@ def _send_dm_instruction_card_logged(
     if not oid:
         return
     label = (context or "DM instruction").strip()
-    card = _cards.build_dm_instruction_card(priority, source_chat_label=source_chat_label)
+    card = _cards.build_dm_instruction_card(
+        priority,
+        source_chat_label=source_chat_label,
+        target_chat=target_chat,
+        source_incident_chat_id=source_incident_chat_id,
+    )
     try:
         st, resp_body, mid = _lark.post_card_to_open_id(oid, tenant_token, card)
         body_head = (resp_body or "")[:800]
