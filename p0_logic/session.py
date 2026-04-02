@@ -776,6 +776,23 @@ def chat_has_active_session(chat_id: str) -> bool:
     return False
 
 
+def dm_preview_allowed_for_incident(source_incident_chat_id: str, target_chat: str) -> bool:
+    """
+    DM overview (Build overview / Send to group) is tied to a live P0/P1 session for the incident group.
+    Standalone ``create overview`` flows (no VC) stay allowed without a session.
+    """
+    src = (source_incident_chat_id or "").strip()
+    tc = (target_chat or "").strip()
+    if src == STANDALONE_DM_SOURCE_CHAT_ID:
+        return True
+    if src and src != STANDALONE_DM_SOURCE_CHAT_ID:
+        return chat_has_active_session(src)
+    if tc:
+        _cid, sess = find_session_by_target_chat(tc)
+        return bool(sess)
+    return False
+
+
 def handle_p1_meeting_confirm_yes(
     chat_id: str, token: str, fallback_trigger_open_id: str, nonce: str
 ) -> str:

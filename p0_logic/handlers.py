@@ -29,6 +29,20 @@ DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
 )
 
+_DM_OVERVIEW_MEETING_ENDED_MSG = (
+    "ℹ️ The incident meeting is no longer active. You cannot build or send an overview for it. "
+    "Start a new **p0** or **p1** in the incident group if needed."
+)
+
+
+def _ensure_dm_preview_incident_session(
+    sender_open_id: str, tenant_token: str, source_incident_chat_id: str, target_chat: str
+) -> bool:
+    if _session.dm_preview_allowed_for_incident(source_incident_chat_id, target_chat):
+        return True
+    _lark.post_text_to_open_id(sender_open_id, tenant_token, _DM_OVERVIEW_MEETING_ENDED_MSG)
+    return False
+
 
 def _deep_get(d: Any, *path: str) -> Any:
     cur = d
@@ -295,6 +309,9 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
     if not target_chat:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No active target chat found.")
         return False
+    src_inc = str(draft.get("source_incident_chat_id") or "").strip()
+    if not _ensure_dm_preview_incident_session(sender_open_id, tenant_token, src_inc, target_chat):
+        return False
     _chat_id, sess = _session.find_session_by_target_chat(target_chat)
     if sess:
         start_epoch = int(sess.get("start_epoch") or time.time())
@@ -551,6 +568,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         support = str(preview.get("support") or "Not specified").strip()
         md = str(preview.get("md") or "").strip()
         pri = _preview_priority(preview)
+        src_inc = str(preview.get("source_incident_chat_id") or "").strip()
+        if action_name in ("send_preview", "generate_again", "edit_preview", "save_edit", "back_to_preview"):
+            if not _ensure_dm_preview_incident_session(sender_open_id, tenant_token, src_inc, target_chat):
+                return
         if action_name == "send_preview":
             if not target_chat or not md:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Preview is incomplete.")

@@ -407,6 +407,9 @@ def schedule_auto_preview(sender_open_id: str, tenant_token: str) -> None:
             target_chat = str(draft.get("target_chat") or "").strip()
             if not target_chat:
                 return
+            src_inc = str(draft.get("source_incident_chat_id") or "").strip()
+            if not _session.dm_preview_allowed_for_incident(src_inc, target_chat):
+                return
             _chat_id, sess = _session.find_session_by_target_chat(target_chat)
             if sess:
                 start_epoch = int(sess.get("start_epoch") or time.time())
