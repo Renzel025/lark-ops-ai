@@ -185,6 +185,22 @@ def _preview_priority(preview: Dict[str, Any]) -> str:
     return pr if pr in ("P0", "P1") else "P0"
 
 
+def _dm_has_open_preview_workflow(sender_open_id: str) -> bool:
+    """True when a preview or edit flow is active — operators should use Cancel on the preview card, not Clear draft."""
+    pv = _drafts.get_preview(sender_open_id) or {}
+    if str(pv.get("md") or "").strip():
+        return True
+    if pv.get("awaiting_edit_input"):
+        return True
+    return False
+
+
+_CLEAR_DRAFT_USE_CANCEL_ON_PREVIEW_MSG = (
+    "ℹ️ You have an overview preview open. Use **Cancel** on the preview card to discard it (or **Send to group**). "
+    "**Clear draft** only applies before you tap **Build overview**."
+)
+
+
 def _dm_card_meta(sender_open_id: str) -> Tuple[str, str]:
     """(source_chat_label, priority) for DM instruction card titles."""
     draft = _drafts.get_draft(sender_open_id) or {}
@@ -373,6 +389,9 @@ def handle_dm_generate_overview(
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, f"❌ No, {person} is not currently in the meeting.")
             return
         if _config.CLEAR_RE.match(src_text):
+            if _dm_has_open_preview_workflow(sender_open_id):
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, _CLEAR_DRAFT_USE_CANCEL_ON_PREVIEW_MSG)
+                return
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
@@ -454,6 +473,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _generate_preview_now(sender_open_id, tenant_token)
             return
         if action_name == "clear_draft":
+            if _dm_has_open_preview_workflow(sender_open_id):
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, _CLEAR_DRAFT_USE_CANCEL_ON_PREVIEW_MSG)
+                return
             _drafts.clear_draft(sender_open_id)
             _drafts.clear_preview(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)

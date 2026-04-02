@@ -472,7 +472,13 @@ def build_dm_instruction_card(
         "body": {
             "elements": [
                 {"tag": "div", "text": {"tag": "plain_text", "content": "You may send screenshots and pasted text in any order."}},
-                {"tag": "div", "text": {"tag": "plain_text", "content": "Tap Build overview when ready. Clear draft resets input. Tap Participants to list meeting attendees by name."}},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": "Tap Build overview when ready. Clear draft only resets pasted input **before** a preview exists. After a preview is built, use **Cancel** on the preview card — not Clear draft. Tap Participants to list meeting attendees by name.",
+                    },
+                },
                 {"tag": "hr"},
                 {
                     "tag": "column_set",
