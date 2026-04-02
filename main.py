@@ -229,6 +229,25 @@ def _detect_callback_type(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _card_action_background_ack_response() -> Dict[str, Any]:
+    """
+    card.action.trigger must return toast / card / {} in the HTTP body to finish the button loading state.
+    Returning only {"code": 0} (event subscription ACK) often leaves the spinner running until PATCH/API work completes.
+    Heavy work stays in BackgroundTasks; this only acknowledges the callback per Lark card docs.
+    """
+    return {
+        "code": 0,
+        "toast": {
+            "type": "info",
+            "content": "Working on it…",
+            "i18n": {
+                "zh_cn": "处理中…",
+                "en_us": "Working on it…",
+            },
+        },
+    }
+
+
 def _extract_vc_participant_name(evt: Dict[str, Any]) -> str:
     candidates = [
         # VC v1 payloads often nest user under join_user / leave_user (names optional; ids always for lookup).
@@ -381,6 +400,10 @@ async def lark_webhook(req: Request, background: BackgroundTasks):
         resp = handle_lark_card_action_show_participants_sync(body, tenant_token)
         perf_log("lark_webhook card.action.trigger show_participants sync", t_sp)
         return {"code": 0, **resp}
+
+    if callback_type == "card.action.trigger":
+        background.add_task(_process_lark_payload, body, callback_type)
+        return _card_action_background_ack_response()
 
     background.add_task(_process_lark_payload, body, callback_type)
     return {"code": 0}
