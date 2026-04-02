@@ -783,9 +783,16 @@ def build_edit_overview_card(
 
 
 def build_bilingual_overview_md(
-    start_epoch: int, issue: str, impact: str, support: str, priority: str = "P0"
+    start_epoch: int,
+    issue: str,
+    impact: str,
+    support: str,
+    priority: str = "P0",
+    *,
+    zh_issue_precomputed: Optional[str] = None,
+    zh_impact_precomputed: Optional[str] = None,
 ) -> str:
-    """Full EN overview plus 中文 block (Groq `translate_to_zh` for issue / impact only; support stays as-is)."""
+    """EN + 中文 overview. Prefer zh_* from one-shot Groq in draft build; else two parallel translate calls."""
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
@@ -795,10 +802,13 @@ def build_bilingual_overview_md(
     en_impact = (impact or "").strip() or na_en
     en_support = (support or "").strip() or na_en
 
-    zh_issue = _groq.translate_to_zh(en_issue)
-    zh_impact = _groq.translate_to_zh(en_impact)
-    zh_issue = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_issue)) or "未指定"
-    zh_impact = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_impact)) or "未指定"
+    if zh_issue_precomputed is not None and zh_impact_precomputed is not None:
+        zh_issue = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_issue_precomputed)) or "未指定"
+        zh_impact = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_impact_precomputed)) or "未指定"
+    else:
+        zh_issue, zh_impact = _groq.translate_issue_impact_pair_to_zh(en_issue, en_impact)
+        zh_issue = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_issue)) or "未指定"
+        zh_impact = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_impact)) or "未指定"
     # Dept / team codes (FPMS, CPMS, OSE, …) must not be “translated” in 中文.
     zh_support = "未指定" if en_support == na_en else en_support
 

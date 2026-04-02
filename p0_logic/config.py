@@ -282,6 +282,12 @@ GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 GROQ_BASE = "https://api.groq.com/openai/v1"
 GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant").strip()
 GROQ_VISION_MODEL = (os.getenv("GROQ_VISION_MODEL") or "llama-3.2-11b-vision-preview").strip()
+# One Groq call for issue EN + zh_issue + zh_impact (faster than summarize + 2 translates). Set 0 to use legacy path.
+GROQ_OVERVIEW_ONE_SHOT = (os.getenv("GROQ_OVERVIEW_ONE_SHOT", "1") or "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
 
 # Timing
 AUTO_PREVIEW_DELAY_SEC = float((os.getenv("AUTO_PREVIEW_DELAY_SEC", "6") or "6").strip())

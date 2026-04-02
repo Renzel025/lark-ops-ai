@@ -4,9 +4,12 @@ Groq API: chat completion, vision OCR, translation to Chinese.
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import re
 import time
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Tuple
 
 import requests
 
@@ -140,3 +143,93 @@ def translate_to_zh(text: str) -> str:
     if not cleaned:
         return src
     return _text.normalize_gaming_zh(cleaned)
+
+
+def translate_issue_impact_pair_to_zh(en_issue: str, en_impact: str) -> Tuple[str, str]:
+    """
+    Fallback when one-shot overview is off or fails: two Groq calls in parallel.
+    """
+    t0 = time.perf_counter()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fi = pool.submit(translate_to_zh, en_issue)
+            fj = pool.submit(translate_to_zh, en_impact)
+            return fi.result(), fj.result()
+    finally:
+        perf_log("groq translate_issue_impact_pair", t0)
+
+
+def _parse_json_object(raw: str) -> Optional[dict]:
+    if not (raw or "").strip():
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", text)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _scrub_issue_source_for_model(issue_source: str) -> str:
+    src = (issue_source or "").strip()
+    if not src:
+        return ""
+    best = _text._pick_best_issue_text(src) or src
+    scrubbed = re.sub(r"\[Screenshot\s+\d+\s+OCR\]", " ", best, flags=re.IGNORECASE)
+    scrubbed = re.sub(r"\b\d{6,}\b", "<ID>", scrubbed)
+    scrubbed = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", "<DATE>", scrubbed)
+    scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
+    return scrubbed
+
+
+def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Single Groq round trip: English issue one-liner + zh_issue + zh_impact.
+    Replaces summarize_issue + translate_issue_impact_pair (2–3 HTTP calls → 1).
+    Returns None on failure so callers fall back to the legacy path.
+    """
+    if not GROQ_API_KEY:
+        return None
+    scrubbed = _scrub_issue_source_for_model(issue_source)
+    if not scrubbed:
+        return None
+    impact_line = (impact_en or "").strip() or "Not specified"
+    system_prompt = (
+        "You are an on-call incident assistant.\n"
+        "Output ONLY valid JSON (no markdown fences, no commentary). Keys: issue_en, zh_issue, zh_impact\n"
+        "- issue_en: ONE concise English sentence for the user-facing incident symptom. "
+        "Use only the incident text. No player IDs, ticket IDs, dates, or @names. No bullets.\n"
+        "- zh_issue: ONE line Simplified Chinese: translate issue_en faithfully.\n"
+        "- zh_impact: ONE line Simplified Chinese: translate the impact scope English line given below. "
+        'If that line is "Not specified" or empty, set zh_impact to 未指定.\n'
+        "Use 玩家 for game players, not 球员. Keep acronyms (FPMS, CPMS, …) unchanged in Chinese lines.\n"
+    )
+    user_prompt = (
+        f"Incident text:\n{scrubbed}\n\n"
+        f"Impact scope (English — translate this exact line to zh_impact):\n{impact_line}\n"
+    )
+    t0 = time.perf_counter()
+    try:
+        raw = groq_chat_once(system_prompt, user_prompt, max_tokens=520)
+        obj = _parse_json_object(raw or "")
+        if not obj:
+            log.warning("groq_overview one-shot: JSON parse failed head=%s", (raw or "")[:200])
+            return None
+        issue_en = str(obj.get("issue_en") or "").strip()
+        zh_issue = str(obj.get("zh_issue") or "").strip()
+        zh_impact = str(obj.get("zh_impact") or "").strip()
+        if not issue_en:
+            return None
+        return issue_en, zh_issue, zh_impact
+    finally:
+        perf_log("groq_overview_issue_zh_one_shot", t0)

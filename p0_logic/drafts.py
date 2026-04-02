@@ -4,6 +4,7 @@ P0 drafts and previews: collect text/images, build overview preview, send to gro
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -229,11 +230,21 @@ def _save_preview(
     awaiting_edit_input: bool = False,
     priority: str = "P0",
     source_incident_chat_id: str = "",
+    zh_issue_precomputed: Optional[str] = None,
+    zh_impact_precomputed: Optional[str] = None,
 ) -> str:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
-    md = _cards.build_bilingual_overview_md(start_epoch, issue, impact, support, priority=prio)
+    md = _cards.build_bilingual_overview_md(
+        start_epoch,
+        issue,
+        impact,
+        support,
+        priority=prio,
+        zh_issue_precomputed=zh_issue_precomputed,
+        zh_impact_precomputed=zh_impact_precomputed,
+    )
     with _store.preview_transaction(sender_open_id) as tx:
         old_mid = ""
         old_edit_mid = ""
@@ -343,9 +354,22 @@ def _build_preview_from_draft(
     ocr_only = "\n\n".join(image_entries).strip()
     issue_source = "\n\n".join([x for x in [text_only, ocr_only] if x]).strip() or combined_text
     support_source = "\n\n".join([x for x in [text_only, ocr_only] if x]).strip() or combined_text
-    issue = _issues.summarize_issue(issue_source)
     impact = _text.build_impact_scope(issue_source)
     support = _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
+    zh_issue_pc: Optional[str] = None
+    zh_impact_pc: Optional[str] = None
+    triplet = None
+    if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
+        triplet = _groq.groq_overview_issue_and_zh_bilingual(issue_source, impact)
+    if triplet:
+        issue_en_raw, zh_issue_pc, zh_impact_pc = triplet
+        issue = (issue_en_raw or "").strip()
+        issue = re.sub(r"\b\d{6,}\b", "", issue)
+        issue = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", "", issue)
+        issue = re.sub(r"\s+", " ", issue).strip(" ,.")
+        issue = _issues._truncate_issue_output(issue, _issues.ISSUE_SUMMARY_MAX_CHARS) if issue else "Not specified"
+    else:
+        issue = _issues.summarize_issue(issue_source)
     return _save_preview(
         sender_open_id=sender_open_id,
         target_chat=target_chat,
@@ -357,6 +381,8 @@ def _build_preview_from_draft(
         support=support,
         priority=prio,
         source_incident_chat_id=src_inc,
+        zh_issue_precomputed=zh_issue_pc if triplet else None,
+        zh_impact_precomputed=zh_impact_pc if triplet else None,
     )
 
 
@@ -441,6 +467,8 @@ def save_preview(
     awaiting_edit_input: bool = False,
     priority: str = "P0",
     source_incident_chat_id: str = "",
+    zh_issue_precomputed: Optional[str] = None,
+    zh_impact_precomputed: Optional[str] = None,
 ) -> None:
     """Persist preview state for the sender."""
     _save_preview(
@@ -455,6 +483,8 @@ def save_preview(
         awaiting_edit_input=awaiting_edit_input,
         priority=priority,
         source_incident_chat_id=source_incident_chat_id,
+        zh_issue_precomputed=zh_issue_precomputed,
+        zh_impact_precomputed=zh_impact_precomputed,
     )
 
 
