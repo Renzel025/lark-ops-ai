@@ -88,6 +88,52 @@ def _extract_card_action_name(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def card_action_name_from_payload(payload: Dict[str, Any]) -> str:
+    """Public helper for webhook routing (e.g. fast path before BackgroundTasks)."""
+    return (_extract_card_action_name(payload) or "").strip() or "unknown"
+
+
+def _show_participants_body_text() -> str:
+    participants = _participants.list_meeting_participants()
+    empty_msg = "ℹ️ No participants have been tracked in the meeting yet."
+    if not participants:
+        return empty_msg
+    line = _participants.format_participants_names_display(participants)
+    return empty_msg if not line.strip() else f"Participants\n{line}"
+
+
+def handle_lark_card_action_show_participants_sync(
+    payload: Dict[str, Any], _tenant_token: str
+) -> Dict[str, Any]:
+    """
+    Lark card.action.trigger should return toast in the HTTP response for instant UX.
+    Do not call post_text_to_open_id here — that adds an extra server→Lark round trip (~300ms+).
+    """
+    sender_open_id = _extract_card_action_sender_open_id(payload)
+    _maybe_merge_dm_scope_from_card(sender_open_id, payload)
+    if not sender_open_id:
+        return {
+            "toast": {
+                "type": "warning",
+                "content": "Could not identify sender.",
+            }
+        }
+    body = _show_participants_body_text()
+    max_len = 1200
+    if len(body) > max_len:
+        body = body[: max_len - 1] + "…"
+    return {
+        "toast": {
+            "type": "info",
+            "content": body,
+            "i18n": {
+                "zh_cn": body,
+                "en_us": body,
+            },
+        }
+    }
+
+
 def _extract_p1_confirm_nonce(payload: Dict[str, Any]) -> str:
     v = _deep_get(payload, "event", "action", "value", "p1_nonce") or _deep_get(
         payload, "action", "value", "p1_nonce"
@@ -487,15 +533,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 )
             return
         if action_name == "show_participants":
-            participants = _participants.list_meeting_participants()
-            if not participants:
-                _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
-                return
-            line = _participants.format_participants_names_display(participants)
-            if not line.strip():
-                _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No participants have been tracked in the meeting yet.")
-                return
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, f"Participants\n{line}")
+            # Primary path: main.lark_webhook returns toast synchronously (handle_lark_card_action_show_participants_sync).
+            # This branch only runs if handle_lark_card_action is invoked without that routing (e.g. tests or legacy callers).
+            body = _show_participants_body_text()
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, body)
             return
         preview = _drafts.get_preview(sender_open_id)
         if not preview:

@@ -16,6 +16,8 @@ from p0_logic import (
     get_tenant_token,
     handle_dm_generate_overview,
     handle_lark_card_action,
+    handle_lark_card_action_show_participants_sync,
+    card_action_name_from_payload,
     add_meeting_participant,
     remove_meeting_participant,
     end_p0_session_by_meeting_ref,
@@ -367,6 +369,18 @@ async def lark_webhook(req: Request, background: BackgroundTasks):
 
     callback_type = _detect_callback_type(body)
     log.info("Detected webhook type=%s", callback_type or "unknown")
+
+    # card.action.trigger: respond with toast in the same HTTP response (Lark docs).
+    # Sending a DM via post_text_to_open_id in a background task adds a second server→Lark round trip (~300ms+).
+    if callback_type == "card.action.trigger" and card_action_name_from_payload(body) == "show_participants":
+        t_sp = time.perf_counter()
+        tenant_token = get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
+        if not tenant_token:
+            log.error("No tenant token; cannot process show_participants.")
+            return {"code": 0}
+        resp = handle_lark_card_action_show_participants_sync(body, tenant_token)
+        perf_log("lark_webhook card.action.trigger show_participants sync", t_sp)
+        return {"code": 0, **resp}
 
     background.add_task(_process_lark_payload, body, callback_type)
     return {"code": 0}

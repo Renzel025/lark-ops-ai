@@ -64,6 +64,8 @@ post_card_to_open_id = lark_client.post_card_to_open_id
 # Handlers (main entry points for events)
 handle_dm_generate_overview = handlers.handle_dm_generate_overview
 handle_lark_card_action = handlers.handle_lark_card_action
+handle_lark_card_action_show_participants_sync = handlers.handle_lark_card_action_show_participants_sync
+card_action_name_from_payload = handlers.card_action_name_from_payload
 handle_p0_submit = handlers.handle_p0_submit
 
 # Support map
