@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
+from . import session_disk as _session_disk
 from . import support as _support
 
 log = logging.getLogger("lark-ops-ai")
@@ -276,6 +277,11 @@ def find_session_by_meeting_no(meeting_no: str) -> Tuple[str, Dict[str, Any]]:
         cur = str((sess or {}).get("meeting_no") or "").strip()
         if cur and cur == meeting_no:
             return chat_id, (sess or {})
+    if _session_disk.enabled():
+        cid, sd = _session_disk.find_session_by_meeting_no_disk(meeting_no)
+        if cid and sd:
+            P0_SESSIONS[cid] = sd
+            return cid, sd
     return "", {}
 
 
@@ -418,12 +424,19 @@ def bind_live_meeting_id(meeting_ref: str) -> None:
     last_key = list(P0_SESSIONS.keys())[-1]
     sess = P0_SESSIONS.get(last_key) or {}
     sess["meeting_id"] = meeting_ref
+    P0_SESSIONS[last_key] = sess
+    if _session_disk.enabled():
+        _session_disk.save_session(last_key, sess)
     log.info("Bound live meeting_id=%s to chat_id=%s", meeting_ref, last_key)
 
 
 def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
+    if not sess and _session_disk.enabled():
+        sess = _session_disk.load_session(chat_id) or {}
+    if sess and chat_id and chat_id not in P0_SESSIONS:
+        P0_SESSIONS[chat_id] = sess
     if sess:
         meeting_no_snap = str(sess.get("meeting_no") or "").strip()
         start_epoch_snap = int(sess.get("start_epoch") or 0)
@@ -474,6 +487,7 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
         except Exception as e:
             log.warning("post_text meeting ended summary failed chat_id=%s err=%s", chat_id, e)
     P0_SESSIONS.pop(chat_id, None)
+    _session_disk.delete_session(chat_id)
 
 
 def cancel_p0_session(
@@ -483,6 +497,10 @@ def cancel_p0_session(
 ) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
+    if not sess and _session_disk.enabled():
+        sess = _session_disk.load_session(chat_id) or {}
+    if sess and chat_id and chat_id not in P0_SESSIONS:
+        P0_SESSIONS[chat_id] = sess
     if sess:
         _clear_last_ended_snapshot(chat_id)
     reserve_id = str(sess.get("reserve_id") or "").strip()
@@ -519,6 +537,7 @@ def cancel_p0_session(
             except Exception as e:
                 log.error("Failed to post meeting cancelled card (fallback): %s", e)
     P0_SESSIONS.pop(chat_id, None)
+    _session_disk.delete_session(chat_id)
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:
@@ -723,6 +742,20 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     return True
 
 
+def _chat_has_active_session(chat_id: str) -> bool:
+    cid = (chat_id or "").strip()
+    if not cid:
+        return False
+    if cid in P0_SESSIONS:
+        return True
+    if _session_disk.enabled():
+        d = _session_disk.load_session(cid)
+        if d:
+            P0_SESSIONS[cid] = d
+            return True
+    return False
+
+
 def handle_p1_meeting_confirm_yes(
     chat_id: str, token: str, fallback_trigger_open_id: str, nonce: str
 ) -> str:
@@ -735,7 +768,7 @@ def handle_p1_meeting_confirm_yes(
     token = (token or "").strip()
     if not chat_id or not token:
         return "stale"
-    if chat_id in P0_SESSIONS:
+    if _chat_has_active_session(chat_id):
         return "session_active"
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:
@@ -753,7 +786,7 @@ def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str) -> str:
     token = (token or "").strip()
     if not chat_id or not token:
         return "stale"
-    if chat_id in P0_SESSIONS:
+    if _chat_has_active_session(chat_id):
         return "session_active"
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:
@@ -823,69 +856,88 @@ def start_p0(
         return
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
-    if p0_cooldown(chat_id):
-        total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
-        mins_label = "minute" if total_min == 1 else "minutes"
-        msg = f"⚠️ Meeting was just created earlier — try again after {total_min} {mins_label}."
-        _lark.post_text_to_chat(chat_id, token, msg)
-        return
-    now = int(time.time())
-    emergency_topic = _config.get_emergency_topic_for_source_chat(chat_id)
-    vc_meeting_topic = _config.get_vc_meeting_topic_for_source_chat(chat_id)
-    vc = _lark.create_vc_reserve(token, meeting_topic=vc_meeting_topic)
-    link = (vc.get("link") or "").strip()
-    if not link:
-        _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
-        return
-    target_chat = _config.get_overview_post_chat_id() or chat_id
-    chat_label = (source_chat_name or "").strip()
-    if not chat_label:
-        chat_label = _lark.get_group_chat_name(chat_id, token)
-    affected_players = ""
-    P0_SESSIONS[chat_id] = {
-        "priority": priority,
-        "start_epoch": now,
-        "link": link,
-        "reserve_id": vc.get("reserve_id", ""),
-        "meeting_no": vc.get("meeting_no", ""),
-        "meeting_id": vc.get("meeting_id", ""),
-        "trigger_open_id": trigger_open_id,
-        "source_chat": chat_id,
-        "target_chat": target_chat,
-        "source_chat_name": chat_label,
-        "emergency_topic": emergency_topic,
-        "participants": [],
-        "affected_players": affected_players,
-    }
-    if trigger_open_id:
-        try:
-            host_label = _lark.lookup_user_name_by_open_id(token, trigger_open_id)
-            if not host_label:
-                host_label = f"Host ({trigger_open_id[-6:]})"
-            _participants.add_meeting_participant(host_label)
-            log.info("Seeded host participant=%s for chat_id=%s", host_label, chat_id)
-        except Exception as e:
-            log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
-    log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
-    meeting_no = str(vc.get("meeting_no", "")).strip()
-    st, body, invite_mid = _lark.post_card_to_chat(
-        chat_id,
-        token,
-        _cards.build_meeting_card(
-            link=link,
-            meeting_no=meeting_no,
-            priority=priority,
-            affected_players=affected_players,
-            emergency_topic=emergency_topic,
-        ),
-    )
-    if st != 200:
-        log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
-        _lark.post_text_to_chat(chat_id, token, "❌ Failed to post meeting card.")
-        P0_SESSIONS.pop(chat_id, None)
-        return
-    if invite_mid:
-        P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
+    with _session_disk.exclusive_lock(chat_id):
+        if P0_SESSIONS.get(chat_id):
+            _lark.post_text_to_chat(
+                chat_id,
+                token,
+                "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
+            )
+            return
+        sd = _session_disk.load_session(chat_id)
+        if sd:
+            P0_SESSIONS[chat_id] = sd
+            _lark.post_text_to_chat(
+                chat_id,
+                token,
+                "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
+            )
+            return
+        if p0_cooldown(chat_id):
+            total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
+            mins_label = "minute" if total_min == 1 else "minutes"
+            msg = f"⚠️ Meeting was just created earlier — try again after {total_min} {mins_label}."
+            _lark.post_text_to_chat(chat_id, token, msg)
+            return
+        now = int(time.time())
+        emergency_topic = _config.get_emergency_topic_for_source_chat(chat_id)
+        vc_meeting_topic = _config.get_vc_meeting_topic_for_source_chat(chat_id)
+        vc = _lark.create_vc_reserve(token, meeting_topic=vc_meeting_topic)
+        link = (vc.get("link") or "").strip()
+        if not link:
+            _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
+            return
+        target_chat = _config.get_overview_post_chat_id() or chat_id
+        chat_label = (source_chat_name or "").strip()
+        if not chat_label:
+            chat_label = _lark.get_group_chat_name(chat_id, token)
+        affected_players = ""
+        P0_SESSIONS[chat_id] = {
+            "priority": priority,
+            "start_epoch": now,
+            "link": link,
+            "reserve_id": vc.get("reserve_id", ""),
+            "meeting_no": vc.get("meeting_no", ""),
+            "meeting_id": vc.get("meeting_id", ""),
+            "trigger_open_id": trigger_open_id,
+            "source_chat": chat_id,
+            "target_chat": target_chat,
+            "source_chat_name": chat_label,
+            "emergency_topic": emergency_topic,
+            "participants": [],
+            "affected_players": affected_players,
+        }
+        if trigger_open_id:
+            try:
+                host_label = _lark.lookup_user_name_by_open_id(token, trigger_open_id)
+                if not host_label:
+                    host_label = f"Host ({trigger_open_id[-6:]})"
+                _participants.add_meeting_participant(host_label)
+                log.info("Seeded host participant=%s for chat_id=%s", host_label, chat_id)
+            except Exception as e:
+                log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
+        log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
+        meeting_no = str(vc.get("meeting_no", "")).strip()
+        st, body, invite_mid = _lark.post_card_to_chat(
+            chat_id,
+            token,
+            _cards.build_meeting_card(
+                link=link,
+                meeting_no=meeting_no,
+                priority=priority,
+                affected_players=affected_players,
+                emergency_topic=emergency_topic,
+            ),
+        )
+        if st != 200:
+            log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
+            _lark.post_text_to_chat(chat_id, token, "❌ Failed to post meeting card.")
+            P0_SESSIONS.pop(chat_id, None)
+            return
+        if invite_mid:
+            P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
+        if _session_disk.enabled():
+            _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
     dm_targets = _dm_instruction_targets(trigger_open_id)
     log.info(
         "start_p0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id gceda344-style)",

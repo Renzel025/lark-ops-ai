@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
 from . import config as _config
+from . import draft_store as _store
 from . import groq_client as _groq
 from . import issues as _issues
 from . import lark_client as _lark
@@ -19,10 +20,6 @@ from . import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
-P0_DRAFTS: Dict[str, Dict[str, Any]] = {}
-P0_PREVIEWS: Dict[str, Dict[str, Any]] = {}
-_P0_DRAFTS_LOCK = threading.Lock()
-_P0_PREVIEWS_LOCK = threading.Lock()
 _PREVIEW_TIMERS: Dict[str, threading.Timer] = {}
 _PREVIEW_TIMERS_LOCK = threading.Lock()
 
@@ -31,8 +28,8 @@ AUTO_PREVIEW_DELAY_SEC = _config.AUTO_PREVIEW_DELAY_SEC
 
 def _ensure_draft(sender_open_id: str, target_chat: str) -> Dict[str, Any]:
     now = int(time.time())
-    with _P0_DRAFTS_LOCK:
-        draft = P0_DRAFTS.get(sender_open_id)
+    with _store.draft_transaction(sender_open_id) as tx:
+        draft = tx.get()
         if not draft or draft.get("target_chat") != target_chat:
             draft = {
                 "target_chat": target_chat,
@@ -43,9 +40,10 @@ def _ensure_draft(sender_open_id: str, target_chat: str) -> Dict[str, Any]:
                 "mention_names": [],
                 "updated_at": now,
             }
-            P0_DRAFTS[sender_open_id] = draft
-        draft["updated_at"] = now
-        return draft
+        else:
+            draft["updated_at"] = now
+        tx.set(draft)
+        return dict(draft)
 
 
 def merge_dm_scope_from_card(
@@ -67,18 +65,20 @@ def merge_dm_scope_from_card(
         prio = ""
     src = (source_incident_chat_id or "").strip()
     now = int(time.time())
-    with _P0_DRAFTS_LOCK:
-        d = P0_DRAFTS.get(sender_open_id)
+    with _store.draft_transaction(sender_open_id) as tx:
+        d = tx.get()
         if not d:
-            P0_DRAFTS[sender_open_id] = {
-                "target_chat": target_chat,
-                "source_incident_chat_id": src,
-                "draft_priority": prio,
-                "texts": [],
-                "images": [],
-                "mention_names": [],
-                "updated_at": now,
-            }
+            tx.set(
+                {
+                    "target_chat": target_chat,
+                    "source_incident_chat_id": src,
+                    "draft_priority": prio,
+                    "texts": [],
+                    "images": [],
+                    "mention_names": [],
+                    "updated_at": now,
+                }
+            )
             return
         d["target_chat"] = target_chat
         if src:
@@ -86,6 +86,7 @@ def merge_dm_scope_from_card(
         if prio:
             d["draft_priority"] = prio
         d["updated_at"] = now
+        tx.set(d)
 
 
 def seed_draft_for_incident(
@@ -102,16 +103,18 @@ def seed_draft_for_incident(
     if prio not in ("P0", "P1"):
         prio = ""
     now = int(time.time())
-    with _P0_DRAFTS_LOCK:
-        P0_DRAFTS[sender_open_id] = {
-            "target_chat": target_chat,
-            "source_incident_chat_id": src,
-            "draft_priority": prio,
-            "texts": [],
-            "images": [],
-            "mention_names": [],
-            "updated_at": now,
-        }
+    with _store.draft_transaction(sender_open_id) as tx:
+        tx.set(
+            {
+                "target_chat": target_chat,
+                "source_incident_chat_id": src,
+                "draft_priority": prio,
+                "texts": [],
+                "images": [],
+                "mention_names": [],
+                "updated_at": now,
+            }
+        )
 
 
 def _append_unique_strs(base: List[str], items: List[str]) -> List[str]:
@@ -129,12 +132,14 @@ def add_text_to_draft(
     sender_open_id: str, target_chat: str, text: str, mention_names: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     cleaned = _text.clean_pasted_text(text)
-    draft = _ensure_draft(sender_open_id, target_chat)
-    with _P0_DRAFTS_LOCK:
+    _ensure_draft(sender_open_id, target_chat)
+    with _store.draft_transaction(sender_open_id) as tx:
+        draft = tx.get() or {}
         if cleaned:
-            draft["texts"].append(cleaned)
+            draft.setdefault("texts", []).append(cleaned)
         draft["mention_names"] = _append_unique_strs(draft.get("mention_names", []), mention_names or [])
         draft["updated_at"] = int(time.time())
+        tx.set(draft)
         return dict(draft)
 
 
@@ -165,21 +170,26 @@ def _add_image_to_draft(
     ocr_text = _groq.groq_vision_ocr(img)
     if not ocr_text.strip():
         raise RuntimeError("OCR returned empty")
-    with _P0_DRAFTS_LOCK:
-        draft["images"].append({"image_key": image_key, "message_id": message_id, "ocr_text": ocr_text.strip()})
+    with _store.draft_transaction(sender_open_id) as tx:
+        draft = tx.get() or {}
+        draft.setdefault("images", []).append({"image_key": image_key, "message_id": message_id, "ocr_text": ocr_text.strip()})
         draft["mention_names"] = _append_unique_strs(draft.get("mention_names", []), mention_names or [])
         draft["updated_at"] = int(time.time())
+        tx.set(draft)
         return dict(draft), ocr_text.strip()
 
 
 def clear_draft(sender_open_id: str) -> None:
-    with _P0_DRAFTS_LOCK:
-        P0_DRAFTS.pop(sender_open_id, None)
+    with _store.draft_transaction(sender_open_id) as tx:
+        tx.delete()
 
 
 def get_draft(sender_open_id: str) -> Optional[Dict[str, Any]]:
-    with _P0_DRAFTS_LOCK:
-        d = P0_DRAFTS.get(sender_open_id)
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id:
+        return None
+    with _store.draft_transaction(sender_open_id) as tx:
+        d = tx.get()
         return dict(d) if d else None
 
 
@@ -219,14 +229,15 @@ def _save_preview(
     awaiting_edit_input: bool = False,
     priority: str = "P0",
     source_incident_chat_id: str = "",
-) -> None:
+) -> str:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
-    with _P0_PREVIEWS_LOCK:
+    md = _cards.build_bilingual_overview_md(start_epoch, issue, impact, support, priority=prio)
+    with _store.preview_transaction(sender_open_id) as tx:
         old_mid = ""
         old_edit_mid = ""
-        old = P0_PREVIEWS.get(sender_open_id)
+        old = tx.get()
         if old:
             old_mid = str(old.get("preview_message_id") or "").strip()
             old_edit_mid = str(old.get("edit_message_id") or "").strip()
@@ -239,7 +250,7 @@ def _save_preview(
             "impact": impact,
             "support": support,
             "priority": prio,
-            "md": _cards.build_bilingual_overview_md(start_epoch, issue, impact, support, priority=prio),
+            "md": md,
             "awaiting_edit_input": awaiting_edit_input,
             "updated_at": int(time.time()),
             "source_incident_chat_id": (source_incident_chat_id or "").strip(),
@@ -248,48 +259,55 @@ def _save_preview(
             row["preview_message_id"] = old_mid
         if old_edit_mid:
             row["edit_message_id"] = old_edit_mid
-        P0_PREVIEWS[sender_open_id] = row
+        tx.set(row)
+    return str(md or "").strip()
 
 
 def get_preview(sender_open_id: str) -> Optional[Dict[str, Any]]:
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id:
+        return None
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         return dict(p) if p else None
 
 
 def clear_preview(sender_open_id: str) -> None:
-    with _P0_PREVIEWS_LOCK:
-        P0_PREVIEWS.pop(sender_open_id, None)
+    with _store.preview_transaction(sender_open_id) as tx:
+        tx.delete()
 
 
 def set_preview_edit_waiting(sender_open_id: str, waiting: bool) -> None:
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         if not p:
             return
         p["awaiting_edit_input"] = bool(waiting)
         p["updated_at"] = int(time.time())
+        tx.set(p)
 
 
 def clear_preview_edit_flags(sender_open_id: str) -> None:
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         if not p:
             return
         p["awaiting_edit_input"] = False
         p["updated_at"] = int(time.time())
+        tx.set(p)
 
 
 def take_edit_message_id(sender_open_id: str) -> str:
     """Remove and return the DM edit-card ``message_id`` (before recalling that message)."""
     sender_open_id = (sender_open_id or "").strip()
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         if not p:
             return ""
         mid = str(p.pop("edit_message_id", None) or "").strip()
         if mid:
             p["updated_at"] = int(time.time())
+        tx.set(p)
         return mid
 
 
@@ -328,7 +346,7 @@ def _build_preview_from_draft(
     issue = _issues.summarize_issue(issue_source)
     impact = _text.build_impact_scope(issue_source)
     support = _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
-    _save_preview(
+    return _save_preview(
         sender_open_id=sender_open_id,
         target_chat=target_chat,
         start_epoch=start_epoch,
@@ -340,8 +358,6 @@ def _build_preview_from_draft(
         priority=prio,
         source_incident_chat_id=src_inc,
     )
-    preview = get_preview(sender_open_id) or {}
-    return str(preview.get("md") or "").strip()
 
 
 def cancel_preview_timer(sender_open_id: str) -> None:
@@ -451,8 +467,8 @@ def post_or_patch_preview_card(sender_open_id: str, tenant_token: str, card: Dic
     if not sender_open_id or not tenant_token:
         return False
     mid = ""
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         if p:
             mid = str(p.get("preview_message_id") or "").strip()
     if mid:
@@ -470,10 +486,11 @@ def post_or_patch_preview_card(sender_open_id: str, tenant_token: str, card: Dic
         log.error("preview POST failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
     if new_mid:
-        with _P0_PREVIEWS_LOCK:
-            pp = P0_PREVIEWS.get(sender_open_id)
+        with _store.preview_transaction(sender_open_id) as tx:
+            pp = tx.get()
             if pp:
                 pp["preview_message_id"] = new_mid
+                tx.set(pp)
     return True
 
 
@@ -486,8 +503,8 @@ def post_or_patch_edit_card(sender_open_id: str, tenant_token: str, card: Dict[s
     if not sender_open_id or not tenant_token:
         return False
     mid = ""
-    with _P0_PREVIEWS_LOCK:
-        p = P0_PREVIEWS.get(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
         if p:
             mid = str(p.get("edit_message_id") or "").strip()
     if mid:
@@ -505,8 +522,9 @@ def post_or_patch_edit_card(sender_open_id: str, tenant_token: str, card: Dict[s
         log.error("edit card POST failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
     if new_mid:
-        with _P0_PREVIEWS_LOCK:
-            pp = P0_PREVIEWS.get(sender_open_id)
+        with _store.preview_transaction(sender_open_id) as tx:
+            pp = tx.get()
             if pp:
                 pp["edit_message_id"] = new_mid
+                tx.set(pp)
     return True
