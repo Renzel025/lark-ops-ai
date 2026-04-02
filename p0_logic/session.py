@@ -192,6 +192,43 @@ def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_sourc
         _send_dm_instruction_card_logged(oid, token, pr, lab, context="queued DM instruction")
 
 
+def release_standalone_overview_cancel(operator_open_id: str, token: str) -> None:
+    """
+    Standalone ``create overview`` preview was cancelled without sending: remove the active
+    slot so the operator can trigger ``create overview emergency|game`` again.
+    Does **not** repost the green instruction card for the cancelled flow (caller sends text only).
+    If another incident was queued, advance FIFO and post that instruction card.
+    """
+    oid = (operator_open_id or "").strip()
+    token = (token or "").strip()
+    if not oid:
+        return
+    next_item: Optional[Dict[str, Any]] = None
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if not active:
+            return
+        if str(active.get("chat_id") or "").strip() != STANDALONE_DM_SOURCE_CHAT_ID:
+            return
+        del _DM_ACTIVE_ITEM[oid]
+        q = list(_DM_INSTR_QUEUE.get(oid) or [])
+        if q:
+            next_item = q.pop(0)
+            _DM_INSTR_QUEUE[oid] = q
+            _DM_ACTIVE_ITEM[oid] = next_item
+    from . import drafts as _drafts
+
+    if next_item and token:
+        tc = str(next_item.get("target_chat") or "").strip()
+        cid = str(next_item.get("chat_id") or "").strip()
+        pr = str(next_item.get("priority") or "P0").strip().upper()
+        if pr not in ("P0", "P1"):
+            pr = "P0"
+        lab = str(next_item.get("label") or "").strip()
+        _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
+        _send_dm_instruction_card_logged(oid, token, pr, lab, context="queued DM after standalone cancel")
+
+
 def _safe_match_ref(val: Any, meeting_ref: str) -> bool:
     s = str(val or "").strip()
     return bool(s and meeting_ref and s == meeting_ref)

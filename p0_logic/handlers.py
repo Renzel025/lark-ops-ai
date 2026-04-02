@@ -605,6 +605,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             preview_mid = str(prev.get("preview_message_id") or "").strip()
             edit_mid = str(prev.get("edit_message_id") or "").strip()
             lab, pr = _dm_card_meta(sender_open_id)
+            src_inc = str(prev.get("source_incident_chat_id") or "").strip()
+            standalone_cancel = src_inc == _session.STANDALONE_DM_SOURCE_CHAT_ID
             if edit_mid:
                 st_e, body_e = _lark.recall_im_message(tenant_token, edit_mid)
                 if st_e != 200:
@@ -636,10 +638,18 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
-            # Recall removes the old preview from the thread; always post a fresh instruction card.
-            _send_instruction_card(
-                sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
-            )
+            if standalone_cancel:
+                _session.release_standalone_overview_cancel(sender_open_id, tenant_token)
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "🗑️ Preview cancelled trigger again create overview.",
+                )
+            else:
+                # Recall removes the old preview from the thread; repost instruction for live P0/P1 flows.
+                _send_instruction_card(
+                    sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
+                )
             return
         log.warning("Unknown card action: %s", action_name)
     except Exception as e:
