@@ -7,6 +7,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
@@ -18,6 +19,7 @@ from . import lark_client as _lark
 from . import session as _session
 from . import support as _support
 from . import text_processing as _text
+from .perf_log import perf_log
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -355,12 +357,23 @@ def _build_preview_from_draft(
     issue_source = "\n\n".join([x for x in [text_only, ocr_only] if x]).strip() or combined_text
     support_source = "\n\n".join([x for x in [text_only, ocr_only] if x]).strip() or combined_text
     impact = _text.build_impact_scope(issue_source)
-    support = _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
     zh_issue_pc: Optional[str] = None
     zh_impact_pc: Optional[str] = None
     triplet = None
-    if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
-        triplet = _groq.groq_overview_issue_and_zh_bilingual(issue_source, impact)
+    # Support map (Lark Sheets) and Groq one-shot are independent — run in parallel to cut wall time.
+    def _support_only() -> str:
+        return _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
+
+    def _groq_triplet_only() -> Optional[Tuple[str, str, str]]:
+        if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
+            return _groq.groq_overview_issue_and_zh_bilingual(issue_source, impact)
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_sup = pool.submit(_support_only)
+        f_groq = pool.submit(_groq_triplet_only)
+        support = f_sup.result()
+        triplet = f_groq.result()
     if triplet:
         issue_en_raw, zh_issue_pc, zh_impact_pc = triplet
         issue = (issue_en_raw or "").strip()
@@ -496,35 +509,39 @@ def post_or_patch_preview_card(sender_open_id: str, tenant_token: str, card: Dic
     Post Overview Preview to the user's DM, or PATCH the previous preview message (same as meeting card).
     Falls back to a new POST if PATCH fails (e.g. old card without update_multi).
     """
-    sender_open_id = (sender_open_id or "").strip()
-    if not sender_open_id or not tenant_token:
-        return False
-    mid = ""
-    with _store.preview_transaction(sender_open_id) as tx:
-        p = tx.get()
-        if p:
-            mid = str(p.get("preview_message_id") or "").strip()
-    if mid:
-        st, body = _lark.patch_interactive_card(tenant_token, mid, card)
-        if st == 200:
-            return True
-        log.warning(
-            "preview PATCH failed HTTP=%s open_id=%s — sending new card body=%s",
-            st,
-            sender_open_id,
-            (body or "")[:400],
-        )
-    st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
-    if st != 200:
-        log.error("preview POST failed HTTP=%s body=%s", st, (body or "")[:500])
-        return False
-    if new_mid:
+    t0 = time.perf_counter()
+    try:
+        sender_open_id = (sender_open_id or "").strip()
+        if not sender_open_id or not tenant_token:
+            return False
+        mid = ""
         with _store.preview_transaction(sender_open_id) as tx:
-            pp = tx.get()
-            if pp:
-                pp["preview_message_id"] = new_mid
-                tx.set(pp)
-    return True
+            p = tx.get()
+            if p:
+                mid = str(p.get("preview_message_id") or "").strip()
+        if mid:
+            st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+            if st == 200:
+                return True
+            log.warning(
+                "preview PATCH failed HTTP=%s open_id=%s — sending new card body=%s",
+                st,
+                sender_open_id,
+                (body or "")[:400],
+            )
+        st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
+        if st != 200:
+            log.error("preview POST failed HTTP=%s body=%s", st, (body or "")[:500])
+            return False
+        if new_mid:
+            with _store.preview_transaction(sender_open_id) as tx:
+                pp = tx.get()
+                if pp:
+                    pp["preview_message_id"] = new_mid
+                    tx.set(pp)
+        return True
+    finally:
+        perf_log("drafts post_or_patch_preview_card total", t0)
 
 
 def post_or_patch_edit_card(sender_open_id: str, tenant_token: str, card: Dict[str, Any]) -> bool:
@@ -532,32 +549,36 @@ def post_or_patch_edit_card(sender_open_id: str, tenant_token: str, card: Dict[s
     Post the edit-overview form once, then PATCH the same message so repeated Edit / Save
     does not stack multiple edit cards in the DM.
     """
-    sender_open_id = (sender_open_id or "").strip()
-    if not sender_open_id or not tenant_token:
-        return False
-    mid = ""
-    with _store.preview_transaction(sender_open_id) as tx:
-        p = tx.get()
-        if p:
-            mid = str(p.get("edit_message_id") or "").strip()
-    if mid:
-        st, body = _lark.patch_interactive_card(tenant_token, mid, card)
-        if st == 200:
-            return True
-        log.warning(
-            "edit card PATCH failed HTTP=%s open_id=%s — posting new card body=%s",
-            st,
-            sender_open_id,
-            (body or "")[:400],
-        )
-    st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
-    if st != 200:
-        log.error("edit card POST failed HTTP=%s body=%s", st, (body or "")[:500])
-        return False
-    if new_mid:
+    t0 = time.perf_counter()
+    try:
+        sender_open_id = (sender_open_id or "").strip()
+        if not sender_open_id or not tenant_token:
+            return False
+        mid = ""
         with _store.preview_transaction(sender_open_id) as tx:
-            pp = tx.get()
-            if pp:
-                pp["edit_message_id"] = new_mid
-                tx.set(pp)
-    return True
+            p = tx.get()
+            if p:
+                mid = str(p.get("edit_message_id") or "").strip()
+        if mid:
+            st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+            if st == 200:
+                return True
+            log.warning(
+                "edit card PATCH failed HTTP=%s open_id=%s — posting new card body=%s",
+                st,
+                sender_open_id,
+                (body or "")[:400],
+            )
+        st, body, new_mid = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
+        if st != 200:
+            log.error("edit card POST failed HTTP=%s body=%s", st, (body or "")[:500])
+            return False
+        if new_mid:
+            with _store.preview_transaction(sender_open_id) as tx:
+                pp = tx.get()
+                if pp:
+                    pp["edit_message_id"] = new_mid
+                    tx.set(pp)
+        return True
+    finally:
+        perf_log("drafts post_or_patch_edit_card total", t0)

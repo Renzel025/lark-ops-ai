@@ -81,11 +81,15 @@ def parse_im_message_id_from_response(body: str) -> str:
 
 
 def post_card_to_chat(chat_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str, str]:
-    url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
-    payload = {"receive_id": chat_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
-    r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
-    txt = r.text or ""
-    return r.status_code, txt, parse_im_message_id_from_response(txt)
+    t0 = time.perf_counter()
+    try:
+        url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
+        payload = {"receive_id": chat_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+        txt = r.text or ""
+        return r.status_code, txt, parse_im_message_id_from_response(txt)
+    finally:
+        perf_log("lark post_card_to_chat", t0)
 
 
 def recall_im_message(token: str, message_id: str) -> Tuple[int, str]:
@@ -96,9 +100,13 @@ def recall_im_message(token: str, message_id: str) -> Tuple[int, str]:
     message_id = (message_id or "").strip()
     if not message_id:
         return 400, "message_id empty"
-    url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
-    r = requests.delete(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
-    return r.status_code, (r.text or "")
+    t0 = time.perf_counter()
+    try:
+        url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
+        r = requests.delete(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+        return r.status_code, (r.text or "")
+    finally:
+        perf_log("lark recall_im_message", t0)
 
 
 def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) -> Tuple[int, str]:
@@ -109,14 +117,18 @@ def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) ->
     message_id = (message_id or "").strip()
     if not message_id:
         return 400, "message_id empty"
-    url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
-    payload = {"content": json.dumps(card, ensure_ascii=False)}
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=utf-8",
-    }
-    r = requests.patch(url, headers=headers, json=payload, **_timeout_kw())
-    return r.status_code, (r.text or "")
+    t0 = time.perf_counter()
+    try:
+        url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
+        payload = {"content": json.dumps(card, ensure_ascii=False)}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        r = requests.patch(url, headers=headers, json=payload, **_timeout_kw())
+        return r.status_code, (r.text or "")
+    finally:
+        perf_log("lark patch_interactive_card", t0)
 
 
 def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]:
@@ -127,11 +139,15 @@ def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]
 
 
 def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str, str]:
-    url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
-    payload = {"receive_id": open_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
-    r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
-    txt = r.text or ""
-    return r.status_code, txt, parse_im_message_id_from_response(txt)
+    t0 = time.perf_counter()
+    try:
+        url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
+        payload = {"receive_id": open_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+        txt = r.text or ""
+        return r.status_code, txt, parse_im_message_id_from_response(txt)
+    finally:
+        perf_log("lark post_card_to_open_id", t0)
 
 
 def get_group_chat_name(chat_id: str, token: str) -> str:

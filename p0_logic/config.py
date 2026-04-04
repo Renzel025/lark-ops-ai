@@ -207,23 +207,16 @@ def get_vc_meeting_topic_for_source_chat(chat_id: str) -> str:
     return f"{prefix}{tail}"
 
 
-LARK_BASE = "https://open-sg.larksuite.com/open-apis"
+# Open Platform API root (…/open-apis). Default Singapore; override with LARK_OPEN_API_BASE if needed.
+LARK_BASE = (os.getenv("LARK_OPEN_API_BASE") or "https://open-sg.larksuite.com/open-apis").strip().rstrip("/")
+_LARK_GLOBAL_FALLBACK = "https://open.larksuite.com/open-apis"
 
-SHEETS_BASES = [
-    "https://open-sg.larksuite.com/open-apis",
-    "https://open.larksuite.com/open-apis",
-]
+SHEETS_BASES = [LARK_BASE, _LARK_GLOBAL_FALLBACK]
 SHEETS_V2_BASES = SHEETS_BASES[:]
 
-VC_BASES = [
-    "https://open.larksuite.com/open-apis",
-    "https://open-sg.larksuite.com/open-apis",
-]
-
-IM_BASES = [
-    "https://open-sg.larksuite.com/open-apis",
-    "https://open.larksuite.com/open-apis",
-]
+# VC / IM: primary = same host as tenant token (SG by default); fallback = global endpoint.
+VC_BASES = [LARK_BASE, _LARK_GLOBAL_FALLBACK]
+IM_BASES = [LARK_BASE, _LARK_GLOBAL_FALLBACK]
 
 # Regex patterns
 OPEN_ID_RE = re.compile(r"^ou_[A-Za-z0-9]+$")

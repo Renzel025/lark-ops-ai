@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
@@ -30,8 +31,8 @@ DM_DRAFT_CLEARED_PROMPT = (
 )
 
 _DM_OVERVIEW_MEETING_ENDED_MSG = (
-    "ℹ️ The incident meeting is no longer active. You cannot build or send an overview for it. "
-    "Start a new **p0** or **p1** in the incident group if needed."
+    "No active meeting session for this overview — use manual create: "
+    "type **create overview emergency** or **create overview game**."
 )
 
 
@@ -400,10 +401,8 @@ def handle_dm_generate_overview(
             _lark.post_text_to_open_id(
                 sender_open_id,
                 tenant_token,
-                "⚠️ No incident target for this DM. In the incident group, type **p0** again, then open the new green "
-                "card and tap **Build overview** once (that attaches the group id for this server). "
-                "If you run multiple bot instances, set env **OVERVIEW_TARGET_GROUP_CHAT_ID** to your incident group "
-                "`oc_...` id.",
+                "⚠️ No incident target for this DM. Type **create overview emergency** or **create overview game**, "
+                "or **p0** in the group → green card → **Build overview**.",
             )
         else:
             log.info(
@@ -588,17 +587,27 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
             preview_mid = str(preview.get("preview_message_id") or "").strip()
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "✅ Overview sent to the target group chat.")
-            # Remove the preview card from the DM so "Send to group" cannot be tapped again (state was cleared).
-            if preview_mid:
-                st_pv, body_pv = _lark.recall_im_message(tenant_token, preview_mid)
-                if st_pv != 200:
-                    log.warning(
-                        "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
-                        st_pv,
-                        sender_open_id,
-                        (body_pv or "")[:400],
-                    )
+            # DM ack and preview recall are independent — overlap the two Lark calls after a successful group post.
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f_ok = ex.submit(
+                    _lark.post_text_to_open_id,
+                    sender_open_id,
+                    tenant_token,
+                    "✅ Overview sent to the target group chat.",
+                )
+                f_pv = (
+                    ex.submit(_lark.recall_im_message, tenant_token, preview_mid) if preview_mid else None
+                )
+                f_ok.result()
+                if f_pv:
+                    st_pv, body_pv = f_pv.result()
+                    if st_pv != 200:
+                        log.warning(
+                            "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
+                            st_pv,
+                            sender_open_id,
+                            (body_pv or "")[:400],
+                        )
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
