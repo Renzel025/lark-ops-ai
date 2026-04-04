@@ -5,16 +5,32 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Tuple
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from . import config as _config
 from .perf_log import perf_log
 
 log = logging.getLogger("lark-ops-ai")
+
+# Thread-local Session: keep-alive + pool per host. Safe under ThreadPoolExecutor (each thread has its own pool).
+_HTTP_TLS = threading.local()
+
+
+def _lark_http() -> requests.Session:
+    s = getattr(_HTTP_TLS, "session", None)
+    if s is None:
+        s = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=0)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        _HTTP_TLS.session = s
+    return s
 
 LARK_BASE = _config.LARK_BASE
 VC_BASES = _config.VC_BASES
@@ -41,7 +57,7 @@ def get_tenant_token(app_id: str, app_secret: str) -> str:
     t_fetch = time.perf_counter()
     try:
         url = f"{LARK_BASE}/auth/v3/tenant_access_token/internal"
-        resp = requests.post(url, json={"app_id": app_id, "app_secret": app_secret}, **_timeout_kw())
+        resp = _lark_http().post(url, json={"app_id": app_id, "app_secret": app_secret}, **_timeout_kw())
         data = resp.json() if resp.text else {}
         if data.get("code") != 0:
             log.error("Tenant token API error: %s", data.get("msg"))
@@ -64,7 +80,7 @@ def get_tenant_token(app_id: str, app_secret: str) -> str:
 def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:
     url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
     payload = {"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}
-    r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+    r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
     return r.status_code, (r.text or "")
 
 
@@ -85,7 +101,7 @@ def post_card_to_chat(chat_id: str, token: str, card: Dict[str, Any]) -> Tuple[i
     try:
         url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
         payload = {"receive_id": chat_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
-        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
         txt = r.text or ""
         return r.status_code, txt, parse_im_message_id_from_response(txt)
     finally:
@@ -103,7 +119,7 @@ def recall_im_message(token: str, message_id: str) -> Tuple[int, str]:
     t0 = time.perf_counter()
     try:
         url = f"{LARK_BASE}/im/v1/messages/{quote(message_id, safe='')}"
-        r = requests.delete(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+        r = _lark_http().delete(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
         return r.status_code, (r.text or "")
     finally:
         perf_log("lark recall_im_message", t0)
@@ -125,7 +141,7 @@ def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) ->
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
         }
-        r = requests.patch(url, headers=headers, json=payload, **_timeout_kw())
+        r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
         return r.status_code, (r.text or "")
     finally:
         perf_log("lark patch_interactive_card", t0)
@@ -134,7 +150,7 @@ def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) ->
 def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]:
     url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
     payload = {"receive_id": open_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}
-    r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+    r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
     return r.status_code, (r.text or "")
 
 
@@ -143,7 +159,7 @@ def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tupl
     try:
         url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
         payload = {"receive_id": open_id, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
-        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
         txt = r.text or ""
         return r.status_code, txt, parse_im_message_id_from_response(txt)
     finally:
@@ -157,7 +173,7 @@ def get_group_chat_name(chat_id: str, token: str) -> str:
         return ""
     url = f"{LARK_BASE}/im/v1/chats/{quote(chat_id, safe='')}"
     try:
-        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+        r = _lark_http().get(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
         j, _ = safe_json(r)
         if j.get("code") != 0:
             log.warning("get_group_chat_name chat_id=%s code=%s msg=%s", chat_id, j.get("code"), j.get("msg"))
@@ -190,7 +206,7 @@ def delete_vc_reserve(token: str, reserve_id: str) -> bool:
     for base in VC_BASES:
         url = f"{base}/vc/v1/reserves/{quote(reserve_id, safe='')}"
         try:
-            r = requests.delete(url, headers=headers, **_timeout_kw())
+            r = _lark_http().delete(url, headers=headers, **_timeout_kw())
             log.info("VC delete reserve try: %s -> %s", url, r.status_code)
             if r.status_code != 200:
                 last_err = f"HTTP={r.status_code} body={(r.text or '')[:200]}"
@@ -220,7 +236,7 @@ def end_vc_meeting(token: str, meeting_id: str) -> bool:
     for base in VC_BASES:
         url = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/end"
         try:
-            r = requests.post(url, headers=headers, json={}, **_timeout_kw())
+            r = _lark_http().post(url, headers=headers, json={}, **_timeout_kw())
             log.info("VC end meeting try: %s -> %s", url, r.status_code)
             if r.status_code != 200:
                 last_err = f"HTTP={r.status_code} body={(r.text or '')[:200]}"
@@ -264,7 +280,7 @@ def create_vc_reserve(token: str, meeting_topic: str = "") -> Dict[str, str]:
     for base in VC_BASES:
         url = f"{base}/vc/v1/reserves/apply?user_id_type=open_id"
         try:
-            r = requests.post(url, json=payload, headers=headers, **_timeout_kw())
+            r = _lark_http().post(url, json=payload, headers=headers, **_timeout_kw())
             log.info("VC Create(reserves) try: %s -> %s", url, r.status_code)
             if r.status_code != 200:
                 last_err = (r.text or "")[:200]
@@ -299,7 +315,7 @@ def read_sheets_values_batch(tenant_token: str, spreadsheet_token: str, range_st
         url = f"{base}/sheets/v2/spreadsheets/{spreadsheet_token}/values_batch_get"
         log.info("SUPPORT values_batch_get v2 url=%s ranges=%s", url, range_str)
         try:
-            r = requests.get(url, headers=headers, params={"ranges": range_str}, **_timeout_kw())
+            r = _lark_http().get(url, headers=headers, params={"ranges": range_str}, **_timeout_kw())
         except Exception as e:
             last = f"{url} exception={e}"
             continue
@@ -339,7 +355,7 @@ def download_image_bytes(tenant_token: str, image_key: str) -> bytes:
         for params, label in attempts:
             last_url = url
             try:
-                r = requests.get(url, headers=headers, params=params, **_timeout_kw())
+                r = _lark_http().get(url, headers=headers, params=params, **_timeout_kw())
             except Exception as e:
                 last_status = None
                 last_head = f"exception={e}"
@@ -377,7 +393,7 @@ def download_message_resource_bytes(tenant_token: str, message_id: str, file_key
         url = f"{base}/im/v1/messages/{safe_mid}/resources/{safe_key}"
         last_url = url
         try:
-            r = requests.get(url, headers=headers, params={"type": "image"}, **_timeout_kw())
+            r = _lark_http().get(url, headers=headers, params={"type": "image"}, **_timeout_kw())
         except Exception as e:
             last_status = None
             last_head = f"exception={e}"
@@ -405,7 +421,7 @@ def lookup_user_name_by_open_id(tenant_token: str, open_id: str) -> str:
     headers = {"Authorization": f"Bearer {tenant_token}"}
     url = f"{LARK_BASE}/contact/v3/users/{quote(open_id, safe='')}"
     try:
-        r = requests.get(url, headers=headers, params={"user_id_type": "open_id"}, **_timeout_kw())
+        r = _lark_http().get(url, headers=headers, params={"user_id_type": "open_id"}, **_timeout_kw())
         if r.status_code != 200:
             log.warning("lookup host name failed HTTP=%s body=%s", r.status_code, (r.text or "")[:300])
             return ""
