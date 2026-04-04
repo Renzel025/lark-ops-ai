@@ -446,7 +446,7 @@ def bind_live_meeting_id(meeting_ref: str) -> None:
     log.info("Bound live meeting_id=%s to chat_id=%s", meeting_ref, last_key)
 
 
-def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
+def end_p0_session(chat_id: str, token: Optional[str] = None, *, vc_end_meeting_id: str = "") -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
     if not sess and _session_disk.enabled():
@@ -462,8 +462,10 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
         _store_last_ended_snapshot(chat_id, meeting_no_snap, duration_snap, priority_snap, em_snap)
     if token and sess:
         # End the live VC on Lark so recording / Video Meeting Assistant can finalize (same as End in the client).
-        # Join webhooks often set ``meeting_id``; if missing, try ``meeting_no`` from reserve (9-digit) — many tenants accept it for ``/meetings/{id}/end``.
-        meeting_id = str(sess.get("meeting_id") or "").strip()
+        # Prefer ``vc_end_meeting_id`` from ``vc.meeting.meeting_ended_v1`` (``meeting.id`` long form); session may
+        # still hold meeting_no from bind before we read ``meeting.id`` from join events.
+        preferred = (vc_end_meeting_id or "").strip()
+        meeting_id = preferred or str(sess.get("meeting_id") or "").strip()
         meeting_no = str(sess.get("meeting_no") or "").strip()
         reserve_id = str(sess.get("reserve_id") or "").strip()
         vc_ended = False
@@ -471,7 +473,7 @@ def end_p0_session(chat_id: str, token: Optional[str] = None) -> None:
             vc_ended = _lark.end_vc_meeting(token, meeting_id)
             if not vc_ended:
                 log.warning("end_p0_session: end_vc_meeting failed meeting_id=%s", meeting_id)
-        if not vc_ended and meeting_no:
+        if not vc_ended and meeting_no and meeting_no != meeting_id:
             vc_ended = _lark.end_vc_meeting(token, meeting_no)
             if vc_ended:
                 log.info("end_p0_session: ended VC via meeting_no=%s", meeting_no)
@@ -568,12 +570,25 @@ def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -
     end_p0_session(chat_id, token)
 
 
-def end_p0_session_by_meeting_ref(meeting_ref: str, token: Optional[str] = None) -> None:
+def end_p0_session_by_meeting_ref(
+    meeting_ref: str,
+    token: Optional[str] = None,
+    *,
+    meeting_no_fallback: str = "",
+) -> None:
+    """Resolve session by long ``meeting.id`` or stored ref; optional ``meeting_no`` if join never bound."""
+    meeting_ref = (meeting_ref or "").strip()
     chat_id, _ = find_session_by_meeting_ref(meeting_ref)
+    if not chat_id and meeting_no_fallback:
+        chat_id, _ = find_session_by_meeting_no(meeting_no_fallback.strip())
     if not chat_id:
-        log.warning("No active p0 session found for meeting_ref=%s", meeting_ref)
+        log.warning(
+            "No active p0 session found for meeting_ref=%s meeting_no_fallback=%s",
+            meeting_ref,
+            meeting_no_fallback,
+        )
         return
-    end_p0_session(chat_id, token)
+    end_p0_session(chat_id, token, vc_end_meeting_id=meeting_ref)
 
 
 def cancel_p0_session_by_meeting_no(

@@ -337,7 +337,13 @@ def _lookup_lark_user_name(tenant_token: str, open_id: str = "", user_id: str = 
 
 
 def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
+    """
+    Lark VC payloads use ``meeting.id`` (long string) for API paths like ``/meetings/{id}/end``.
+    Do not rely on ``meeting.meeting_id`` — that key is often absent; we used to fall through to
+    ``meeting_no`` only and hit 404 on ``/meetings/{meeting_no}/end``.
+    """
     candidates = [
+        _deep_get(evt, "meeting", "id"),
         evt.get("meeting_id"),
         evt.get("meeting_no"),
         _deep_get(evt, "meeting", "meeting_id"),
@@ -475,8 +481,11 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
 
         if event_type == "vc.meeting.meeting_ended_v1":
             meeting_ref = _extract_vc_meeting_ref(evt)
-            log.info("vc.meeting.meeting_ended_v1 meeting_ref=%s", meeting_ref)
-            end_p0_session_by_meeting_ref(meeting_ref, tenant_token)
+            meeting_no_fb = str(_deep_get(evt, "meeting", "meeting_no") or "").strip()
+            log.info("vc.meeting.meeting_ended_v1 meeting_ref=%s meeting_no=%s", meeting_ref, meeting_no_fb)
+            end_p0_session_by_meeting_ref(
+                meeting_ref, tenant_token, meeting_no_fallback=meeting_no_fb
+            )
             return
 
         msg = evt.get("message", {}) or {}
