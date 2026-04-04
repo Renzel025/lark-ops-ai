@@ -45,6 +45,24 @@ def _ensure_dm_preview_incident_session(
     return False
 
 
+def _parallel_post_preview_and_edit(
+    sender_open_id: str,
+    tenant_token: str,
+    preview_card: Dict[str, Any],
+    edit_card: Optional[Dict[str, Any]],
+) -> Tuple[bool, bool]:
+    """
+    Post/patch the preview DM card and optionally the edit DM card in parallel.
+    Second bool is True when there was no edit card (nothing to patch).
+    """
+    if not edit_card:
+        return _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, preview_card), True
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fp = ex.submit(_drafts.post_or_patch_preview_card, sender_open_id, tenant_token, preview_card)
+        fe = ex.submit(_drafts.post_or_patch_edit_card, sender_open_id, tenant_token, edit_card)
+        return fp.result(), fe.result()
+
+
 def _deep_get(d: Any, *path: str) -> Any:
     cur = d
     for key in path:
@@ -576,38 +594,55 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Preview is incomplete.")
                 return
             edit_mid = str(preview.get("edit_message_id") or "").strip()
-            if edit_mid:
-                _lark.recall_im_message(tenant_token, edit_mid)
+            preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
+            # Post to group first: if this fails, operator still has preview + edit cards in the DM.
             st, body, _ = _lark.post_card_to_chat(target_chat, tenant_token, card)
             if st != 200:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
-            preview_mid = str(preview.get("preview_message_id") or "").strip()
-            # DM ack and preview recall are independent — overlap the two Lark calls after a successful group post.
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                f_ok = ex.submit(
-                    _lark.post_text_to_open_id,
-                    sender_open_id,
-                    tenant_token,
-                    "✅ Overview sent to the target group chat.",
-                )
-                f_pv = (
-                    ex.submit(_lark.recall_im_message, tenant_token, preview_mid) if preview_mid else None
-                )
-                f_ok.result()
-                if f_pv:
-                    st_pv, body_pv = f_pv.result()
-                    if st_pv != 200:
-                        log.warning(
-                            "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
-                            st_pv,
+            # Overlap DM ack + recall edit + recall preview (three independent Lark calls).
+            tasks: List[Tuple[str, Any]] = []
+            max_w = 1 + (1 if edit_mid else 0) + (1 if preview_mid else 0)
+            with ThreadPoolExecutor(max_workers=max(1, max_w)) as ex:
+                if edit_mid:
+                    tasks.append(("edit", ex.submit(_lark.recall_im_message, tenant_token, edit_mid)))
+                tasks.append(
+                    (
+                        "ok",
+                        ex.submit(
+                            _lark.post_text_to_open_id,
                             sender_open_id,
-                            (body_pv or "")[:400],
-                        )
+                            tenant_token,
+                            "✅ Overview sent to the target group chat.",
+                        ),
+                    )
+                )
+                if preview_mid:
+                    tasks.append(("pv", ex.submit(_lark.recall_im_message, tenant_token, preview_mid)))
+                for kind, fut in tasks:
+                    r = fut.result()
+                    if kind == "edit":
+                        st_e, body_e = r
+                        if st_e != 200:
+                            log.warning(
+                                "send_preview: edit card recall failed HTTP=%s open_id=%s body=%s",
+                                st_e,
+                                sender_open_id,
+                                (body_e or "")[:400],
+                            )
+                    elif kind == "pv":
+                        st_pv, body_pv = r
+                        if st_pv != 200:
+                            log.warning(
+                                "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
+                                st_pv,
+                                sender_open_id,
+                                (body_pv or "")[:400],
+                            )
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
@@ -642,16 +677,21 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 target_chat=target_chat,
                 source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
-            if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
-                _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
-                return
             if str(new_preview.get("edit_message_id") or "").strip():
                 lab2 = _session.get_source_chat_label_for_target_chat(target_chat)
                 edit_c = _cards.build_edit_overview_card(
                     new_issue, impact, support, priority=pri, source_chat_label=lab2, start_epoch=se
                 )
-                if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_c):
+                ok_p, ok_e = _parallel_post_preview_and_edit(sender_open_id, tenant_token, card, edit_c)
+                if not ok_p:
+                    _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
+                    return
+                if not ok_e:
                     log.warning("generate_again: failed to refresh edit card open_id=%s", sender_open_id)
+            else:
+                if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
+                    _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to update preview card.")
+                    return
             return
         if action_name == "edit_preview":
             _drafts.set_preview_edit_waiting(sender_open_id, True)
@@ -710,9 +750,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 target_chat=target_chat,
                 source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
             )
-            if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
-                _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
-                return
             edit_refresh = _cards.build_edit_overview_card(
                 new_issue,
                 new_impact,
@@ -722,8 +759,16 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 start_epoch=se2,
             )
             if str(new_preview.get("edit_message_id") or "").strip():
-                if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh):
+                ok_p, ok_e = _parallel_post_preview_and_edit(sender_open_id, tenant_token, card, edit_refresh)
+                if not ok_p:
+                    _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
+                    return
+                if not ok_e:
                     log.warning("save_edit: failed to refresh edit card open_id=%s", sender_open_id)
+            else:
+                if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
+                    _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
+                    return
             return
         if action_name == "back_to_preview":
             edit_mid = _drafts.take_edit_message_id(sender_open_id)
