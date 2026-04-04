@@ -446,7 +446,13 @@ def bind_live_meeting_id(meeting_ref: str) -> None:
     log.info("Bound live meeting_id=%s to chat_id=%s", meeting_ref, last_key)
 
 
-def end_p0_session(chat_id: str, token: Optional[str] = None, *, vc_end_meeting_id: str = "") -> None:
+def end_p0_session(
+    chat_id: str,
+    token: Optional[str] = None,
+    *,
+    vc_end_meeting_id: str = "",
+    skip_vc_end: bool = False,
+) -> None:
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
     if not sess and _session_disk.enabled():
@@ -462,23 +468,26 @@ def end_p0_session(chat_id: str, token: Optional[str] = None, *, vc_end_meeting_
         _store_last_ended_snapshot(chat_id, meeting_no_snap, duration_snap, priority_snap, em_snap)
     if token and sess:
         # End the live VC on Lark so recording / Video Meeting Assistant can finalize (same as End in the client).
-        # Prefer ``vc_end_meeting_id`` from ``vc.meeting.meeting_ended_v1`` (``meeting.id`` long form); session may
-        # still hold meeting_no from bind before we read ``meeting.id`` from join events.
+        # ``vc.meeting.meeting_ended_v1`` fires *after* the meeting is already over — POST .../meetings/{id}/end then
+        # returns 404; skip those calls and only clean up reserve + cards.
         preferred = (vc_end_meeting_id or "").strip()
         meeting_id = preferred or str(sess.get("meeting_id") or "").strip()
         meeting_no = str(sess.get("meeting_no") or "").strip()
         reserve_id = str(sess.get("reserve_id") or "").strip()
         vc_ended = False
-        if meeting_id:
-            vc_ended = _lark.end_vc_meeting(token, meeting_id)
-            if not vc_ended:
-                log.warning("end_p0_session: end_vc_meeting failed meeting_id=%s", meeting_id)
-        if not vc_ended and meeting_no and meeting_no != meeting_id:
-            vc_ended = _lark.end_vc_meeting(token, meeting_no)
-            if vc_ended:
-                log.info("end_p0_session: ended VC via meeting_no=%s", meeting_no)
-            else:
-                log.warning("end_p0_session: end_vc_meeting failed meeting_no=%s", meeting_no)
+        if not skip_vc_end:
+            if meeting_id:
+                vc_ended = _lark.end_vc_meeting(token, meeting_id)
+                if not vc_ended:
+                    log.warning("end_p0_session: end_vc_meeting failed meeting_id=%s", meeting_id)
+            if not vc_ended and meeting_no and meeting_no != meeting_id:
+                vc_ended = _lark.end_vc_meeting(token, meeting_no)
+                if vc_ended:
+                    log.info("end_p0_session: ended VC via meeting_no=%s", meeting_no)
+                else:
+                    log.warning("end_p0_session: end_vc_meeting failed meeting_no=%s", meeting_no)
+        else:
+            log.info("end_p0_session: skip_vc_end=1 (meeting already ended on Lark)")
         if not vc_ended and reserve_id:
             _lark.delete_vc_reserve(token, reserve_id)
         start_epoch = int(sess.get("start_epoch") or 0)
@@ -588,7 +597,7 @@ def end_p0_session_by_meeting_ref(
             meeting_no_fallback,
         )
         return
-    end_p0_session(chat_id, token, vc_end_meeting_id=meeting_ref)
+    end_p0_session(chat_id, token, vc_end_meeting_id=meeting_ref, skip_vc_end=True)
 
 
 def cancel_p0_session_by_meeting_no(
