@@ -550,25 +550,36 @@ def _launch_args() -> list[str]:
 
 async def _pick_page_for_slack(context: BrowserContext) -> Page:
     """
-    Persistent profiles often restore multiple tabs; the first tab can stay ``about:blank``
-    while Slack lives in another tab — using ``pages[0]`` alone leaves navigation on a
-    blank window (what you see in VNC).
+    Prefer a tab that already shows Slack (multi-tab restore). Otherwise use the first
+    tab — ``goto`` will load the channel even if it starts as ``about:blank``.
+
+    Do **not** close all ``about:blank`` tabs: that can leave **zero** tabs, and then
+    ``context.new_page()`` fails on some Linux/VNC setups (Target.createTarget).
     """
     pages = list(context.pages)
     for pg in pages:
         u = (pg.url or "").lower()
         if "slack.com" in u and "about:blank" not in u:
-            return pg
-    for pg in pages:
-        u = pg.url or ""
-        if u in ("", "about:blank"):
             try:
-                await pg.close()
+                await pg.bring_to_front()
             except Exception:
                 pass
-    if context.pages:
-        return context.pages[0]
-    return await context.new_page()
+            return pg
+    if pages:
+        page = pages[0]
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+        return page
+    try:
+        return await context.new_page()
+    except Exception as e:
+        raise RuntimeError(
+            "No tab exists and BrowserContext.new_page() failed. "
+            "Common on VNC if the browser has no open window — try DISPLAY=:0 or :1. "
+            f"Underlying: {e}"
+        ) from e
 
 
 async def _route_block_heavy(route) -> None:

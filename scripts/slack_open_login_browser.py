@@ -21,22 +21,29 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 
 def _pick_page_for_slack(ctx: BrowserContext) -> Page:
-    """Avoid using a stale ``about:blank`` tab when the profile restores multiple windows."""
+    """Prefer Slack tab; else first tab (goto loads URL). Do not close all blanks — new_page() may fail on VNC."""
     pages = list(ctx.pages)
     for pg in pages:
         u = (pg.url or "").lower()
         if "slack.com" in u and "about:blank" not in u:
-            return pg
-    for pg in pages:
-        u = pg.url or ""
-        if u in ("", "about:blank"):
             try:
-                pg.close()
+                pg.bring_to_front()
             except Exception:
                 pass
-    if ctx.pages:
-        return ctx.pages[0]
-    return ctx.new_page()
+            return pg
+    if pages:
+        page = pages[0]
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+        return page
+    try:
+        return ctx.new_page()
+    except Exception as e:
+        raise RuntimeError(
+            "No tab and new_page() failed — check DISPLAY in VNC. Underlying: " + str(e)
+        ) from e
 
 
 def main() -> None:
