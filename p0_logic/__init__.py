@@ -110,6 +110,10 @@ get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incid
 get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
 get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
 get_slack_incident_notify_webhook_for_incident_chat = config.get_slack_incident_notify_webhook_for_incident_chat
+get_slack_bot_token = config.get_slack_bot_token
+get_slack_app_id = config.get_slack_app_id
+get_slack_bot_user_id = config.get_slack_bot_user_id
+get_slack_api_channel_id_for_incident_chat = config.get_slack_api_channel_id_for_incident_chat
 
 __all__ = [
     "P0_SESSIONS",
@@ -191,4 +195,8 @@ __all__ = [
     "get_slack_session_dir_for_incident_chat",
     "get_slack_overview_webhook_for_incident_chat",
     "get_slack_incident_notify_webhook_for_incident_chat",
+    "get_slack_bot_token",
+    "get_slack_app_id",
+    "get_slack_bot_user_id",
+    "get_slack_api_channel_id_for_incident_chat",
 ]

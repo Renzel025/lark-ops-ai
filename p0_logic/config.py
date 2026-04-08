@@ -553,3 +553,46 @@ def get_slack_incident_notify_webhook_for_incident_chat(chat_id: str) -> str:
         if v:
             return v
     return get_slack_overview_webhook_for_incident_chat(chat_id)
+
+
+def get_slack_bot_token() -> str:
+    """
+    Slack **Bot User OAuth Token** (``xoxb-...``) for ``chat.postMessage``.
+
+    Env: ``SLACK_BOT_TOKEN`` or ``SLACK_BOT_USER_OAUTH_TOKEN`` (either name).
+    Scopes: at least ``chat:write``; bot must be in the target channel.
+    """
+    reload_env_runtime()
+    return (os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_BOT_USER_OAUTH_TOKEN") or "").strip()
+
+
+def get_slack_app_id() -> str:
+    """Optional ``App ID`` from api.slack.com (for your records only; not sent on every API call)."""
+    reload_env_runtime()
+    return (os.getenv("SLACK_APP_ID") or "").strip()
+
+
+def get_slack_bot_user_id() -> str:
+    """
+    Bot **Member ID** (``U...``) for ``<@U...>`` mentions in outgoing messages.
+
+    Slack: open the bot profile → **Copy member ID** (starts with ``U``).
+    """
+    reload_env_runtime()
+    return (os.getenv("SLACK_BOT_USER_ID") or "").strip()
+
+
+def get_slack_api_channel_id_for_incident_chat(chat_id: str) -> str:
+    """
+    Slack **channel ID** (``C...``) for ``chat.postMessage``, per Lark incident ``oc_``.
+
+    Env: ``SLACK_API_CHANNEL_MAP=oc_aaa=C0AAAA,oc_bbb=C0BBBB``
+    (same comma-separated shape as other maps).
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    if not cid:
+        return ""
+    raw = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
+    m = _parse_incident_keyed_url_map(raw)
+    return (m.get(cid) or "").strip()

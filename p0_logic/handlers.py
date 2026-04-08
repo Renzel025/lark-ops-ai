@@ -604,13 +604,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
-            wh = _config.get_slack_overview_webhook_for_incident_chat(src_inc)
-            if wh and md:
+            if md and src_inc:
                 try:
-                    from .slack_bridge import post_overview_to_slack_webhook
+                    from .slack_bridge import post_text_to_slack_for_incident
 
-                    if not post_overview_to_slack_webhook(wh, md):
-                        log.warning("send_preview: Slack overview webhook did not return success")
+                    if not post_text_to_slack_for_incident(src_inc, md):
+                        log.warning(
+                            "send_preview: Slack mirror failed (set SLACK_BOT_TOKEN+SLACK_API_CHANNEL_MAP or SLACK_OVERVIEW_WEBHOOK_MAP)"
+                        )
                 except Exception as e:
                     log.warning("send_preview: Slack overview mirror failed: %s", e)
             if src_inc and _config.slack_huddle_on_overview_send():

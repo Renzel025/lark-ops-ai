@@ -19,6 +19,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import requests
+
 from . import config as _config
 
 log = logging.getLogger("lark-ops-ai")
@@ -42,6 +44,74 @@ def _truthy_env(name: str) -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _outgoing_slack_text(text: str) -> str:
+    """
+    Optional prefix: ``SLACK_MESSAGE_PREFIX`` (full control, e.g. ``<!channel>``) or
+    ``SLACK_BOT_USER_ID`` → prepends ``<@U...>`` so the bot is pinged in-channel.
+    """
+    _config.reload_env_runtime()
+    t = (text or "").strip()
+    if not t:
+        return t
+    custom = (os.getenv("SLACK_MESSAGE_PREFIX") or "").strip()
+    if custom:
+        return f"{custom}\n{t}"
+    uid = _config.get_slack_bot_user_id()
+    if uid.startswith("U"):
+        return f"<@{uid}>\n{t}"
+    return t
+
+
+def post_slack_chat_api_message(incident_chat_id: str, text: str) -> bool:
+    """
+    ``chat.postMessage`` via Slack Web API (Bot token + channel ID). Preferred when configured.
+
+    Requires ``SLACK_BOT_TOKEN`` + ``SLACK_API_CHANNEL_MAP`` for this ``oc_``.
+    """
+    token = _config.get_slack_bot_token()
+    channel = _config.get_slack_api_channel_id_for_incident_chat(incident_chat_id)
+    body = _outgoing_slack_text(text)
+    if not token or not channel or not body:
+        return False
+    if len(body) > 38000:
+        body = body[:37900] + "\n\n…(truncated)"
+    try:
+        r = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json={"channel": channel, "text": body},
+            timeout=30,
+        )
+        data = r.json()
+        if data.get("ok"):
+            return True
+        log.warning(
+            "Slack chat.postMessage failed: error=%s response=%s",
+            data.get("error"),
+            str(data)[:500],
+        )
+        return False
+    except Exception as e:
+        log.warning("Slack chat.postMessage request failed: %s", e)
+        return False
+
+
+def post_text_to_slack_for_incident(incident_chat_id: str, text: str) -> bool:
+    """
+    Post plain text to Slack: try **Web API** first, then Incoming Webhook (overview map).
+    """
+    cid = (incident_chat_id or "").strip()
+    if post_slack_chat_api_message(cid, text):
+        return True
+    wh = _config.get_slack_overview_webhook_for_incident_chat(cid)
+    if wh:
+        return post_overview_to_slack_webhook(wh, text)
+    return False
+
+
 def post_overview_to_slack_webhook(webhook_url: str, markdown: str) -> bool:
     """
     POST overview text to a Slack Incoming Webhook. Returns True on HTTP 200.
@@ -49,7 +119,7 @@ def post_overview_to_slack_webhook(webhook_url: str, markdown: str) -> bool:
     url = (webhook_url or "").strip()
     if not url:
         return False
-    body = (markdown or "").strip()
+    body = _outgoing_slack_text(markdown)
     if not body:
         return False
     # Incoming webhooks: keep under Slack's practical limits
@@ -85,13 +155,6 @@ def notify_slack_p0_started(
     Uses ``SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP`` or ``SLACK_OVERVIEW_WEBHOOK_MAP``.
     """
     cid = (incident_chat_id or "").strip()
-    wh = _config.get_slack_incident_notify_webhook_for_incident_chat(cid)
-    if not wh:
-        log.info(
-            "notify_slack_p0_started: no webhook for chat_id=%s (set SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP or SLACK_OVERVIEW_WEBHOOK_MAP)",
-            cid,
-        )
-        return
     pr = (priority or "P0").strip().upper()
     label = (source_chat_label or "").strip() or cid
     channel_url = _config.get_slack_channel_url_for_incident_chat(cid)
@@ -126,10 +189,18 @@ def notify_slack_p0_started(
         f"chat_id: {cid}\n"
         f"{huddle_line}"
     )
-    if post_overview_to_slack_webhook(wh, text):
-        log.info("notify_slack_p0_started: webhook ok chat_id=%s", cid)
-    else:
-        log.warning("notify_slack_p0_started: webhook failed chat_id=%s", cid)
+    if post_slack_chat_api_message(cid, text):
+        log.info("notify_slack_p0_started: Slack Web API ok chat_id=%s", cid)
+        return
+    wh = _config.get_slack_incident_notify_webhook_for_incident_chat(cid)
+    if wh and post_overview_to_slack_webhook(wh, text):
+        log.info("notify_slack_p0_started: Incoming Webhook ok chat_id=%s", cid)
+        return
+    log.warning(
+        "notify_slack_p0_started: failed chat_id=%s — set SLACK_BOT_TOKEN + SLACK_API_CHANNEL_MAP "
+        "or SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP / SLACK_OVERVIEW_WEBHOOK_MAP",
+        cid,
+    )
 
 
 def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> None:
