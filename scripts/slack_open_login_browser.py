@@ -20,6 +20,29 @@ import sys
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 
+def _maybe_apply_stealth_sync(ctx: BrowserContext) -> None:
+    if os.getenv("SLACK_PLAYWRIGHT_STEALTH_DISABLE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return
+    try:
+        from playwright_stealth import Stealth
+    except ImportError:
+        print(
+            "WARN: pip install playwright-stealth for anti-detection hooks.",
+            file=sys.stderr,
+        )
+        return
+    try:
+        Stealth().apply_stealth_sync(ctx)
+        print("playwright-stealth: applied to persistent context.", flush=True)
+    except Exception as e:
+        print(f"WARN: playwright-stealth apply failed: {e}", file=sys.stderr)
+
+
 def _pick_page_for_slack(ctx: BrowserContext) -> Page:
     """Prefer Slack tab; else first tab (goto loads URL). Do not close all blanks — new_page() may fail on VNC."""
     pages = list(ctx.pages)
@@ -62,6 +85,7 @@ def main() -> None:
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",
+        "--disable-blink-features=AutomationControlled",
     ]
 
     with sync_playwright() as p:
@@ -71,6 +95,7 @@ def main() -> None:
             viewport={"width": 1366, "height": 768},
             args=args,
         )
+        _maybe_apply_stealth_sync(ctx)
         for origin in ("https://app.slack.com", "https://slack.com"):
             try:
                 ctx.grant_permissions(

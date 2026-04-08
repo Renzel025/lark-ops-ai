@@ -374,6 +374,29 @@ async def click_huddle_logo(page: Page) -> bool:
     return True
 
 
+async def _maybe_apply_stealth_async(context: BrowserContext) -> None:
+    """
+    Reduce automation fingerprints (navigator.webdriver, etc.). Optional: set
+    SLACK_PLAYWRIGHT_STEALTH=0 to skip. Requires: pip install playwright-stealth
+    """
+    if _env_truthy("SLACK_PLAYWRIGHT_STEALTH_DISABLE"):
+        return
+    try:
+        from playwright_stealth import Stealth
+    except ImportError:
+        print(
+            "WARN: playwright-stealth not installed; "
+            "pip install playwright-stealth for anti-detection hooks.",
+            file=sys.stderr,
+        )
+        return
+    try:
+        await Stealth().apply_stealth_async(context)
+        print("playwright-stealth: applied to persistent context.", flush=True)
+    except Exception as e:
+        print(f"WARN: playwright-stealth apply failed: {e}", file=sys.stderr)
+
+
 async def _grant_slack_media_permissions(context: BrowserContext) -> None:
     """Huddle pre-join UI needs camera/mic; without grants + fake devices the popup can stay blank."""
     for origin in ("https://app.slack.com", "https://slack.com"):
@@ -623,6 +646,8 @@ def _launch_args() -> list[str]:
         "--disable-background-networking",
         "--password-store=basic",
         "--use-mock-keychain",
+        # Often used with stealth to hide automation (playwright-stealth adds more)
+        "--disable-blink-features=AutomationControlled",
     ]
 
 
@@ -695,6 +720,7 @@ async def run_flow() -> None:
                 launch_kw["executable_path"] = CHROME_PATH
 
             context = await p.chromium.launch_persistent_context(**launch_kw)
+            await _maybe_apply_stealth_async(context)
             await _grant_slack_media_permissions(context)
         except Exception as e:
             print(f"ERROR: Failed to launch browser: {e}", file=sys.stderr)
