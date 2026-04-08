@@ -1021,5 +1021,11 @@ def start_p0(
         notify_slack_p0_started(chat_id, priority, chat_label)
         if _config.slack_huddle_on_p0_start():
             enqueue_slack_huddle_automation(chat_id, priority)
+        else:
+            log.warning(
+                "start_p0: Slack huddle NOT started (SLACK_HUDDLE_ON_P0_START=0) chat_id=%s — "
+                "set to 1 and restart to enable Playwright huddle on meeting start",
+                chat_id,
+            )
     except Exception as e:
         log.warning("start_p0: slack bridge hook failed: %s", e)

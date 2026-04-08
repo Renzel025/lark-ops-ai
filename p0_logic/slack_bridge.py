@@ -27,6 +27,21 @@ log = logging.getLogger("lark-ops-ai")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SLACK_SCRIPT = _REPO_ROOT / "scripts" / "slack_huddle_invite_all.py"
+
+
+def _python_for_slack_subprocess() -> str:
+    """
+    Interpreter that has ``playwright`` installed. Defaults to ``sys.executable`` (same as the bot).
+
+    If the bot runs with a venv but subprocess would pick system Python without playwright, set:
+    ``SLACK_SUBPROCESS_PYTHON=/path/to/venv/bin/python``
+    """
+    explicit = (
+        os.getenv("SLACK_SUBPROCESS_PYTHON") or os.getenv("SLACK_PYTHON_EXECUTABLE") or ""
+    ).strip()
+    if explicit:
+        return explicit
+    return sys.executable
 # Keep subprocess log file objects alive so the child can keep writing after Popen returns.
 _SLACK_PLAYWRIGHT_LOG_HANDLES: list[object] = []
 
@@ -150,44 +165,17 @@ def notify_slack_p0_started(
     source_chat_label: str,
 ) -> None:
     """
-    POST to Incoming Webhook: Lark P0/P1 declared + whether huddle Playwright will run.
+    Short Slack alert when P0/P1 is declared in Lark (Web API or webhook fallback).
 
-    Uses ``SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP`` or ``SLACK_OVERVIEW_WEBHOOK_MAP``.
+    Huddle Playwright runs separately; operators use server logs if automation fails.
     """
     cid = (incident_chat_id or "").strip()
     pr = (priority or "P0").strip().upper()
-    label = (source_chat_label or "").strip() or cid
-    channel_url = _config.get_slack_channel_url_for_incident_chat(cid)
-    session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
-    auto = _config.slack_automation_enabled()
-    on_p0 = _config.slack_huddle_on_p0_start()
-    will_run = (
-        auto
-        and on_p0
-        and bool(channel_url)
-        and bool(session_dir)
-        and _SLACK_SCRIPT.is_file()
-    )
-    if will_run:
-        huddle_line = "Slack huddle automation: STARTING NOW (headless Playwright → channel in LARK_SLACK_CHANNEL_URL_MAP)."
-    else:
-        reasons: list[str] = []
-        if not auto:
-            reasons.append("SLACK_AUTOMATION_ENABLED=0")
-        if not on_p0:
-            reasons.append("SLACK_HUDDLE_ON_P0_START=0")
-        if not channel_url:
-            reasons.append("missing LARK_SLACK_CHANNEL_URL_MAP / SLACK_CHANNEL_URL for this oc_")
-        if not session_dir:
-            reasons.append("missing SESSION_DIR / SLACK_SESSION_DIR")
-        if not _SLACK_SCRIPT.is_file():
-            reasons.append("scripts/slack_huddle_invite_all.py missing")
-        huddle_line = "Slack huddle automation: NOT started. " + ("; ".join(reasons) if reasons else "unknown")
+    label = (source_chat_label or "").strip() or "incident group"
     text = (
         f"Lark: {pr} declared in incident group\n"
         f"Group: {label}\n"
-        f"chat_id: {cid}\n"
-        f"{huddle_line}"
+        "Calling all members on this channel"
     )
     if post_slack_chat_api_message(cid, text):
         log.info("notify_slack_p0_started: Slack Web API ok chat_id=%s", cid)
@@ -208,11 +196,13 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
     Fire-and-forget subprocess: ``scripts/slack_huddle_invite_all.py`` with env from config.
 
     No-op if automation disabled, unmapped incident chat, or missing channel URL / session dir.
+    **Tail** ``logs/slack_huddle_playwright.log`` (or ``SLACK_PLAYWRIGHT_LOG``) for script stdout/stderr.
     """
     cid = (incident_chat_id or "").strip()
+    log_path = _playwright_subprocess_log_path()
     if not _config.slack_automation_enabled():
         log.warning(
-            "enqueue_slack_huddle_automation skipped: SLACK_AUTOMATION_ENABLED=0 chat_id=%s",
+            "slack_huddle SKIP chat_id=%s reason=SLACK_AUTOMATION_ENABLED=0 | fix: set SLACK_AUTOMATION_ENABLED=1",
             cid,
         )
         return
@@ -220,19 +210,23 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
     session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
     if not channel_url:
         log.warning(
-            "enqueue_slack_huddle_automation skipped: no Slack channel URL for chat_id=%s "
-            "(set LARK_SLACK_CHANNEL_URL_MAP or SLACK_CHANNEL_URL + INCIDENT_GROUP_IDS)",
+            "slack_huddle SKIP chat_id=%s reason=no Slack deep link | fix: LARK_SLACK_CHANNEL_URL_MAP=oc_...=https://app.slack.com/client/T/C/ "
+            "or SLACK_CHANNEL_URL if single group; oc_ must match this incident",
             cid,
         )
         return
     if not session_dir:
         log.warning(
-            "enqueue_slack_huddle_automation skipped: SESSION_DIR / SLACK_SESSION_DIR empty chat_id=%s",
+            "slack_huddle SKIP chat_id=%s reason=no SESSION_DIR | fix: SESSION_DIR=/path/to/chromium/profile",
             cid,
         )
         return
     if not _SLACK_SCRIPT.is_file():
-        log.warning("Slack huddle script missing: %s", _SLACK_SCRIPT)
+        log.warning(
+            "slack_huddle SKIP chat_id=%s reason=script missing path=%s | fix: deploy repo with scripts/slack_huddle_invite_all.py",
+            cid,
+            _SLACK_SCRIPT,
+        )
         return
     env = os.environ.copy()
     env["SESSION_DIR"] = session_dir
@@ -249,12 +243,14 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
         if v:
             env[key] = v
     pr = (priority or "P0").strip().upper()
-    log_path = _playwright_subprocess_log_path()
+    py_exe = _python_for_slack_subprocess()
     log.info(
-        "enqueue_slack_huddle_automation chat_id=%s priority=%s session_dir=%s log=%s",
+        "slack_huddle STARTING chat_id=%s priority=%s python=%s session_dir=%s channel_url=%s log_file=%s",
         cid,
         pr,
+        py_exe,
         session_dir,
+        channel_url[:80] + ("..." if len(channel_url) > 80 else ""),
         log_path,
     )
     try:
@@ -262,11 +258,11 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         lf = open(log_path, "a", encoding="utf-8", buffering=1)
         _SLACK_PLAYWRIGHT_LOG_HANDLES.append(lf)
-        lf.write(f"\n===== {ts} chat_id={cid} priority={pr} =====\n")
+        lf.write(f"\n===== {ts} chat_id={cid} priority={pr} python={py_exe} =====\n")
         lf.flush()
         # close_fds must be False so the child's inherited stdout fd is not closed on exec.
-        subprocess.Popen(
-            [sys.executable, str(_SLACK_SCRIPT)],
+        proc = subprocess.Popen(
+            [py_exe, str(_SLACK_SCRIPT)],
             env=env,
             cwd=str(_REPO_ROOT),
             stdout=lf,
@@ -274,5 +270,17 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
             start_new_session=True,
             close_fds=False,
         )
+        log.info(
+            "slack_huddle subprocess LAUNCHED pid=%s chat_id=%s — tail stderr/stdout: %s",
+            proc.pid,
+            cid,
+            log_path,
+        )
     except Exception as e:
-        log.warning("enqueue_slack_huddle_automation failed: %s", e)
+        log.error(
+            "slack_huddle LAUNCH FAILED chat_id=%s error=%s | check permissions on %s",
+            cid,
+            e,
+            log_path,
+            exc_info=True,
+        )
