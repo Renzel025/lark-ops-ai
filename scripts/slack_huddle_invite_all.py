@@ -6,7 +6,7 @@ Flow:
   1) Open Slack channel (persistent browser profile)
   2) Click headset (huddle)
   3) Scroll to latest / bottom (virtualized list)
-  4) Find & click "invite someone" (button.c-link--button)
+  4) Find & click huddle "invite" CTA (English / Chinese / SLACK_INVITE_MATCH_EXTRA)
   5) Modal: @channel row
   6) Wait Send Invite enabled → click
 
@@ -27,6 +27,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -43,6 +44,63 @@ HARD_TIMEOUT_MS = int(os.getenv("HARD_TIMEOUT_MS", "180000"))
 CHROME_PATH = (os.getenv("CHROME_PATH") or "").strip() or None
 SESSION_DIR = (os.getenv("SESSION_DIR") or "").strip()
 SLACK_CHANNEL_URL = (os.getenv("SLACK_CHANNEL_URL") or "").strip()
+# Optional: comma-separated substrings (lowercase) to match invite CTA, e.g. non-English Slack UI.
+_SLACK_INVITE_MATCH_EXTRA = [
+    x.strip().lower()
+    for x in (os.getenv("SLACK_INVITE_MATCH_EXTRA") or "").split(",")
+    if x.strip()
+]
+
+
+def _js_invite_match_snippet() -> str:
+    """Shared JS: `match(el)` + `gatherCandidates()` for huddle invite CTA (not workspace invite)."""
+    ex = json.dumps(_SLACK_INVITE_MATCH_EXTRA)
+    return f"""
+  const extra = {ex};
+  function match(el) {{
+    const t = (el.innerText || el.textContent || "").trim().toLowerCase();
+    const a = (el.getAttribute("aria-label") || "").toLowerCase();
+    const qa = (el.getAttribute("data-qa") || "").toLowerCase();
+    const combined = t + " " + a + " " + qa;
+    if (t.length > 180) return false;
+    if (combined.includes("invite someone")) return true;
+    if (combined.includes("invite people")) return true;
+    if (t.includes("invite") && (t.includes("someone") || t.includes("people"))) return true;
+    if (a.includes("invite") && (a.includes("someone") || a.includes("people") || a.includes("huddle"))) return true;
+    if (combined.includes("邀请")) return true;
+    for (const s of extra) {{ if (s && combined.includes(s)) return true; }}
+    return false;
+  }}
+  function gatherCandidates() {{
+    const raw = Array.from(document.querySelectorAll(
+      'button, a[role="button"], [role="button"], ' +
+      'button.c-link--button, a.c-link--button, ' +
+      '[data-qa*="invite"], [data-qa*="huddle_invite"]'
+    ));
+    return raw.filter((el) => {{
+      const t = (el.innerText || el.textContent || "").trim();
+      return t.length > 0 && t.length < 200;
+    }});
+  }}"""
+
+
+def _js_invite_button_visible() -> str:
+    inner = _js_invite_match_snippet()
+    return f"""() => {{{inner}
+  return gatherCandidates().some(match);
+}}"""
+
+
+def _js_invite_button_click() -> str:
+    inner = _js_invite_match_snippet()
+    return f"""() => {{{inner}
+  let el = gatherCandidates().find(match);
+  if (!el) return false;
+  const clickable = el.closest("button, a[role='button'], [role='button']") || el;
+  clickable.scrollIntoView({{ block: "center", inline: "center" }});
+  clickable.click();
+  return true;
+}}"""
 
 
 def _env_truthy(name: str) -> bool:
@@ -377,41 +435,34 @@ async def scroll_channel_to_bottom(page: Page, rounds: int = 6) -> None:
 
 async def wait_invite_someone_visible(page: Page, timeout_ms: int = 120000) -> None:
     start = time.time()
+    vis = _js_invite_button_visible()
     while (time.time() - start) * 1000 < timeout_ms:
         await clear_obstructions(page)
         await scroll_channel_to_bottom(page, 2)
-        found = await page.evaluate(
-            """() => {
-  const btns = Array.from(document.querySelectorAll("button.c-link--button"));
-  return btns.some((b) => (b.innerText || "").trim().toLowerCase().includes("invite someone"));
-}"""
-        )
+        found = await page.evaluate(vis)
         if found:
             return
         await sleep_ms(350)
     raise TimeoutError(
-        'Timeout waiting for "invite someone" to appear (likely not rendered in DOM).'
+        'Timeout waiting for huddle "invite" control (invite someone / invite people / '
+        "localized text). If Slack UI is not English, set SLACK_INVITE_MATCH_EXTRA. "
+        "If headless, try SLACK_HEADLESS=0 in VNC — Slack may limit huddle UI in headless."
     )
 
 
 async def click_invite_someone_robust(page: Page) -> None:
+    click_js = _js_invite_button_click()
     for _attempt in range(8):
         await clear_obstructions(page)
         await scroll_channel_to_bottom(page, 2)
-        ok = await page.evaluate(
-            """() => {
-  const btns = Array.from(document.querySelectorAll("button.c-link--button"));
-  const btn = btns.find((b) => (b.innerText || "").trim().toLowerCase().includes("invite someone")) || null;
-  if (!btn) return false;
-  btn.scrollIntoView({ block: "center", inline: "center" });
-  btn.click();
-  return true;
-}"""
-        )
+        ok = await page.evaluate(click_js)
         if ok:
             return
         await sleep_ms(300)
-    raise RuntimeError('Cannot click "invite someone" after multiple attempts.')
+    raise RuntimeError(
+        'Cannot click huddle invite control after multiple attempts. '
+        "Set SLACK_INVITE_MATCH_EXTRA if your Slack language is not English."
+    )
 
 
 async def wait_invite_modal(page: Page, timeout_ms: int = 45000) -> None:
@@ -498,6 +549,11 @@ def _launch_args() -> list[str]:
 
 
 async def _route_block_heavy(route) -> None:
+    """Block heavy asset types except on Slack origins — blocking images/fonts can break Slack's web UI."""
+    url = route.request.url or ""
+    if "slack.com" in url or "slack-edge.com" in url or "slack-imgs.com" in url:
+        await route.continue_()
+        return
     t = route.request.resource_type
     if t in ("image", "media", "font"):
         await route.abort()
@@ -550,6 +606,8 @@ async def run_flow() -> None:
             if not h_ok:
                 raise RuntimeError("Cannot find/click headset logo.")
             await clear_obstructions(page)
+            # Huddle strip / invite CTA mounts after the panel opens (esp. headless).
+            await sleep_ms(3000)
 
             print('Waiting for "invite someone"... (scroll-safe)')
             await wait_invite_someone_visible(page)
