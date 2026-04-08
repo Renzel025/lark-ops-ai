@@ -15,7 +15,8 @@ Requires: pip install playwright
   Or set CHROME_PATH to system Chromium/Chrome.
 
 Env (see env.example):
-  SESSION_DIR, SLACK_CHANNEL_URL (required)
+  SESSION_DIR (persistent profile — same as Gemini's user_data_dir idea), SLACK_CHANNEL_URL (required)
+  Optional: SLACK_CHROME_USER_AGENT, SLACK_CHROME_USER_AGENT_DISABLE=1
   SLACK_HEADLESS=1 or HEADLESS=1 (server; default off for local debugging)
   CHROME_PATH, SCREENSHOT_DIR, HARD_TIMEOUT_MS (optional)
 
@@ -50,6 +51,20 @@ _SLACK_INVITE_MATCH_EXTRA = [
     for x in (os.getenv("SLACK_INVITE_MATCH_EXTRA") or "").split(",")
     if x.strip()
 ]
+
+# Retail-like UA so requests do not advertise "Chrome for Testing" (optional override via env).
+_DEFAULT_SLACK_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _slack_user_agent_for_launch() -> Optional[str]:
+    """HTTP User-Agent for persistent context; None = leave Playwright default."""
+    if _env_truthy("SLACK_CHROME_USER_AGENT_DISABLE"):
+        return None
+    ua = (os.getenv("SLACK_CHROME_USER_AGENT") or "").strip()
+    return ua if ua else _DEFAULT_SLACK_USER_AGENT
 
 
 def _js_invite_match_snippet() -> str:
@@ -718,6 +733,9 @@ async def run_flow() -> None:
             }
             if CHROME_PATH:
                 launch_kw["executable_path"] = CHROME_PATH
+            _ua = _slack_user_agent_for_launch()
+            if _ua:
+                launch_kw["user_agent"] = _ua
 
             context = await p.chromium.launch_persistent_context(**launch_kw)
             await _maybe_apply_stealth_async(context)

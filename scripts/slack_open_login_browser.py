@@ -19,6 +19,23 @@ import sys
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+_DEFAULT_SLACK_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _slack_user_agent_for_launch() -> str | None:
+    if os.getenv("SLACK_CHROME_USER_AGENT_DISABLE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return None
+    ua = (os.getenv("SLACK_CHROME_USER_AGENT") or "").strip()
+    return ua if ua else _DEFAULT_SLACK_USER_AGENT
+
 
 def _maybe_apply_stealth_sync(ctx: BrowserContext) -> None:
     if os.getenv("SLACK_PLAYWRIGHT_STEALTH_DISABLE", "").strip().lower() in (
@@ -89,12 +106,16 @@ def main() -> None:
     ]
 
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            session,
-            headless=False,
-            viewport={"width": 1366, "height": 768},
-            args=args,
-        )
+        ctx_kw: dict = {
+            "user_data_dir": session,
+            "headless": False,
+            "viewport": {"width": 1366, "height": 768},
+            "args": args,
+        }
+        _ua = _slack_user_agent_for_launch()
+        if _ua:
+            ctx_kw["user_agent"] = _ua
+        ctx = p.chromium.launch_persistent_context(**ctx_kw)
         _maybe_apply_stealth_sync(ctx)
         for origin in ("https://app.slack.com", "https://slack.com"):
             try:
