@@ -109,6 +109,7 @@ slack_huddle_on_overview_send = config.slack_huddle_on_overview_send
 get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incident_chat
 get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
 get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
+get_slack_incident_notify_webhook_for_incident_chat = config.get_slack_incident_notify_webhook_for_incident_chat
 
 __all__ = [
     "P0_SESSIONS",
@@ -189,4 +190,5 @@ __all__ = [
     "get_slack_channel_url_for_incident_chat",
     "get_slack_session_dir_for_incident_chat",
     "get_slack_overview_webhook_for_incident_chat",
+    "get_slack_incident_notify_webhook_for_incident_chat",
 ]

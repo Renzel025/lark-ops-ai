@@ -1016,9 +1016,10 @@ def start_p0(
             continue
         enqueue_dm_instruction_if_needed(oid, token, item)
     try:
-        from .slack_bridge import enqueue_slack_huddle_automation
+        from .slack_bridge import enqueue_slack_huddle_automation, notify_slack_p0_started
 
+        notify_slack_p0_started(chat_id, priority, chat_label)
         if _config.slack_huddle_on_p0_start():
             enqueue_slack_huddle_automation(chat_id, priority)
     except Exception as e:
-        log.warning("start_p0: slack huddle automation hook failed: %s", e)
+        log.warning("start_p0: slack bridge hook failed: %s", e)

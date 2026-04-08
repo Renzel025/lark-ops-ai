@@ -74,18 +74,91 @@ def post_overview_to_slack_webhook(webhook_url: str, markdown: str) -> bool:
         return False
 
 
+def notify_slack_p0_started(
+    incident_chat_id: str,
+    priority: str,
+    source_chat_label: str,
+) -> None:
+    """
+    POST to Incoming Webhook: Lark P0/P1 declared + whether huddle Playwright will run.
+
+    Uses ``SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP`` or ``SLACK_OVERVIEW_WEBHOOK_MAP``.
+    """
+    cid = (incident_chat_id or "").strip()
+    wh = _config.get_slack_incident_notify_webhook_for_incident_chat(cid)
+    if not wh:
+        log.info(
+            "notify_slack_p0_started: no webhook for chat_id=%s (set SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP or SLACK_OVERVIEW_WEBHOOK_MAP)",
+            cid,
+        )
+        return
+    pr = (priority or "P0").strip().upper()
+    label = (source_chat_label or "").strip() or cid
+    channel_url = _config.get_slack_channel_url_for_incident_chat(cid)
+    session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
+    auto = _config.slack_automation_enabled()
+    on_p0 = _config.slack_huddle_on_p0_start()
+    will_run = (
+        auto
+        and on_p0
+        and bool(channel_url)
+        and bool(session_dir)
+        and _SLACK_SCRIPT.is_file()
+    )
+    if will_run:
+        huddle_line = "Slack huddle automation: STARTING NOW (headless Playwright → channel in LARK_SLACK_CHANNEL_URL_MAP)."
+    else:
+        reasons: list[str] = []
+        if not auto:
+            reasons.append("SLACK_AUTOMATION_ENABLED=0")
+        if not on_p0:
+            reasons.append("SLACK_HUDDLE_ON_P0_START=0")
+        if not channel_url:
+            reasons.append("missing LARK_SLACK_CHANNEL_URL_MAP / SLACK_CHANNEL_URL for this oc_")
+        if not session_dir:
+            reasons.append("missing SESSION_DIR / SLACK_SESSION_DIR")
+        if not _SLACK_SCRIPT.is_file():
+            reasons.append("scripts/slack_huddle_invite_all.py missing")
+        huddle_line = "Slack huddle automation: NOT started. " + ("; ".join(reasons) if reasons else "unknown")
+    text = (
+        f"Lark: {pr} declared in incident group\n"
+        f"Group: {label}\n"
+        f"chat_id: {cid}\n"
+        f"{huddle_line}"
+    )
+    if post_overview_to_slack_webhook(wh, text):
+        log.info("notify_slack_p0_started: webhook ok chat_id=%s", cid)
+    else:
+        log.warning("notify_slack_p0_started: webhook failed chat_id=%s", cid)
+
+
 def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> None:
     """
     Fire-and-forget subprocess: ``scripts/slack_huddle_invite_all.py`` with env from config.
 
     No-op if automation disabled, unmapped incident chat, or missing channel URL / session dir.
     """
-    if not _config.slack_automation_enabled():
-        return
     cid = (incident_chat_id or "").strip()
+    if not _config.slack_automation_enabled():
+        log.warning(
+            "enqueue_slack_huddle_automation skipped: SLACK_AUTOMATION_ENABLED=0 chat_id=%s",
+            cid,
+        )
+        return
     channel_url = _config.get_slack_channel_url_for_incident_chat(cid)
     session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
-    if not channel_url or not session_dir:
+    if not channel_url:
+        log.warning(
+            "enqueue_slack_huddle_automation skipped: no Slack channel URL for chat_id=%s "
+            "(set LARK_SLACK_CHANNEL_URL_MAP or SLACK_CHANNEL_URL + INCIDENT_GROUP_IDS)",
+            cid,
+        )
+        return
+    if not session_dir:
+        log.warning(
+            "enqueue_slack_huddle_automation skipped: SESSION_DIR / SLACK_SESSION_DIR empty chat_id=%s",
+            cid,
+        )
         return
     if not _SLACK_SCRIPT.is_file():
         log.warning("Slack huddle script missing: %s", _SLACK_SCRIPT)

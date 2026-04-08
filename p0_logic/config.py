@@ -533,3 +533,23 @@ def get_slack_overview_webhook_for_incident_chat(chat_id: str) -> str:
     raw = (os.getenv("SLACK_OVERVIEW_WEBHOOK_MAP") or "").strip()
     m = _parse_incident_keyed_url_map(raw)
     return (m.get(cid) or "").strip()
+
+
+def get_slack_incident_notify_webhook_for_incident_chat(chat_id: str) -> str:
+    """
+    Incoming Webhook for **P0/P1 declared** alerts (\"triggered in Lark\" + huddle status).
+
+    Prefer ``SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP=oc_aaa=https://hooks...`` (same shape as overview map).
+    If unset for this ``oc_``, falls back to ``SLACK_OVERVIEW_WEBHOOK_MAP`` (same URLs as overview channel).
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    if not cid:
+        return ""
+    raw = (os.getenv("SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP") or "").strip()
+    if raw:
+        m = _parse_incident_keyed_url_map(raw)
+        v = (m.get(cid) or "").strip()
+        if v:
+            return v
+    return get_slack_overview_webhook_for_incident_chat(chat_id)
