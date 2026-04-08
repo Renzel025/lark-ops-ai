@@ -17,7 +17,26 @@ from __future__ import annotations
 import os
 import sys
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
+
+
+def _pick_page_for_slack(ctx: BrowserContext) -> Page:
+    """Avoid using a stale ``about:blank`` tab when the profile restores multiple windows."""
+    pages = list(ctx.pages)
+    for pg in pages:
+        u = (pg.url or "").lower()
+        if "slack.com" in u and "about:blank" not in u:
+            return pg
+    for pg in pages:
+        u = pg.url or ""
+        if u in ("", "about:blank"):
+            try:
+                pg.close()
+            except Exception:
+                pass
+    if ctx.pages:
+        return ctx.pages[0]
+    return ctx.new_page()
 
 
 def main() -> None:
@@ -42,8 +61,9 @@ def main() -> None:
             viewport={"width": 1366, "height": 768},
             args=args,
         )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+        page = _pick_page_for_slack(ctx)
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        print(f"Loaded URL: {page.url}", flush=True)
         print("Log in to Slack in the window, then press Enter here to save and exit.")
         try:
             input()

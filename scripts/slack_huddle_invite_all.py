@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import BrowserContext, Page, async_playwright
 
 # ---------------------------------------------------------------------------
 # Env
@@ -548,6 +548,29 @@ def _launch_args() -> list[str]:
     ]
 
 
+async def _pick_page_for_slack(context: BrowserContext) -> Page:
+    """
+    Persistent profiles often restore multiple tabs; the first tab can stay ``about:blank``
+    while Slack lives in another tab — using ``pages[0]`` alone leaves navigation on a
+    blank window (what you see in VNC).
+    """
+    pages = list(context.pages)
+    for pg in pages:
+        u = (pg.url or "").lower()
+        if "slack.com" in u and "about:blank" not in u:
+            return pg
+    for pg in pages:
+        u = pg.url or ""
+        if u in ("", "about:blank"):
+            try:
+                await pg.close()
+            except Exception:
+                pass
+    if context.pages:
+        return context.pages[0]
+    return await context.new_page()
+
+
 async def _route_block_heavy(route) -> None:
     """Block heavy asset types except on Slack origins — blocking images/fonts can break Slack's web UI."""
     url = route.request.url or ""
@@ -590,13 +613,18 @@ async def run_flow() -> None:
 
         page: Optional[Page] = None
         try:
-            page = context.pages[0] if context.pages else await context.new_page()
+            page = await _pick_page_for_slack(context)
             assert page is not None
             _LAST_PAGE[0] = page
             await page.route("**/*", _route_block_heavy)
 
             print(f"Opening channel: {SLACK_CHANNEL_URL}")
-            await page.goto(SLACK_CHANNEL_URL, wait_until="domcontentloaded")
+            await page.goto(
+                SLACK_CHANNEL_URL,
+                wait_until="domcontentloaded",
+                timeout=120000,
+            )
+            print(f"After goto URL: {page.url}", flush=True)
             await _require_slack_logged_in(page)
             await wait_for_slack_loaded(page)
             await clear_obstructions(page)
