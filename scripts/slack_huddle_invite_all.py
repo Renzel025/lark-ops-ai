@@ -374,6 +374,80 @@ async def click_huddle_logo(page: Page) -> bool:
     return True
 
 
+async def _grant_slack_media_permissions(context: BrowserContext) -> None:
+    """Huddle pre-join UI needs camera/mic; without grants + fake devices the popup can stay blank."""
+    for origin in ("https://app.slack.com", "https://slack.com"):
+        try:
+            await context.grant_permissions(
+                ["camera", "microphone", "notifications"],
+                origin=origin,
+            )
+        except Exception as e:
+            print(f"WARN: grant_permissions ({origin}): {e}", file=sys.stderr)
+
+
+async def _discover_new_page(
+    context: BrowserContext, before: list[Page]
+) -> Optional[Page]:
+    before_set = set(before)
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        for pg in context.pages:
+            if pg not in before_set:
+                return pg
+        await sleep_ms(200)
+    return None
+
+
+async def _wait_huddle_popup_ready(popup: Page) -> None:
+    try:
+        await popup.bring_to_front()
+    except Exception:
+        pass
+    try:
+        await popup.wait_for_load_state("domcontentloaded", timeout=90000)
+    except Exception:
+        pass
+    print(f"Huddle popup URL: {popup.url}", flush=True)
+    if "about:blank" in (popup.url or "") or not (popup.url or "").strip():
+        try:
+            await popup.wait_for_function(
+                """() => {
+  const u = location.href || "";
+  return u.includes("slack.com") || u.includes("slack-edge");
+}""",
+                timeout=90000,
+            )
+        except Exception:
+            pass
+        print(f"Huddle popup URL (after wait): {popup.url}", flush=True)
+
+
+async def click_start_huddle_prejoin_if_shown(context: BrowserContext) -> None:
+    """Slack shows a pre-join screen (same window or new window); must click Start Huddle before invite."""
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        for pg in context.pages:
+            try:
+                clicked = await pg.evaluate(
+                    """() => {
+  const btns = Array.from(document.querySelectorAll("button, [role='button']"));
+  const b = btns.find((b) => {
+    const t = (b.innerText || "").trim().toLowerCase();
+    return t.includes("start huddle") && !t.includes("cancel");
+  });
+  if (b && !b.disabled) { b.click(); return true; }
+  return false;
+}"""
+                )
+                if clicked:
+                    print('Clicked "Start Huddle" (pre-join).', flush=True)
+                    return
+            except Exception:
+                continue
+        await sleep_ms(400)
+
+
 async def click_jump_to_latest_if_exists(page: Page) -> None:
     await page.evaluate(
         """() => {
@@ -533,6 +607,10 @@ def _launch_args() -> list[str]:
         "--disable-gpu",
         "--disable-software-rasterizer",
         "--window-size=1366,768",
+        # Huddle pre-join UI uses getUserMedia; without these, the popup can stay white on VNC/servers.
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        "--autoplay-policy=no-user-gesture-required",
         "--disable-features=UseOzonePlatform",
         "--disable-notifications",
         "--disable-background-timer-throttling",
@@ -617,6 +695,7 @@ async def run_flow() -> None:
                 launch_kw["executable_path"] = CHROME_PATH
 
             context = await p.chromium.launch_persistent_context(**launch_kw)
+            await _grant_slack_media_permissions(context)
         except Exception as e:
             print(f"ERROR: Failed to launch browser: {e}", file=sys.stderr)
             dump_launch_error("browser_launch_failed", e)
@@ -640,10 +719,17 @@ async def run_flow() -> None:
             await wait_for_slack_loaded(page)
             await clear_obstructions(page)
 
+            prev_pages = list(context.pages)
             print("Clicking headset logo (only)...")
             h_ok = await click_huddle_logo(page)
             if not h_ok:
                 raise RuntimeError("Cannot find/click headset logo.")
+            await sleep_ms(500)
+            popup = await _discover_new_page(context, prev_pages)
+            if popup:
+                await _wait_huddle_popup_ready(popup)
+            print("Clicking Start Huddle (pre-join) if shown...")
+            await click_start_huddle_prejoin_if_shown(context)
             await clear_obstructions(page)
             # Huddle strip / invite CTA mounts after the panel opens (esp. headless).
             await sleep_ms(3000)

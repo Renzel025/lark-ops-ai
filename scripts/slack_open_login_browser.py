@@ -59,6 +59,9 @@ def main() -> None:
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        "--autoplay-policy=no-user-gesture-required",
     ]
 
     with sync_playwright() as p:
@@ -68,6 +71,14 @@ def main() -> None:
             viewport={"width": 1366, "height": 768},
             args=args,
         )
+        for origin in ("https://app.slack.com", "https://slack.com"):
+            try:
+                ctx.grant_permissions(
+                    ["camera", "microphone", "notifications"],
+                    origin=origin,
+                )
+            except Exception as e:
+                print(f"WARN: grant_permissions ({origin}): {e}", file=sys.stderr)
         page = _pick_page_for_slack(ctx)
         page.goto(url, wait_until="domcontentloaded", timeout=120000)
         print(f"Loaded URL: {page.url}", flush=True)
