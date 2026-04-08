@@ -103,6 +103,12 @@ get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
 get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
 get_vc_reserve_end_offset_sec = config.get_vc_reserve_end_offset_sec
+slack_automation_enabled = config.slack_automation_enabled
+slack_huddle_on_p0_start = config.slack_huddle_on_p0_start
+slack_huddle_on_overview_send = config.slack_huddle_on_overview_send
+get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incident_chat
+get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
+get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
 
 __all__ = [
     "P0_SESSIONS",
@@ -177,4 +183,10 @@ __all__ = [
     "get_dm_instruction_open_ids",
     "get_dm_repost_instruction_after_reset",
     "get_vc_reserve_end_offset_sec",
+    "slack_automation_enabled",
+    "slack_huddle_on_p0_start",
+    "slack_huddle_on_overview_send",
+    "get_slack_channel_url_for_incident_chat",
+    "get_slack_session_dir_for_incident_chat",
+    "get_slack_overview_webhook_for_incident_chat",
 ]

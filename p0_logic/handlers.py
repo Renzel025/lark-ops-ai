@@ -604,6 +604,22 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
+            wh = _config.get_slack_overview_webhook_for_incident_chat(src_inc)
+            if wh and md:
+                try:
+                    from .slack_bridge import post_overview_to_slack_webhook
+
+                    if not post_overview_to_slack_webhook(wh, md):
+                        log.warning("send_preview: Slack overview webhook did not return success")
+                except Exception as e:
+                    log.warning("send_preview: Slack overview mirror failed: %s", e)
+            if src_inc and _config.slack_huddle_on_overview_send():
+                try:
+                    from .slack_bridge import enqueue_slack_huddle_automation
+
+                    enqueue_slack_huddle_automation(src_inc, pri)
+                except Exception as e:
+                    log.warning("send_preview: Slack huddle automation hook failed: %s", e)
             # Overlap DM ack + recall edit + recall preview (three independent Lark calls).
             tasks: List[Tuple[str, Any]] = []
             max_w = 1 + (1 if edit_mid else 0) + (1 if preview_mid else 0)

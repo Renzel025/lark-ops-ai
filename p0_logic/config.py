@@ -428,3 +428,108 @@ def get_dm_repost_instruction_after_reset() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_DM_REPOST_INSTRUCTION_AFTER_RESET") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def _parse_incident_keyed_url_map(raw: str) -> Dict[str, str]:
+    """
+    Comma-separated ``oc_...=value`` (value may contain ``=`` in URL — split on first ``=`` only).
+    """
+    out: Dict[str, str] = {}
+    if not (raw or "").strip():
+        return out
+    for segment in raw.split(","):
+        segment = segment.strip()
+        if "=" not in segment:
+            continue
+        key, _, val = segment.partition("=")
+        key, val = key.strip(), val.strip()
+        if key.startswith("oc_") and val:
+            out[key] = val
+    return out
+
+
+def slack_automation_enabled() -> bool:
+    """Gate Playwright Slack huddle subprocess (default on when env vars are set)."""
+    reload_env_runtime()
+    v = (os.getenv("SLACK_AUTOMATION_ENABLED") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def slack_huddle_on_p0_start() -> bool:
+    """
+    Run Playwright huddle automation when a P0/P1 VC session **starts** (``start_p0``).
+
+    Set ``SLACK_HUDDLE_ON_P0_START=0`` if you only want huddle when **Send overview** fires.
+    """
+    reload_env_runtime()
+    v = (os.getenv("SLACK_HUDDLE_ON_P0_START") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def slack_huddle_on_overview_send() -> bool:
+    """
+    Run Playwright huddle automation when **Send overview** to the Lark group succeeds
+    (same moment as ``SLACK_OVERVIEW_WEBHOOK_MAP`` mirror).
+
+    Set ``SLACK_HUDDLE_ON_OVERVIEW_SEND=0`` to post overview to Slack only (webhook) without huddle.
+    """
+    reload_env_runtime()
+    v = (os.getenv("SLACK_HUDDLE_ON_OVERVIEW_SEND") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def get_slack_channel_url_for_incident_chat(chat_id: str) -> str:
+    """
+    Slack channel deep link for ``scripts/slack_huddle_invite_all.py``.
+
+    Preferred (multi-group): ``LARK_SLACK_CHANNEL_URL_MAP=oc_aaa=https://...,oc_bbb=...``
+
+    Legacy (single channel, same as old ``run_slack_huddle.sh``): if the map has no entry
+    for this chat, ``SLACK_CHANNEL_URL`` is used when ``chat_id`` is in ``INCIDENT_GROUP_IDS``.
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    if not cid:
+        return ""
+    raw = (os.getenv("LARK_SLACK_CHANNEL_URL_MAP") or "").strip()
+    m = _parse_incident_keyed_url_map(raw)
+    v = (m.get(cid) or "").strip()
+    if v:
+        return v
+    fallback = (os.getenv("SLACK_CHANNEL_URL") or "").strip()
+    if fallback and cid in get_incident_group_chat_ids():
+        return fallback
+    return ""
+
+
+def get_slack_session_dir_for_incident_chat(chat_id: str) -> str:
+    """
+    Persistent Chromium profile for Slack (``SESSION_DIR`` in the huddle script).
+
+    Per-chat override: ``LARK_SLACK_SESSION_DIR_MAP=oc_aaa=/path1,oc_bbb=/path2``.
+    Fallback: ``SLACK_SESSION_DIR``, then ``SESSION_DIR`` (same name as old Puppeteer script).
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    raw_map = (os.getenv("LARK_SLACK_SESSION_DIR_MAP") or "").strip()
+    if raw_map:
+        m = _parse_incident_keyed_url_map(raw_map)
+        v = (m.get(cid) or "").strip()
+        if v:
+            return v
+    return (os.getenv("SLACK_SESSION_DIR") or os.getenv("SESSION_DIR") or "").strip()
+
+
+def get_slack_overview_webhook_for_incident_chat(chat_id: str) -> str:
+    """
+    Incoming Webhook URL to mirror \"Send overview\" markdown to Slack for this incident ``oc_`` chat.
+
+    Env: ``SLACK_OVERVIEW_WEBHOOK_MAP=oc_aaa=https://hooks.slack.com/services/...,oc_bbb=...``
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    if not cid:
+        return ""
+    raw = (os.getenv("SLACK_OVERVIEW_WEBHOOK_MAP") or "").strip()
+    m = _parse_incident_keyed_url_map(raw)
+    return (m.get(cid) or "").strip()
