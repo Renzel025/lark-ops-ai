@@ -213,6 +213,19 @@ async def clear_obstructions(page: Page) -> None:
     await press_esc_a_few_times(page, 1)
 
 
+async def _require_slack_logged_in(page: Page) -> None:
+    """Fail fast if persistent profile has no session (Slack shows workspace sign-in)."""
+    u = (page.url or "").lower()
+    if "workspace-signin" in u:
+        raise RuntimeError(
+            "Slack is NOT logged in in this Chromium profile (got workspace-signin). "
+            f"Log in once using SESSION_DIR={SESSION_DIR!r}: "
+            "unset SLACK_HEADLESS, set DISPLAY if headless server, run "
+            "`python3 scripts/slack_open_login_browser.py` (or VNC + same script). "
+            "Then re-run this automation."
+        )
+
+
 async def wait_for_slack_loaded(page: Page, timeout_ms: int = 120000) -> None:
     ready_sel = ",".join(
         [
@@ -528,6 +541,7 @@ async def run_flow() -> None:
 
             print(f"Opening channel: {SLACK_CHANNEL_URL}")
             await page.goto(SLACK_CHANNEL_URL, wait_until="domcontentloaded")
+            await _require_slack_logged_in(page)
             await wait_for_slack_loaded(page)
             await clear_obstructions(page)
 
