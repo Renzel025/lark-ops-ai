@@ -446,19 +446,54 @@ async def _wait_huddle_popup_ready(popup: Page) -> None:
         await popup.wait_for_load_state("domcontentloaded", timeout=90000)
     except Exception:
         pass
-    print(f"Huddle popup URL: {popup.url}", flush=True)
-    if "about:blank" in (popup.url or "") or not (popup.url or "").strip():
-        try:
-            await popup.wait_for_function(
-                """() => {
+    print(f"Huddle popup URL (initial): {popup.url}", flush=True)
+    # Slack often opens about:blank first; URL may lag while JS paints. Wait for URL or real DOM text.
+    try:
+        await popup.wait_for_function(
+            """() => {
   const u = location.href || "";
-  return u.includes("slack.com") || u.includes("slack-edge");
+  if (u.includes("slack.com") || u.includes("slack-edge") || u.startsWith("blob:")) return true;
+  const t = (document.body && document.body.innerText) ? document.body.innerText.trim() : "";
+  const low = t.toLowerCase();
+  if (t.length > 80) return true;
+  if (low.includes("huddle") || low.includes("camera") || low.includes("start huddle")) return true;
+  return false;
 }""",
-                timeout=90000,
-            )
+            timeout=120000,
+        )
+    except Exception:
+        pass
+    print(f"Huddle popup URL (after wait): {popup.url}", flush=True)
+
+
+async def _maybe_close_stuck_blank_huddle_popup(popup: Page, main: Page) -> None:
+    """
+    If the extra window never navigates off about:blank and has almost no DOM text, it
+    blocks nothing useful — Slack may show the pre-join UI as a modal on the main tab.
+    Close the dead popup and focus the channel so Start Huddle can be found there.
+    """
+    try:
+        u = (popup.url or "").strip()
+        inner = await popup.evaluate(
+            "() => (document.body && document.body.innerText || '').trim()"
+        )
+        if u != "about:blank" and u:
+            return
+        if len(inner) > 80:
+            return
+        print(
+            "WARN: Huddle popup stayed on about:blank with no UI; closing it and "
+            "focusing the main Slack tab (pre-join may be a modal there).",
+            file=sys.stderr,
+            flush=True,
+        )
+        await popup.close()
+        try:
+            await main.bring_to_front()
         except Exception:
             pass
-        print(f"Huddle popup URL (after wait): {popup.url}", flush=True)
+    except Exception:
+        pass
 
 
 async def click_start_huddle_prejoin_if_shown(context: BrowserContext) -> None:
@@ -772,6 +807,7 @@ async def run_flow() -> None:
             popup = await _discover_new_page(context, prev_pages)
             if popup:
                 await _wait_huddle_popup_ready(popup)
+                await _maybe_close_stuck_blank_huddle_popup(popup, page)
             print("Clicking Start Huddle (pre-join) if shown...")
             await click_start_huddle_prejoin_if_shown(context)
             await clear_obstructions(page)

@@ -14,6 +14,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -191,15 +192,74 @@ def notify_slack_p0_started(
     )
 
 
+def _enqueue_remote_slack_huddle(
+    incident_chat_id: str, priority: str, channel_url: str
+) -> None:
+    """
+    When Playwright cannot run reliably on the cloud host (WebRTC / blank popups), run the
+    script on another machine: set ``SLACK_HUDDLE_REMOTE_URL`` to that worker's HTTPS URL.
+    """
+    url = (os.getenv("SLACK_HUDDLE_REMOTE_URL") or "").strip()
+    if not url:
+        return
+    secret = (os.getenv("SLACK_HUDDLE_REMOTE_SECRET") or "").strip()
+    payload = {
+        "incident_chat_id": incident_chat_id,
+        "priority": priority,
+        "channel_url": channel_url,
+    }
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+
+    def _run() -> None:
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=30)
+            if r.status_code >= 400:
+                log.error(
+                    "slack_huddle REMOTE http_error status=%s body=%s",
+                    r.status_code,
+                    (r.text or "")[:800],
+                )
+            else:
+                log.info(
+                    "slack_huddle REMOTE ok status=%s chat_id=%s",
+                    r.status_code,
+                    incident_chat_id,
+                )
+        except Exception as e:
+            log.error(
+                "slack_huddle REMOTE failed chat_id=%s error=%s",
+                incident_chat_id,
+                e,
+                exc_info=True,
+            )
+
+    threading.Thread(
+        target=_run, daemon=True, name="slack-huddle-remote"
+    ).start()
+    log.info(
+        "slack_huddle REMOTE queued chat_id=%s priority=%s url=%s",
+        incident_chat_id,
+        priority,
+        url[:96] + ("..." if len(url) > 96 else ""),
+    )
+
+
 def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> None:
     """
     Fire-and-forget subprocess: ``scripts/slack_huddle_invite_all.py`` with env from config.
+
+    If ``SLACK_HUDDLE_REMOTE_URL`` is set, only an HTTP POST is sent to that worker (no local
+    Playwright on this host). Otherwise the script runs locally.
 
     No-op if automation disabled, unmapped incident chat, or missing channel URL / session dir.
     **Tail** ``logs/slack_huddle_playwright.log`` (or ``SLACK_PLAYWRIGHT_LOG``) for script stdout/stderr.
     """
     cid = (incident_chat_id or "").strip()
     log_path = _playwright_subprocess_log_path()
+    pr = (priority or "P0").strip().upper()
+    remote_url = (os.getenv("SLACK_HUDDLE_REMOTE_URL") or "").strip()
     if not _config.slack_automation_enabled():
         log.warning(
             "slack_huddle SKIP chat_id=%s reason=SLACK_AUTOMATION_ENABLED=0 | fix: set SLACK_AUTOMATION_ENABLED=1",
@@ -207,7 +267,6 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
         )
         return
     channel_url = _config.get_slack_channel_url_for_incident_chat(cid)
-    session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
     if not channel_url:
         log.warning(
             "slack_huddle SKIP chat_id=%s reason=no Slack deep link | fix: LARK_SLACK_CHANNEL_URL_MAP=oc_...=https://app.slack.com/client/T/C/ "
@@ -215,6 +274,10 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
             cid,
         )
         return
+    if remote_url:
+        _enqueue_remote_slack_huddle(cid, pr, channel_url)
+        return
+    session_dir = _config.get_slack_session_dir_for_incident_chat(cid)
     if not session_dir:
         log.warning(
             "slack_huddle SKIP chat_id=%s reason=no SESSION_DIR | fix: SESSION_DIR=/path/to/chromium/profile",
@@ -242,7 +305,6 @@ def enqueue_slack_huddle_automation(incident_chat_id: str, priority: str) -> Non
         v = (os.getenv(key) or "").strip()
         if v:
             env[key] = v
-    pr = (priority or "P0").strip().upper()
     py_exe = _python_for_slack_subprocess()
     log.info(
         "slack_huddle STARTING chat_id=%s priority=%s python=%s session_dir=%s channel_url=%s log_file=%s",
