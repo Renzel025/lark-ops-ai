@@ -104,6 +104,7 @@ def main() -> None:
         "--disable-gpu",
         "--no-first-run",
         "--no-default-browser-check",
+        "--disable-popup-blocking",
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",

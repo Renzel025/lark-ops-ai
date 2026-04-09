@@ -19,6 +19,8 @@ Env (see env.example):
   SESSION_DIR (persistent profile — same as Gemini's user_data_dir idea), SLACK_CHANNEL_URL (required)
   Optional: SLACK_CHROME_USER_AGENT (match installed Chrome major version — mismatch can look like bot),
     SLACK_CHROME_USER_AGENT_DISABLE=1, SLACK_PLAYWRIGHT_STEALTH_DISABLE=1
+  SLACK_HUDDLE_CLOSE_BLANK_POPUP=1 — legacy: close about:blank huddle window if still empty (default off;
+    closing too early can kill Huddle Preview before Slack navigates off about:blank)
   SLACK_HEADLESS=1 or HEADLESS=1 (headless is easier to fingerprint; use 0 on VNC if huddle stays white)
   CHROME_PATH, SCREENSHOT_DIR, HARD_TIMEOUT_MS (optional)
 
@@ -368,10 +370,16 @@ async def wait_for_huddle_control(page: Page, timeout_ms: int = 60000) -> None:
     )
 
 
-async def click_huddle_logo(page: Page) -> bool:
+async def click_huddle_open_popup(
+    page: Page, context: BrowserContext
+) -> Optional[Page]:
+    """
+    Click the channel huddle control and return the **new window** if Slack uses window.open,
+    else discover a new tab. Uses expect_popup so the huddle window is tied to the click.
+    """
     await wait_for_huddle_control(page, 60000)
-    ok = await page.evaluate(
-        """() => {
+    prev = list(context.pages)
+    click_js = """() => {
   const svg = document.querySelector('svg[data-qa="headphones"]');
   const btn1 = svg?.closest("button");
   if (btn1) { btn1.click(); return true; }
@@ -385,11 +393,20 @@ async def click_huddle_logo(page: Page) -> bool:
   if (btn3) { btn3.click(); return true; }
   return false;
 }"""
-    )
-    if not ok:
-        return False
+    try:
+        # Short wait: many workspaces open huddle in a new tab (no window.open) — fail fast.
+        async with page.expect_popup(timeout=15000) as popup_info:
+            ok = await page.evaluate(click_js)
+            if not ok:
+                raise RuntimeError("Cannot find/click headset logo.")
+        return await popup_info.value
+    except Exception as e:
+        print(
+            f"expect_popup: {e!r} (will try new-tab / same-window discovery)",
+            flush=True,
+        )
     await sleep_ms(350)
-    return True
+    return await _discover_new_page(context, prev, timeout_sec=45)
 
 
 async def _maybe_apply_stealth_async(context: BrowserContext) -> None:
@@ -428,10 +445,10 @@ async def _grant_slack_media_permissions(context: BrowserContext) -> None:
 
 
 async def _discover_new_page(
-    context: BrowserContext, before: list[Page]
+    context: BrowserContext, before: list[Page], timeout_sec: float = 25
 ) -> Optional[Page]:
     before_set = set(before)
-    deadline = time.time() + 25
+    deadline = time.time() + timeout_sec
     while time.time() < deadline:
         for pg in context.pages:
             if pg not in before_set:
@@ -471,10 +488,14 @@ async def _wait_huddle_popup_ready(popup: Page) -> None:
 
 async def _maybe_close_stuck_blank_huddle_popup(popup: Page, main: Page) -> None:
     """
-    If the extra window never navigates off about:blank and has almost no DOM text, it
-    blocks nothing useful — Slack may show the pre-join UI as a modal on the main tab.
-    Close the dead popup and focus the channel so Start Huddle can be found there.
+    Optional (SLACK_HUDDLE_CLOSE_BLANK_POPUP=1): If the extra window stays about:blank with
+    almost no text, close it — Slack may show pre-join on the main tab instead.
+
+    **Default is OFF:** closing a white about:blank window too early often destroys the real
+    Huddle Preview before Slack finishes navigating (common on slow/VNC/root setups).
     """
+    if not _env_truthy("SLACK_HUDDLE_CLOSE_BLANK_POPUP"):
+        return
     try:
         u = (popup.url or "").strip()
         inner = await popup.evaluate(
@@ -732,6 +753,8 @@ def _launch_args() -> list[str]:
         "--disable-renderer-backgrounding",
         "--no-first-run",
         "--no-default-browser-check",
+        # Helps window.open huddle preview not get treated as an unwanted popup.
+        "--disable-popup-blocking",
         "--disable-extensions",
         "--disable-sync",
         "--disable-background-networking",
@@ -844,13 +867,8 @@ async def run_flow() -> None:
             await wait_for_slack_loaded(page)
             await clear_obstructions(page)
 
-            prev_pages = list(context.pages)
-            print("Clicking headset logo (only)...")
-            h_ok = await click_huddle_logo(page)
-            if not h_ok:
-                raise RuntimeError("Cannot find/click headset logo.")
-            await sleep_ms(500)
-            popup = await _discover_new_page(context, prev_pages)
+            print("Clicking headset (huddle) — waiting for pop-out or new tab...")
+            popup = await click_huddle_open_popup(page, context)
             if popup:
                 await _wait_huddle_popup_ready(popup)
                 await _maybe_close_stuck_blank_huddle_popup(popup, page)
