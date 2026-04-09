@@ -852,15 +852,6 @@ async def _route_block_heavy(route) -> None:
 
 
 async def run_flow() -> None:
-    if not SESSION_DIR:
-        print("ERROR: SESSION_DIR env is required.", file=sys.stderr)
-        sys.exit(2)
-    if not SLACK_CHANNEL_URL:
-        print("ERROR: SLACK_CHANNEL_URL env is required.", file=sys.stderr)
-        sys.exit(2)
-
-    _enforce_playwright_stealth_installed()
-
     Path(SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as p:
@@ -888,7 +879,7 @@ async def run_flow() -> None:
         except Exception as e:
             print(f"ERROR: Failed to launch browser: {e}", file=sys.stderr)
             dump_launch_error("browser_launch_failed", e)
-            sys.exit(2)
+            raise RuntimeError("browser_launch_failed") from e
 
         page: Optional[Page] = None
         try:
@@ -969,9 +960,21 @@ async def main_async() -> None:
             f.write_text("Hard timeout before page was created.\n", encoding="utf-8")
             print(f"[ERROR] hard timeout note: {f}", file=sys.stderr)
         sys.exit(2)
+    except RuntimeError as e:
+        if e.args and e.args[0] == "browser_launch_failed":
+            sys.exit(2)
+        raise
 
 
 def main() -> None:
+    # Validate env and deps here — not inside asyncio (sys.exit in async tasks causes noisy tracebacks).
+    if not SESSION_DIR:
+        print("ERROR: SESSION_DIR env is required.", file=sys.stderr)
+        sys.exit(2)
+    if not SLACK_CHANNEL_URL:
+        print("ERROR: SLACK_CHANNEL_URL env is required.", file=sys.stderr)
+        sys.exit(2)
+    _enforce_playwright_stealth_installed()
     asyncio.run(main_async())
 
 
