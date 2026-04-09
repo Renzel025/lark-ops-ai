@@ -5,10 +5,11 @@ slack_huddle_invite_all.py — Playwright (Python) port of slack_huddle_invite_a
 Flow:
   1) Open Slack channel (persistent browser profile)
   2) Click headset (huddle)
-  3) Scroll to latest / bottom (virtualized list)
-  4) Find & click huddle "invite" CTA (English / Chinese / SLACK_INVITE_MATCH_EXTRA)
-  5) Modal: @channel row
-  6) Wait Send Invite enabled → click
+  3) Huddle Preview pop-out: wait for and click **Start Huddle** (required before invite UI)
+  4) Scroll to latest / bottom (virtualized list)
+  5) Find & click huddle "invite" CTA (English / Chinese / SLACK_INVITE_MATCH_EXTRA)
+  6) Modal: @channel row
+  7) Wait Send Invite enabled → click
 
 Requires: pip install playwright
   Then either: playwright install chromium
@@ -16,8 +17,9 @@ Requires: pip install playwright
 
 Env (see env.example):
   SESSION_DIR (persistent profile — same as Gemini's user_data_dir idea), SLACK_CHANNEL_URL (required)
-  Optional: SLACK_CHROME_USER_AGENT, SLACK_CHROME_USER_AGENT_DISABLE=1
-  SLACK_HEADLESS=1 or HEADLESS=1 (server; default off for local debugging)
+  Optional: SLACK_CHROME_USER_AGENT (match installed Chrome major version — mismatch can look like bot),
+    SLACK_CHROME_USER_AGENT_DISABLE=1, SLACK_PLAYWRIGHT_STEALTH_DISABLE=1
+  SLACK_HEADLESS=1 or HEADLESS=1 (headless is easier to fingerprint; use 0 on VNC if huddle stays white)
   CHROME_PATH, SCREENSHOT_DIR, HARD_TIMEOUT_MS (optional)
 
 Run:
@@ -30,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -496,12 +499,36 @@ async def _maybe_close_stuck_blank_huddle_popup(popup: Page, main: Page) -> None
         pass
 
 
-async def click_start_huddle_prejoin_if_shown(context: BrowserContext) -> None:
-    """Slack shows a pre-join screen (same window or new window); must click Start Huddle before invite."""
-    deadline = time.time() + 90
+async def wait_and_click_start_huddle_prejoin(
+    context: BrowserContext, main_channel_page: Page
+) -> None:
+    """
+    Slack opens **Huddle Preview** (often a separate window). You must click **Start Huddle**
+    there before the channel shows the huddle strip / **invite someone** on the main tab.
+    """
+    deadline = time.time() + 120
+    name_rx = re.compile(r"start huddle", re.I)
     while time.time() < deadline:
-        for pg in context.pages:
+        for pg in list(context.pages):
             try:
+                loc = pg.get_by_role("button", name=name_rx)
+                n = await loc.count()
+                if n > 0:
+                    first = loc.first
+                    await first.wait_for(state="visible", timeout=8000)
+                    await pg.bring_to_front()
+                    await first.click(timeout=15000)
+                    print(
+                        'Clicked "Start Huddle" (Huddle Preview pop-out).',
+                        flush=True,
+                    )
+                    await sleep_ms(1500)
+                    try:
+                        await main_channel_page.bring_to_front()
+                    except Exception:
+                        pass
+                    await sleep_ms(4500)
+                    return
                 clicked = await pg.evaluate(
                     """() => {
   const btns = Array.from(document.querySelectorAll("button, [role='button']"));
@@ -514,11 +541,25 @@ async def click_start_huddle_prejoin_if_shown(context: BrowserContext) -> None:
 }"""
                 )
                 if clicked:
-                    print('Clicked "Start Huddle" (pre-join).', flush=True)
+                    print(
+                        'Clicked "Start Huddle" (pre-join, DOM fallback).',
+                        flush=True,
+                    )
+                    await sleep_ms(1500)
+                    try:
+                        await main_channel_page.bring_to_front()
+                    except Exception:
+                        pass
+                    await sleep_ms(4500)
                     return
             except Exception:
                 continue
+            await sleep_ms(400)
         await sleep_ms(400)
+    raise TimeoutError(
+        'Did not find a clickable "Start Huddle" button after opening Huddle Preview. '
+        "Complete mic/camera prompts if blocking the button, or run with SLACK_HEADLESS unset in VNC."
+    )
 
 
 async def click_jump_to_latest_if_exists(page: Page) -> None:
@@ -765,6 +806,11 @@ async def run_flow() -> None:
                 "headless": SLACK_HEADLESS,
                 "viewport": {"width": 1366, "height": 768},
                 "args": _launch_args(),
+                # Selenium parity: ChromeOptions(excludeSwitches=["enable-automation"]) → do not pass
+                # Playwright's default --enable-automation (same bar / automation flag).
+                "ignore_default_args": ["--enable-automation"],
+                # Pair with --no-sandbox in _launch_args (Linux/root/VNC); avoids inconsistent sandbox flags.
+                "chromium_sandbox": False,
             }
             if CHROME_PATH:
                 launch_kw["executable_path"] = CHROME_PATH
@@ -808,11 +854,13 @@ async def run_flow() -> None:
             if popup:
                 await _wait_huddle_popup_ready(popup)
                 await _maybe_close_stuck_blank_huddle_popup(popup, page)
-            print("Clicking Start Huddle (pre-join) if shown...")
-            await click_start_huddle_prejoin_if_shown(context)
+            print(
+                "Huddle Preview: waiting for Start Huddle (pop-out), then main channel for invite...",
+                flush=True,
+            )
+            await wait_and_click_start_huddle_prejoin(context, page)
             await clear_obstructions(page)
-            # Huddle strip / invite CTA mounts after the panel opens (esp. headless).
-            await sleep_ms(3000)
+            await sleep_ms(2000)
 
             print('Waiting for "invite someone"... (scroll-safe)')
             await wait_invite_someone_visible(page)
@@ -830,7 +878,7 @@ async def run_flow() -> None:
             await click_send_invite(page)
 
             print(
-                "✅ DONE: headset -> invite someone -> @channel -> Send Invite (clicked)",
+                "✅ DONE: headset -> Start Huddle -> invite someone -> @channel -> Send Invite",
                 flush=True,
             )
         except asyncio.CancelledError:

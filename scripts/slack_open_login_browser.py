@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Open Slack in Playwright's bundled Chromium (same engine as slack_huddle_invite_all.py
-when CHROME_PATH is unset) — for one-time login into SESSION_DIR.
+Open Slack for one-time login into SESSION_DIR.
+
+Uses the same launch flags as slack_huddle_invite_all.py (ignore --enable-automation,
+stealth, UA) so the saved profile matches automation. Set CHROME_PATH to use system
+Chrome (recommended if huddle uses it — avoids "Chrome for Testing" vs real Chrome).
 
 Usage (e.g. inside VNC):
   export DISPLAY=:1
   export SESSION_DIR=/path/to/slack_profile
   export SLACK_CHANNEL_URL='https://app.slack.com/client/T.../C...'
-  unset CHROME_PATH
+  # optional: export CHROME_PATH=/usr/bin/google-chrome-stable
   python3 scripts/slack_open_login_browser.py
 
 Press Enter in the terminal when done logging in; browser closes.
@@ -92,13 +95,15 @@ def main() -> None:
         print("ERROR: SESSION_DIR is required.", file=sys.stderr)
         sys.exit(2)
     url = (os.getenv("SLACK_CHANNEL_URL") or "https://app.slack.com/").strip()
-    # Force Playwright's downloaded Chromium, not system CHROME_PATH
-    os.environ.pop("CHROME_PATH", None)
+    chrome_path = (os.getenv("CHROME_PATH") or "").strip() or None
 
     args = [
         "--no-sandbox",
+        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",
@@ -111,7 +116,12 @@ def main() -> None:
             "headless": False,
             "viewport": {"width": 1366, "height": 768},
             "args": args,
+            # Selenium: excludeSwitches=["enable-automation"] → ignore Playwright's default --enable-automation
+            "ignore_default_args": ["--enable-automation"],
+            "chromium_sandbox": False,
         }
+        if chrome_path:
+            ctx_kw["executable_path"] = chrome_path
         _ua = _slack_user_agent_for_launch()
         if _ua:
             ctx_kw["user_agent"] = _ua
