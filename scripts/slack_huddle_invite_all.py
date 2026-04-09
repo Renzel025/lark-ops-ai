@@ -11,9 +11,10 @@ Flow:
   6) Modal: @channel row
   7) Wait Send Invite enabled → click
 
-Requires: pip install playwright
-  Then either: playwright install chromium
-  Or set CHROME_PATH to system Chromium/Chrome.
+Requires:
+  pip install -r scripts/requirements-huddle.txt
+  (must include playwright-stealth — without it Slack Huddle pop-out often stays about:blank)
+  Then: playwright install chromium   OR set CHROME_PATH to system Chrome (match UA).
 
 Env (see env.example):
   SESSION_DIR (persistent profile — same as Gemini's user_data_dir idea), SLACK_CHANNEL_URL (required)
@@ -126,6 +127,44 @@ def _js_invite_button_click() -> str:
 def _env_truthy(name: str) -> bool:
     v = (os.getenv(name) or "").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def _enforce_playwright_stealth_installed() -> None:
+    """
+    Slack Huddle preview often never leaves about:blank if automation is obvious.
+    Your terminal showed: playwright-stealth not installed — install it in THIS Python venv.
+    """
+    if _env_truthy("SLACK_PLAYWRIGHT_STEALTH_DISABLE"):
+        return
+    if _env_truthy("SLACK_ALLOW_NO_STEALTH"):
+        print(
+            "WARN: SLACK_ALLOW_NO_STEALTH=1 — running without playwright-stealth "
+            "(Huddle may stay white).",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+    try:
+        import playwright_stealth  # noqa: F401
+    except ImportError:
+        print(
+            "\n"
+            + "=" * 72
+            + "\n"
+            "FATAL: playwright-stealth is NOT installed in this Python environment.\n"
+            "Slack Huddle pop-out commonly stays about:blank without anti-detection hooks.\n\n"
+            "  python3 -m pip install 'playwright-stealth>=2.0.3'\n"
+            "  # or from repo root:\n"
+            "  python3 -m pip install -r p0_logic/requirements.txt\n"
+            "  python3 -m pip install -r scripts/requirements-huddle.txt\n\n"
+            "Then re-run. To force-run without stealth (not recommended):\n"
+            "  SLACK_ALLOW_NO_STEALTH=1  or  SLACK_PLAYWRIGHT_STEALTH_DISABLE=1\n"
+            + "=" * 72
+            + "\n",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(2)
 
 
 # Server / bot integration sets SLACK_HEADLESS=1; local debugging leaves default off.
@@ -819,6 +858,8 @@ async def run_flow() -> None:
     if not SLACK_CHANNEL_URL:
         print("ERROR: SLACK_CHANNEL_URL env is required.", file=sys.stderr)
         sys.exit(2)
+
+    _enforce_playwright_stealth_installed()
 
     Path(SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
