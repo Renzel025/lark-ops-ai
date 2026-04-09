@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Open Slack for one-time login into SESSION_DIR.
+Open Slack for one-time login into SESSION_DIR (run before slack_huddle_invite_all.py).
+
+SPEC: Use the SAME SESSION_DIR and CHROME_PATH (if any) as the huddle script. Same venv:
+  python -m pip install -r scripts/requirements-huddle.txt
 
 Uses the same launch flags as slack_huddle_invite_all.py (ignore --enable-automation,
-stealth, UA) so the saved profile matches automation. Set CHROME_PATH to use system
-Chrome (recommended if huddle uses it — avoids "Chrome for Testing" vs real Chrome).
+stealth, UA) so the saved profile matches automation. CHROME_PATH = system Chrome is
+recommended if huddle automation uses it (see env.example).
 
 Usage (e.g. inside VNC):
   export DISPLAY=:1
@@ -97,11 +100,11 @@ def main() -> None:
     url = (os.getenv("SLACK_CHANNEL_URL") or "https://app.slack.com/").strip()
     chrome_path = (os.getenv("CHROME_PATH") or "").strip() or None
 
+    # Headed VNC: omit --disable-gpu (can cause blank white windows on Linux remote desktop).
     args = [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-popup-blocking",

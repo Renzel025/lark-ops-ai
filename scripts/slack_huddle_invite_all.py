@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
 """
-slack_huddle_invite_all.py — Playwright (Python) port of slack_huddle_invite_all.js (Puppeteer)
+slack_huddle_invite_all.py — Slack Huddle → Start Huddle → invite @channel (Playwright)
 
-Flow:
-  1) Open Slack channel (persistent browser profile)
-  2) Click headset (huddle)
-  3) Huddle Preview pop-out: wait for and click **Start Huddle** (required before invite UI)
-  4) Scroll to latest / bottom (virtualized list)
-  5) Find & click huddle "invite" CTA (English / Chinese / SLACK_INVITE_MATCH_EXTRA)
-  6) Modal: @channel row
-  7) Wait Send Invite enabled → click
+Automation flow (what the script does):
+  1) Open Slack channel (persistent profile)
+  2) Click headset → Huddle Preview (pop-out or new tab)
+  3) Click **Start Huddle** in that UI
+  4) Scroll; click **invite someone** → modal → **@channel** → **Send Invite**
 
-Requires:
-  pip install -r scripts/requirements-huddle.txt
-  (must include playwright-stealth — without it Slack Huddle pop-out often stays about:blank)
-  Then: playwright install chromium   OR set CHROME_PATH to system Chrome (match UA).
+SPEC — setup before running (order matters; full text in env.example):
+  A) In the SAME venv you use to run this script:
+       python -m pip install -r scripts/requirements-huddle.txt
+     You must have playwright-stealth; script exits early if missing (unless SLACK_ALLOW_NO_STEALTH=1).
+  B) Browser: ``playwright install chromium`` OR set CHROME_PATH to system Chrome (e.g. google-chrome-stable).
+  C) Log in once: ``python scripts/slack_open_login_browser.py`` with the same SESSION_DIR (+ CHROME_PATH if used).
+  D) Match SLACK_CHROME_USER_AGENT to your real Chrome major version if CHROME_PATH is set.
+  E) On VNC: do NOT set SLACK_HEADLESS / HEADLESS; set DISPLAY (e.g. :1).
 
-Env (see env.example):
-  SESSION_DIR (persistent profile — same as Gemini's user_data_dir idea), SLACK_CHANNEL_URL (required)
-  Optional: SLACK_CHROME_USER_AGENT (match installed Chrome major version — mismatch can look like bot),
-    SLACK_CHROME_USER_AGENT_DISABLE=1, SLACK_PLAYWRIGHT_STEALTH_DISABLE=1
-  SLACK_HUDDLE_CLOSE_BLANK_POPUP=1 — legacy: close about:blank huddle window if still empty (default off;
-    closing too early can kill Huddle Preview before Slack navigates off about:blank)
-  SLACK_HEADLESS=1 or HEADLESS=1 (headless is easier to fingerprint; use 0 on VNC if huddle stays white)
-  CHROME_PATH, SCREENSHOT_DIR, HARD_TIMEOUT_MS (optional)
+Required env: SESSION_DIR, SLACK_CHANNEL_URL
+
+Common optional: CHROME_PATH, SLACK_CHROME_USER_AGENT, DISPLAY, HARD_TIMEOUT_MS, SCREENSHOT_DIR
+
+Tuning (only if needed):
+  SLACK_HEADLESS=1 — server without display (huddle UI often worse than headed/VNC)
+  SLACK_CHROME_DISABLE_GPU=1 — force GPU off even when headed (can cause white windows on VNC; default keeps GPU on headed)
+  SLACK_HUDDLE_EVAL_CLICK=1 — use JS .click() instead of Playwright click (worse user-activation; debug only)
+  SLACK_HUDDLE_CLOSE_BLANK_POPUP=1 — legacy: close stuck about:blank pop-out (default off; can kill Preview too early)
+  SLACK_PLAYWRIGHT_STEALTH_DISABLE / SLACK_ALLOW_NO_STEALTH — skip stealth (not recommended)
 
 Run:
   export SESSION_DIR=/path/to/slack_profile
@@ -409,6 +412,31 @@ async def wait_for_huddle_control(page: Page, timeout_ms: int = 60000) -> None:
     )
 
 
+async def _click_huddle_button_playwright(page: Page) -> None:
+    """
+    Real Playwright clicks count as user activation in Chromium: window.open + getUserMedia
+    in the huddle pop-out often fail or stay about:blank when using evaluate(() => btn.click()).
+    """
+    primary = page.locator('button:has(svg[data-qa="headphones"])').first
+    if await primary.count() > 0:
+        await primary.click(timeout=20000)
+        return
+    qa = page.locator(
+        '[data-qa="huddle_channel_header_button_on_start_button"]'
+    ).first
+    if await qa.count() > 0:
+        await qa.click(timeout=20000)
+        return
+    aria = page.locator(
+        'button[aria-label*="Huddle"], button[aria-label*="huddle"], '
+        'button[aria-label*="Start huddle"], button[aria-label*="Join huddle"]'
+    ).first
+    if await aria.count() > 0:
+        await aria.click(timeout=20000)
+        return
+    raise RuntimeError("Cannot find/click headset (Playwright click).")
+
+
 async def click_huddle_open_popup(
     page: Page, context: BrowserContext
 ) -> Optional[Page]:
@@ -432,12 +460,19 @@ async def click_huddle_open_popup(
   if (btn3) { btn3.click(); return true; }
   return false;
 }"""
-    try:
-        # Short wait: many workspaces open huddle in a new tab (no window.open) — fail fast.
-        async with page.expect_popup(timeout=15000) as popup_info:
+
+    async def _do_click() -> None:
+        if _env_truthy("SLACK_HUDDLE_EVAL_CLICK"):
             ok = await page.evaluate(click_js)
             if not ok:
                 raise RuntimeError("Cannot find/click headset logo.")
+        else:
+            await _click_huddle_button_playwright(page)
+
+    try:
+        # Short wait: many workspaces open huddle in a new tab (no window.open) — fail fast.
+        async with page.expect_popup(timeout=25000) as popup_info:
+            await _do_click()
         return await popup_info.value
     except Exception as e:
         print(
@@ -774,18 +809,17 @@ async def click_send_invite(page: Page) -> None:
 
 
 def _launch_args() -> list[str]:
-    return [
+    # Headed VNC: --disable-gpu often causes blank white Chrome windows on Linux; only use for headless
+    # or when SLACK_CHROME_DISABLE_GPU=1.
+    args: list[str] = [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
         "--window-size=1366,768",
         # Huddle pre-join UI uses getUserMedia; without these, the popup can stay white on VNC/servers.
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",
-        "--disable-features=UseOzonePlatform",
         "--disable-notifications",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
@@ -802,6 +836,12 @@ def _launch_args() -> list[str]:
         # Often used with stealth to hide automation (playwright-stealth adds more)
         "--disable-blink-features=AutomationControlled",
     ]
+    if SLACK_HEADLESS or _env_truthy("SLACK_CHROME_DISABLE_GPU"):
+        args[3:3] = [
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+        ]
+    return args
 
 
 async def _pick_page_for_slack(context: BrowserContext) -> Page:
