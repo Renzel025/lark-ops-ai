@@ -843,13 +843,19 @@ async def _pick_page_for_slack(context: BrowserContext) -> Page:
 
 
 async def _route_block_heavy(route) -> None:
-    """Block heavy asset types except on Slack origins — blocking images/fonts can break Slack's web UI."""
+    """Block heavy asset types except on Slack origins.
+
+    Do **not** block third-party **fonts** (e.g. fonts.gstatic.com): Slack loads webfonts from
+    non-slack.com hosts; blocking them causes broken glyph rendering (e.g. repeated placeholder
+    text) and blank/white UI on some setups.
+    """
     url = route.request.url or ""
     if "slack.com" in url or "slack-edge.com" in url or "slack-imgs.com" in url:
         await route.continue_()
         return
     t = route.request.resource_type
-    if t in ("image", "media", "font"):
+    # Only trim images/media off-domain; never abort fonts (Slack uses Google Fonts CDNs, etc.).
+    if t in ("image", "media"):
         await route.abort()
     else:
         await route.continue_()
