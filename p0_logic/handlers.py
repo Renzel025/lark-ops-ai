@@ -604,16 +604,25 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
                 return
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
-            if md and src_inc:
-                try:
-                    from .slack_bridge import post_text_to_slack_for_incident
+            if md:
+                if not src_inc:
+                    log.warning(
+                        "send_preview: Slack overview mirror SKIPPED — preview has no source_incident_chat_id "
+                        "(need oc_... so SLACK_API_CHANNEL_MAP / webhooks can route). "
+                        "Use Build overview from the P0 flow in the incident group, not a broken draft."
+                    )
+                else:
+                    try:
+                        from .slack_bridge import post_text_to_slack_for_incident
 
-                    if not post_text_to_slack_for_incident(src_inc, md):
-                        log.warning(
-                            "send_preview: Slack mirror failed (set SLACK_BOT_TOKEN+SLACK_API_CHANNEL_MAP or SLACK_OVERVIEW_WEBHOOK_MAP)"
-                        )
-                except Exception as e:
-                    log.warning("send_preview: Slack overview mirror failed: %s", e)
+                        if not post_text_to_slack_for_incident(src_inc, md):
+                            log.warning(
+                                "send_preview: Slack mirror failed for oc_=%s — check SLACK_BOT_TOKEN, "
+                                "bot invited to channel, SLACK_API_CHANNEL_MAP, or SLACK_OVERVIEW_WEBHOOK_MAP",
+                                src_inc[:24],
+                            )
+                    except Exception as e:
+                        log.warning("send_preview: Slack overview mirror failed: %s", e)
             if src_inc and _config.slack_huddle_on_overview_send():
                 try:
                     from .slack_bridge import enqueue_slack_huddle_automation

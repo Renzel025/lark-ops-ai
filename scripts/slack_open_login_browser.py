@@ -13,7 +13,7 @@ Usage (e.g. inside VNC):
   export DISPLAY=:1
   export SESSION_DIR=/path/to/slack_profile
   export SLACK_CHANNEL_URL='https://app.slack.com/client/T.../C...'
-  # optional: export CHROME_PATH=/usr/bin/google-chrome-stable
+  # optional: export CHROME_PATH=/usr/bin/google-chrome   # or: $(command -v google-chrome-stable)
   python3 scripts/slack_open_login_browser.py
 
 Press Enter in the terminal when done logging in; browser closes.

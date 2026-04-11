@@ -12,7 +12,8 @@ SPEC — setup before running (order matters; full text in env.example):
   A) In the SAME venv you use to run this script:
        python -m pip install -r scripts/requirements-huddle.txt
      You must have playwright-stealth; script exits early if missing (unless SLACK_ALLOW_NO_STEALTH=1).
-  B) Browser: ``playwright install chromium`` OR set CHROME_PATH to system Chrome (e.g. google-chrome-stable).
+  B) Browser: ``playwright install chromium`` OR set CHROME_PATH to system Chrome (``which google-chrome``
+     or ``which google-chrome-stable`` — either path is fine; match UA to that binary).
   C) Log in once: ``python scripts/slack_open_login_browser.py`` with the same SESSION_DIR (+ CHROME_PATH if used).
   D) Match SLACK_CHROME_USER_AGENT to your real Chrome major version if CHROME_PATH is set.
   E) On VNC: do NOT set SLACK_HEADLESS / HEADLESS; set DISPLAY (e.g. :1).
