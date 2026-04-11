@@ -48,6 +48,9 @@ from typing import Any, Optional
 
 from playwright.async_api import BrowserContext, Page, async_playwright
 
+from slack_chrome_shared import env_truthy as _env_truthy
+from slack_chrome_shared import slack_chrome_launch_args as _launch_args
+
 # ---------------------------------------------------------------------------
 # Env
 # ---------------------------------------------------------------------------
@@ -127,11 +130,6 @@ def _js_invite_button_click() -> str:
   clickable.click();
   return true;
 }}"""
-
-
-def _env_truthy(name: str) -> bool:
-    v = (os.getenv(name) or "").strip().lower()
-    return v in ("1", "true", "yes", "on")
 
 
 def _enforce_playwright_stealth_installed() -> None:
@@ -808,48 +806,6 @@ async def click_send_invite(page: Page) -> None:
     if not ok:
         raise RuntimeError('Cannot click "Send Invite".')
     await sleep_ms(500)
-
-
-def _launch_args() -> list[str]:
-    # Headed VNC: --disable-gpu often causes blank white Chrome windows on Linux; only use for headless
-    # or when SLACK_CHROME_DISABLE_GPU=1.
-    #
-    # --disable-setuid-sandbox: Chrome warns it is "unsupported" but on root/Docker/minimal Linux it is
-    # often required together with --no-sandbox. Removing it does NOT fix white huddle by itself; running
-    # as a non-root user + proper chrome-sandbox permissions is the "clean" fix. To try launching
-    # without this flag (e.g. non-root): SLACK_CHROME_OMIT_DISABLE_SETUID_SANDBOX=1
-    args: list[str] = [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--window-size=1366,768",
-        # Huddle pre-join UI uses getUserMedia; without these, the popup can stay white on VNC/servers.
-        "--use-fake-ui-for-media-stream",
-        "--use-fake-device-for-media-stream",
-        "--autoplay-policy=no-user-gesture-required",
-        "--disable-notifications",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--no-first-run",
-        "--no-default-browser-check",
-        # Helps window.open huddle preview not get treated as an unwanted popup.
-        "--disable-popup-blocking",
-        "--disable-extensions",
-        "--disable-sync",
-        "--disable-background-networking",
-        "--password-store=basic",
-        "--use-mock-keychain",
-        # Often used with stealth to hide automation (playwright-stealth adds more)
-        "--disable-blink-features=AutomationControlled",
-    ]
-    if not _env_truthy("SLACK_CHROME_OMIT_DISABLE_SETUID_SANDBOX"):
-        args.insert(1, "--disable-setuid-sandbox")
-    if SLACK_HEADLESS or _env_truthy("SLACK_CHROME_DISABLE_GPU"):
-        args[3:3] = [
-            "--disable-gpu",
-            "--disable-software-rasterizer",
-        ]
-    return args
 
 
 async def _pick_page_for_slack(context: BrowserContext) -> Page:

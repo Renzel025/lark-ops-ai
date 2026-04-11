@@ -25,6 +25,8 @@ import sys
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+from slack_chrome_shared import slack_chrome_launch_args
+
 _DEFAULT_SLACK_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
@@ -100,19 +102,9 @@ def main() -> None:
     url = (os.getenv("SLACK_CHANNEL_URL") or "https://app.slack.com/").strip()
     chrome_path = (os.getenv("CHROME_PATH") or "").strip() or None
 
-    # Headed VNC: omit --disable-gpu (can cause blank white windows on Linux remote desktop).
-    args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-popup-blocking",
-        "--use-fake-ui-for-media-stream",
-        "--use-fake-device-for-media-stream",
-        "--autoplay-policy=no-user-gesture-required",
-        "--disable-blink-features=AutomationControlled",
-    ]
+    # Same CLI flags as slack_huddle_invite_all.py (see scripts/slack_chrome_shared.py).
+    # headless=False; SLACK_CHROME_DISABLE_GPU still honored if you need to test software raster.
+    args = slack_chrome_launch_args(headless=False)
 
     with sync_playwright() as p:
         ctx_kw: dict = {
