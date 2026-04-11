@@ -26,8 +26,45 @@ log = logging.getLogger("lark-ops-ai")
 WIKI_GROUP_CHAT_ID = os.getenv("WIKI_GROUP_CHAT_ID", "").strip()
 
 # Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0") — case-insensitive.
+# Questions ("is this p0?", "can this be a p1?") are ignored via _is_question_about_priority().
 P0_KEYWORD_RE = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
 P1_KEYWORD_RE = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
+
+# Do not start VC when the user is *asking* about P0/P1 (vs declaring). See _is_question_about_priority().
+_QUESTION_PRIORITY_PHRASE_RE = re.compile(
+    r"(?is)"
+    r"(?:"
+    r"is\s+this\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"is\s+that\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"is\s+it\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"are\s+we\s+(?:in\s+)?(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"can\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"could\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"should\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"would\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"will\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"does\s+this\s+(?:count|qualify)\s+(?:as\s+)?(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"what\s+is\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"how\s+(?:do|can|to)\s+(?:i|we)\s+(?:know|tell|declare)\s+.*\b(?:p0|p1|priority\s*[01])\b|"
+    r"any(?:thing|one)\s+.*\b(?:p0|p1|priority\s*[01])\b"
+    r")"
+)
+
+
+def _is_question_about_priority(text: str) -> bool:
+    """
+    True if the message looks like a question *about* P0/P1 rather than a declaration.
+    Declarations like "this is p0" (statement) still trigger; "is this p0?" does not.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if not (P0_KEYWORD_RE.search(t) or P1_KEYWORD_RE.search(t)):
+        return False
+    # Question mark: treat as non-declaration for incident keyword triggers.
+    if "?" in t:
+        return True
+    return bool(_QUESTION_PRIORITY_PHRASE_RE.search(t))
 
 
 def _is_pasted_meeting_invite_footer(text: str) -> bool:
@@ -218,6 +255,12 @@ def process_message(
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
         if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
+            if _is_question_about_priority(text_raw):
+                log.info(
+                    "Incident group: P0 trigger ignored (question about priority) text=%r",
+                    text_raw[:200],
+                )
+                return
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
@@ -231,6 +274,12 @@ def process_message(
 
         # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
         if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
+            if _is_question_about_priority(text_raw):
+                log.info(
+                    "Incident group: P1 trigger ignored (question about priority) text=%r",
+                    text_raw[:200],
+                )
+                return
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
