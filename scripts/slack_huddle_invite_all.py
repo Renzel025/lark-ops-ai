@@ -24,6 +24,7 @@ Common optional: CHROME_PATH, SLACK_CHROME_USER_AGENT, DISPLAY, HARD_TIMEOUT_MS,
 Tuning (only if needed):
   SLACK_HEADLESS=1 — server without display (huddle UI often worse than headed/VNC)
   SLACK_CHROME_DISABLE_GPU=1 — force GPU off even when headed (can cause white windows on VNC; default keeps GPU on headed)
+  SLACK_CHROME_OMIT_DISABLE_SETUID_SANDBOX=1 — omit --disable-setuid-sandbox (non-root experiments; default keeps it for root/Docker)
   SLACK_HUDDLE_EVAL_CLICK=1 — use JS .click() instead of Playwright click (worse user-activation; debug only)
   SLACK_HUDDLE_CLOSE_BLANK_POPUP=1 — legacy: close stuck about:blank pop-out (default off; can kill Preview too early)
   SLACK_PLAYWRIGHT_STEALTH_DISABLE / SLACK_ALLOW_NO_STEALTH — skip stealth (not recommended)
@@ -811,9 +812,13 @@ async def click_send_invite(page: Page) -> None:
 def _launch_args() -> list[str]:
     # Headed VNC: --disable-gpu often causes blank white Chrome windows on Linux; only use for headless
     # or when SLACK_CHROME_DISABLE_GPU=1.
+    #
+    # --disable-setuid-sandbox: Chrome warns it is "unsupported" but on root/Docker/minimal Linux it is
+    # often required together with --no-sandbox. Removing it does NOT fix white huddle by itself; running
+    # as a non-root user + proper chrome-sandbox permissions is the "clean" fix. To try launching
+    # without this flag (e.g. non-root): SLACK_CHROME_OMIT_DISABLE_SETUID_SANDBOX=1
     args: list[str] = [
         "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--window-size=1366,768",
         # Huddle pre-join UI uses getUserMedia; without these, the popup can stay white on VNC/servers.
@@ -836,6 +841,8 @@ def _launch_args() -> list[str]:
         # Often used with stealth to hide automation (playwright-stealth adds more)
         "--disable-blink-features=AutomationControlled",
     ]
+    if not _env_truthy("SLACK_CHROME_OMIT_DISABLE_SETUID_SANDBOX"):
+        args.insert(1, "--disable-setuid-sandbox")
     if SLACK_HEADLESS or _env_truthy("SLACK_CHROME_DISABLE_GPU"):
         args[3:3] = [
             "--disable-gpu",
@@ -1006,6 +1013,24 @@ async def main_async() -> None:
         raise
 
 
+def _warn_display_if_headed_linux() -> None:
+    """Headed Chrome on Linux needs DISPLAY; VNC SSH sessions often forget it."""
+    if sys.platform != "linux":
+        return
+    if SLACK_HEADLESS:
+        return
+    if (os.getenv("DISPLAY") or "").strip():
+        return
+    print(
+        "WARN: DISPLAY is unset — headed Chrome will usually fail on VNC/SSH.\n"
+        "  In the same terminal where you run this script, set the display your VNC uses, e.g.:\n"
+        "    export DISPLAY=:1\n"
+        "  (Run `echo $DISPLAY` in a terminal *inside* the VNC desktop that works, use that value.)\n",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def main() -> None:
     # Validate env and deps here — not inside asyncio (sys.exit in async tasks causes noisy tracebacks).
     if not SESSION_DIR:
@@ -1015,6 +1040,7 @@ def main() -> None:
         print("ERROR: SLACK_CHANNEL_URL env is required.", file=sys.stderr)
         sys.exit(2)
     _enforce_playwright_stealth_installed()
+    _warn_display_if_headed_linux()
     asyncio.run(main_async())
 
 
