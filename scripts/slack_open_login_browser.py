@@ -11,6 +11,7 @@ recommended if huddle automation uses it (see env.example).
 
 Usage (e.g. inside VNC):
   export DISPLAY=:1
+  # Either set vars below, or put SESSION_DIR (and SLACK_CHANNEL_URL, etc.) in repo .env
   export SESSION_DIR=/path/to/slack_profile
   export SLACK_CHANNEL_URL='https://app.slack.com/client/T.../C...'
   # optional: export CHROME_PATH=/usr/bin/google-chrome   # or: $(command -v google-chrome-stable)
@@ -22,10 +23,14 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 from slack_chrome_shared import slack_chrome_launch_args
+from slack_env_utils import load_slack_dotenv
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _DEFAULT_SLACK_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -95,6 +100,8 @@ def _pick_page_for_slack(ctx: BrowserContext) -> Page:
 
 
 def main() -> None:
+    os.chdir(_REPO_ROOT)
+    load_slack_dotenv(_REPO_ROOT)
     session = (os.getenv("SESSION_DIR") or "").strip()
     if not session:
         print("ERROR: SESSION_DIR is required.", file=sys.stderr)

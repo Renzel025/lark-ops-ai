@@ -484,7 +484,7 @@ def get_slack_channel_url_for_incident_chat(chat_id: str) -> str:
 
     Preferred (multi-group): ``LARK_SLACK_CHANNEL_URL_MAP=oc_aaa=https://...,oc_bbb=...``
 
-    Legacy (single channel, same as old ``run_slack_huddle.sh``): if the map has no entry
+    Legacy (single channel, direct ``SLACK_CHANNEL_URL``): if the map has no entry
     for this chat, ``SLACK_CHANNEL_URL`` is used when ``chat_id`` is in ``INCIDENT_GROUP_IDS``.
     """
     reload_env_runtime()

@@ -594,16 +594,91 @@ async def _maybe_close_stuck_blank_huddle_popup(popup: Page, main: Page) -> None
         pass
 
 
+async def _main_channel_shows_active_huddle(page: Page) -> bool:
+    """
+    True when Slack already shows an active huddle on the main channel (e.g. joined LIVE).
+    In that case a second Chrome window may stay about:blank forever — do not wait for
+    Start Huddle there.
+    """
+    try:
+        return bool(
+            await page.evaluate(
+                """() => {
+  const t = ((document.body && document.body.innerText) || "").toLowerCase();
+  if (t.includes("joined the huddle")) return true;
+  if (t.includes("only one here") && t.includes("huddle")) return true;
+  if (t.includes("you're in the huddle") || t.includes("you’re in the huddle")) return true;
+  if (t.includes("in this huddle") && t.includes("live")) return true;
+  return false;
+}"""
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _close_stuck_blank_secondary_windows(
+    context: BrowserContext, main: Page
+) -> None:
+    """Close extra about:blank windows with almost no DOM text (leftover pop-out)."""
+    for pg in list(context.pages):
+        if pg == main:
+            continue
+        try:
+            u = (pg.url or "").strip().lower()
+            if u != "about:blank":
+                continue
+            inner = await pg.evaluate(
+                "() => (document.body && document.body.innerText || '').trim()"
+            )
+            if len(inner) < 120:
+                await pg.close()
+                print(
+                    "Closed stuck about:blank secondary window (main Slack keeps focus).",
+                    flush=True,
+                )
+        except Exception:
+            pass
+
+
 async def wait_and_click_start_huddle_prejoin(
     context: BrowserContext, main_channel_page: Page
 ) -> None:
     """
     Slack opens **Huddle Preview** (often a separate window). You must click **Start Huddle**
     there before the channel shows the huddle strip / **invite someone** on the main tab.
+
+    If the main tab already shows an active huddle while a pop-out stays blank, we skip
+    waiting for Start Huddle and close the blank window.
     """
+    if await _main_channel_shows_active_huddle(main_channel_page):
+        print(
+            "Main channel already in an active huddle — skipping Start Huddle wait.",
+            flush=True,
+        )
+        await _close_stuck_blank_secondary_windows(context, main_channel_page)
+        try:
+            await main_channel_page.bring_to_front()
+        except Exception:
+            pass
+        await sleep_ms(2000)
+        return
+
     deadline = time.time() + 120
     name_rx = re.compile(r"start huddle", re.I)
     while time.time() < deadline:
+        if await _main_channel_shows_active_huddle(main_channel_page):
+            print(
+                "Main channel entered active huddle — skipping remaining Start Huddle search.",
+                flush=True,
+            )
+            await _close_stuck_blank_secondary_windows(context, main_channel_page)
+            try:
+                await main_channel_page.bring_to_front()
+            except Exception:
+                pass
+            await sleep_ms(2000)
+            return
         for pg in list(context.pages):
             try:
                 loc = pg.get_by_role("button", name=name_rx)

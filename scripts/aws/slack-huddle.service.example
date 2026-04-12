@@ -1,0 +1,26 @@
+# systemd — copy to /etc/systemd/system/slack-huddle.service (adjust paths), then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now slack-huddle.service
+#
+# Often you run Huddle on-demand (cron / bot webhook), not a long-running service.
+# This unit is for "run once at boot" or timer-based runs; for on-demand use cron or SSH.
+
+[Unit]
+Description=Slack Huddle Playwright (lark-ops-ai)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/p1-p0-automation
+Environment=ENV_PATH=/root/p1-p0-automation/.env
+Environment=DISPLAY=:1
+# If using a logged-in VNC user, set User= and paths to that home.
+ExecStart=/root/p1-p0-automation/.venv/bin/python /root/p1-p0-automation/scripts/run_slack_huddle.py
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

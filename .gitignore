@@ -25,3 +25,7 @@ build/
 
 # Logs / local data
 *.log
+logs/
+
+# Slack Huddle Playwright (scripts/) — persistent browser profile
+puppeteer/

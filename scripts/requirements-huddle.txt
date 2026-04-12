@@ -3,3 +3,4 @@
 #   /path/to/.venv/bin/pip install -r scripts/requirements-huddle.txt
 playwright>=1.40.0
 playwright-stealth>=2.0.3
+python-dotenv>=1.0.0
