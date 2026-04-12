@@ -4,6 +4,7 @@ import base64
 import logging
 import hashlib
 import time
+from pathlib import Path
 from typing import Any, Dict, Tuple, List
 
 import requests
@@ -35,8 +36,39 @@ except ImportError:
         pass
 
 
+def _load_dotenv_early() -> None:
+    """
+    Load ``ENV_PATH`` (or repo ``.env``) via python-dotenv.
+
+    systemd ``EnvironmentFile`` can mis-parse lines with spaces/UTF-8; the Slack token
+    then never reaches the process. ``load_dotenv(..., override=True)`` re-reads the
+    same file with python-dotenv so ``SLACK_BOT_TOKEN`` and maps are present.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    repo_root = Path(__file__).resolve().parent
+    raw = (os.getenv("ENV_PATH") or "").strip()
+    path = Path(raw) if raw else (repo_root / ".env")
+    if not path.is_file():
+        return
+    try:
+        load_dotenv(path, encoding="utf-8", override=True)
+    except TypeError:
+        load_dotenv(path, override=True)
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("lark-ops-ai")
+
+_load_dotenv_early()
+_slack_tok = (os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_BOT_USER_OAUTH_TOKEN") or "").strip()
+log.info(
+    "env loaded: SLACK_BOT_TOKEN %s (len=%s) — if len=0, Slack chat.postMessage will fail",
+    "set" if _slack_tok else "MISSING",
+    len(_slack_tok),
+)
 
 app = FastAPI()
 

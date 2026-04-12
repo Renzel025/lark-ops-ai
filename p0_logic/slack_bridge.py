@@ -87,28 +87,84 @@ def post_slack_chat_api_message(incident_chat_id: str, text: str) -> bool:
     token = _config.get_slack_bot_token()
     channel = _config.get_slack_api_channel_id_for_incident_chat(incident_chat_id)
     body = _outgoing_slack_text(text)
-    if not token or not channel or not body:
+    cid = (incident_chat_id or "").strip()
+    if not token:
+        log.warning(
+            "Slack chat.postMessage skipped: SLACK_BOT_TOKEN empty — set in process env / %s",
+            _config.ENV_PATH,
+        )
+        return False
+    if not channel:
+        log.warning(
+            "Slack chat.postMessage skipped: no SLACK_API_CHANNEL_MAP entry for incident_chat_id=%s "
+            "(add oc_=C... for this Lark group; must match where P0 was triggered)",
+            cid or "(empty)",
+        )
+        return False
+    if not body:
         return False
     if len(body) > 38000:
         body = body[:37900] + "\n\n…(truncated)"
-    try:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    def _post() -> Dict[str, Any]:
         r = requests.post(
             "https://slack.com/api/chat.postMessage",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
+            headers=headers,
             json={"channel": channel, "text": body},
             timeout=30,
         )
-        data = r.json()
+        return r.json()
+
+    try:
+        data = _post()
         if data.get("ok"):
             return True
+        err = data.get("error")
+        # Bot not in channel is the #1 reason messages never appear in the group.
+        if err == "not_in_channel" and _truthy_env("SLACK_BOT_TRY_JOIN_CHANNEL"):
+            try:
+                jr = requests.post(
+                    "https://slack.com/api/conversations.join",
+                    headers=headers,
+                    json={"channel": channel},
+                    timeout=30,
+                )
+                join_data = jr.json()
+                if join_data.get("ok"):
+                    log.info("Slack conversations.join ok channel=%s — retrying chat.postMessage", channel)
+                    data = _post()
+                    if data.get("ok"):
+                        return True
+                    err = data.get("error")
+                else:
+                    log.warning(
+                        "Slack conversations.join failed: error=%s (need channels:join scope?) response=%s",
+                        join_data.get("error"),
+                        str(join_data)[:400],
+                    )
+            except Exception as je:
+                log.warning("Slack conversations.join request failed: %s", je)
         log.warning(
             "Slack chat.postMessage failed: error=%s response=%s",
-            data.get("error"),
+            err,
             str(data)[:500],
         )
+        if err == "not_in_channel":
+            log.warning(
+                "Slack fix: open that channel in Slack → /invite @YourBot (same app as SLACK_BOT_TOKEN). "
+                "Or set SLACK_BOT_TRY_JOIN_CHANNEL=1 and add OAuth scope channels:join to the app, then reinstall."
+            )
+        elif err == "channel_not_found":
+            log.warning(
+                "Slack fix: SLACK_API_CHANNEL_MAP uses C… from the *same workspace* as the bot token; "
+                "wrong workspace → channel_not_found."
+            )
+        elif err in ("invalid_auth", "token_revoked", "account_inactive"):
+            log.warning("Slack fix: regenerate Bot User OAuth Token (xoxb-) in api.slack.com and update SLACK_BOT_TOKEN.")
         return False
     except Exception as e:
         log.warning("Slack chat.postMessage request failed: %s", e)
