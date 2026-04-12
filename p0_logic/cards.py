@@ -453,8 +453,8 @@ def build_slack_severity_prompt_card(
                         "content": (
                             f"**{prio}** is being declared in **{label}**.\n\n"
                             "Please clarify if the issue is **major** or **minor**:\n"
-                            "• **Major** — notify Slack + run huddle automation (if configured).\n"
-                            "• **Minor** — Lark flow only; no Slack notify or huddle from the bot."
+                            "• **Major** — will notify all OM members on Slack channel.\n"
+                            "• **Minor** — will notify specific duty SRE to check the issue."
                         ),
                     },
                 },
