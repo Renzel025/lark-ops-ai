@@ -12,10 +12,15 @@ def load_slack_dotenv(repo_root: Path) -> Path | None:
     """
     try:
         from dotenv import load_dotenv
-    except ImportError as e:
-        raise RuntimeError(
-            "python-dotenv is required: pip install python-dotenv"
-        ) from e
+    except ImportError:
+        import sys
+
+        print(
+            "WARN: python-dotenv not installed; repo .env not loaded. "
+            "Install: pip install python-dotenv  OR  use .venv: .venv/bin/python ...",
+            file=sys.stderr,
+        )
+        return None
 
     env_path = (os.environ.get("ENV_PATH") or "").strip()
     candidates: list[Path] = []
