@@ -478,6 +478,19 @@ def slack_huddle_on_overview_send() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def slack_severity_prompt_enabled() -> bool:
+    """
+    When True (default): after ``start_p0``, DM operators a **Major / Minor** card before any
+    Slack notify or huddle. **Major** runs the usual Slack automation; **Minor** skips it.
+
+    Set ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION=0`` to restore immediate Slack on meeting start
+    (no DM prompt).
+    """
+    reload_env_runtime()
+    v = (os.getenv("SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def get_slack_channel_url_for_incident_chat(chat_id: str) -> str:
     """
     Slack channel deep link for ``scripts/slack_huddle_invite_all.py``.

@@ -229,6 +229,20 @@ def post_overview_to_slack_webhook(webhook_url: str, markdown: str) -> bool:
         return False
 
 
+def run_slack_p0_notify_and_huddle(incident_chat_id: str, priority: str, source_chat_label: str) -> None:
+    """
+    Slack notify + optional huddle subprocess — used on ``start_p0`` (legacy) or after **Major** is chosen.
+    """
+    notify_slack_p0_started(incident_chat_id, priority, source_chat_label)
+    if _config.slack_huddle_on_p0_start():
+        enqueue_slack_huddle_automation(incident_chat_id, priority)
+    else:
+        log.warning(
+            "run_slack_p0_notify_and_huddle: huddle NOT started (SLACK_HUDDLE_ON_P0_START=0) chat_id=%s",
+            (incident_chat_id or "").strip(),
+        )
+
+
 def notify_slack_p0_started(
     incident_chat_id: str,
     priority: str,

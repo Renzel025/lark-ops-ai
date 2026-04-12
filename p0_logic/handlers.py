@@ -135,6 +135,39 @@ def _show_participants_body_text() -> str:
     return empty_msg if not line.strip() else f"Participants\n{line}"
 
 
+def _handle_slack_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
+    """DM card: Major / Minor before Slack automation."""
+    sender_open_id = _extract_card_action_sender_open_id(payload)
+    _maybe_merge_dm_scope_from_card(sender_open_id, payload)
+    _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
+    chat_id = (src_inc or "").strip()
+    if not chat_id.startswith("oc_"):
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.")
+        return
+    err = _session.apply_slack_severity_choice(chat_id, tenant_token, sender_open_id, is_major)
+    if err == "no_session":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.")
+        return
+    if err == "already_answered":
+        if sender_open_id:
+            _lark.post_text_to_open_id(
+                sender_open_id,
+                tenant_token,
+                "ℹ️ A Major/Minor choice was already recorded for this incident.",
+            )
+        return
+    if err == "disabled":
+        if sender_open_id:
+            _lark.post_text_to_open_id(
+                sender_open_id,
+                tenant_token,
+                "ℹ️ Severity prompt is disabled in configuration.",
+            )
+        return
+
+
 def handle_lark_card_action_show_participants_sync(
     payload: Dict[str, Any], _tenant_token: str
 ) -> Dict[str, Any]:
@@ -549,6 +582,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if not sender_open_id or not action_name:
             log.warning("card.action.trigger missing sender/action payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
             return
+        if action_name in ("slack_severity_major", "slack_severity_minor"):
+            _handle_slack_severity_choice(payload, tenant_token, action_name == "slack_severity_major")
+            return
         if action_name == "generate_preview":
             _generate_preview_now(sender_open_id, tenant_token)
             return
@@ -615,7 +651,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     try:
                         from .slack_bridge import post_text_to_slack_for_incident
 
-                        if not post_text_to_slack_for_incident(src_inc, md):
+                        if not _session.slack_cross_post_slack_enabled_for_incident_chat(src_inc):
+                            log.info(
+                                "send_preview: Slack overview mirror skipped (minor or pending severity) oc_=%s",
+                                src_inc[:32],
+                            )
+                        elif not post_text_to_slack_for_incident(src_inc, md):
                             log.warning(
                                 "send_preview: Slack mirror failed for oc_=%s — check SLACK_BOT_TOKEN, "
                                 "bot invited to channel, SLACK_API_CHANNEL_MAP, or SLACK_OVERVIEW_WEBHOOK_MAP",
@@ -623,7 +664,11 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                             )
                     except Exception as e:
                         log.warning("send_preview: Slack overview mirror failed: %s", e)
-            if src_inc and _config.slack_huddle_on_overview_send():
+            if (
+                src_inc
+                and _config.slack_huddle_on_overview_send()
+                and _session.slack_cross_post_slack_enabled_for_incident_chat(src_inc)
+            ):
                 try:
                     from .slack_bridge import enqueue_slack_huddle_automation
 

@@ -1011,21 +1011,95 @@ def start_p0(
         "priority": priority,
         "label": chat_label,
     }
+    dm_targets_list = [x for x in dm_targets if (x or "").strip()]
+    # Severity prompt before the usual DM instruction card so operators see Major/Minor first.
+    try:
+        from .slack_bridge import run_slack_p0_notify_and_huddle
+
+        if _config.slack_severity_prompt_enabled() and dm_targets_list:
+            P0_SESSIONS[chat_id]["slack_severity"] = "pending"
+            if _session_disk.enabled():
+                _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
+            card = _cards.build_slack_severity_prompt_card(
+                source_incident_chat_id=chat_id,
+                target_chat=target_chat,
+                group_label=chat_label,
+                priority=priority,
+            )
+            for oid in dm_targets_list:
+                st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
+                if st != 200:
+                    log.warning(
+                        "start_p0: slack severity card HTTP=%s open_id=%s body=%s",
+                        st,
+                        oid,
+                        (body or "")[:300],
+                    )
+        else:
+            run_slack_p0_notify_and_huddle(chat_id, priority, chat_label)
+    except Exception as e:
+        log.warning("start_p0: slack bridge hook failed: %s", e)
     for oid in dm_targets:
         if not oid:
             continue
         enqueue_dm_instruction_if_needed(oid, token, item)
-    try:
-        from .slack_bridge import enqueue_slack_huddle_automation, notify_slack_p0_started
 
-        notify_slack_p0_started(chat_id, priority, chat_label)
-        if _config.slack_huddle_on_p0_start():
-            enqueue_slack_huddle_automation(chat_id, priority)
-        else:
-            log.warning(
-                "start_p0: Slack huddle NOT started (SLACK_HUDDLE_ON_P0_START=0) chat_id=%s — "
-                "set to 1 and restart to enable Playwright huddle on meeting start",
-                chat_id,
+
+def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
+    """
+    When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, Slack notify / overview mirror / huddle
+    only run if the operator chose **Major**. **Minor** or **pending** → no Slack automation.
+    """
+    if not _config.slack_severity_prompt_enabled():
+        return True
+    sess = P0_SESSIONS.get((chat_id or "").strip())
+    if not sess:
+        return False
+    sev = (sess.get("slack_severity") or "pending").strip().lower()
+    return sev == "major"
+
+
+def apply_slack_severity_choice(
+    chat_id: str,
+    token: str,
+    sender_open_id: str,
+    is_major: bool,
+) -> Optional[str]:
+    """
+    Handle Major/Minor DM button. Returns ``None`` on success, or ``no_session`` / ``already_answered`` / ``disabled``.
+    """
+    if not _config.slack_severity_prompt_enabled():
+        return "disabled"
+    cid = (chat_id or "").strip()
+    if not cid.startswith("oc_"):
+        return "no_session"
+    sess = P0_SESSIONS.get(cid)
+    if not sess:
+        return "no_session"
+    sev = (sess.get("slack_severity") or "pending").strip().lower()
+    if sev not in ("pending", ""):
+        return "already_answered"
+    severity = "major" if is_major else "minor"
+    sess["slack_severity"] = severity
+    if _session_disk.enabled():
+        _session_disk.save_session(cid, sess)
+    if is_major:
+        label = str(sess.get("source_chat_name") or "").strip()
+        pr = str(sess.get("priority") or "P0").strip().upper()
+        if pr not in ("P0", "P1"):
+            pr = "P0"
+        try:
+            from .slack_bridge import run_slack_p0_notify_and_huddle
+
+            run_slack_p0_notify_and_huddle(cid, pr, label)
+        except Exception as e:
+            log.warning("apply_slack_severity_choice: Slack hook failed: %s", e)
+    if (sender_open_id or "").strip():
+        if is_major:
+            msg = (
+                "✅ Recorded as **Major** — Slack notified and huddle automation started (if enabled)."
             )
-    except Exception as e:
-        log.warning("start_p0: slack bridge hook failed: %s", e)
+        else:
+            msg = "✅ Recorded as **Minor** — Slack automation skipped for this incident."
+        _lark.post_text_to_open_id(sender_open_id, token, msg)
+    return None

@@ -41,6 +41,7 @@ request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
 get_last_ended_snapshot = session.get_last_ended_snapshot
 get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
 enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
+slack_cross_post_slack_enabled_for_incident_chat = session.slack_cross_post_slack_enabled_for_incident_chat
 release_dm_after_overview_sent = session.release_dm_after_overview_sent
 release_dm_slots_for_incident_chat = session.release_dm_slots_for_incident_chat
 release_standalone_overview_cancel = session.release_standalone_overview_cancel
@@ -83,6 +84,7 @@ build_dm_instruction_card = cards.build_dm_instruction_card
 build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
 build_overview_result_card = cards.build_overview_result_card
+build_slack_severity_prompt_card = cards.build_slack_severity_prompt_card
 build_bilingual_overview_md = cards.build_bilingual_overview_md
 
 # Config (for callers that need env)
@@ -106,6 +108,7 @@ get_vc_reserve_end_offset_sec = config.get_vc_reserve_end_offset_sec
 slack_automation_enabled = config.slack_automation_enabled
 slack_huddle_on_p0_start = config.slack_huddle_on_p0_start
 slack_huddle_on_overview_send = config.slack_huddle_on_overview_send
+slack_severity_prompt_enabled = config.slack_severity_prompt_enabled
 get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incident_chat
 get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
 get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
@@ -140,6 +143,7 @@ __all__ = [
     "get_last_ended_snapshot",
     "get_dm_target_chat_for_operator",
     "enqueue_dm_instruction_if_needed",
+    "slack_cross_post_slack_enabled_for_incident_chat",
     "release_dm_after_overview_sent",
     "release_dm_slots_for_incident_chat",
     "release_standalone_overview_cancel",
@@ -170,6 +174,7 @@ __all__ = [
     "build_preview_card",
     "build_edit_overview_card",
     "build_overview_result_card",
+    "build_slack_severity_prompt_card",
     "build_bilingual_overview_md",
     "reload_env_runtime",
     "get_incident_group_chat_ids",
@@ -191,6 +196,7 @@ __all__ = [
     "slack_automation_enabled",
     "slack_huddle_on_p0_start",
     "slack_huddle_on_overview_send",
+    "slack_severity_prompt_enabled",
     "get_slack_channel_url_for_incident_chat",
     "get_slack_session_dir_for_incident_chat",
     "get_slack_overview_webhook_for_incident_chat",
