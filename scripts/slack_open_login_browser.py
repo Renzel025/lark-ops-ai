@@ -27,15 +27,13 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
-from slack_chrome_shared import slack_chrome_launch_args
+from slack_chrome_shared import (
+    default_slack_chrome_user_agent_string,
+    slack_chrome_launch_args,
+)
 from slack_env_utils import load_slack_dotenv
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-
-_DEFAULT_SLACK_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
 
 
 def _slack_user_agent_for_launch() -> str | None:
@@ -47,7 +45,7 @@ def _slack_user_agent_for_launch() -> str | None:
     ):
         return None
     ua = (os.getenv("SLACK_CHROME_USER_AGENT") or "").strip()
-    return ua if ua else _DEFAULT_SLACK_USER_AGENT
+    return ua if ua else default_slack_chrome_user_agent_string()
 
 
 def _maybe_apply_stealth_sync(ctx: BrowserContext) -> None:

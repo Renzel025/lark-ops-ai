@@ -48,6 +48,7 @@ from typing import Any, Optional
 
 from playwright.async_api import BrowserContext, Page, async_playwright
 
+from slack_chrome_shared import default_slack_chrome_user_agent_string as _default_slack_user_agent
 from slack_chrome_shared import env_truthy as _env_truthy
 from slack_chrome_shared import slack_chrome_launch_args as _launch_args
 
@@ -66,19 +67,12 @@ _SLACK_INVITE_MATCH_EXTRA = [
     if x.strip()
 ]
 
-# Retail-like UA so requests do not advertise "Chrome for Testing" (optional override via env).
-_DEFAULT_SLACK_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-
-
 def _slack_user_agent_for_launch() -> Optional[str]:
     """HTTP User-Agent for persistent context; None = leave Playwright default."""
     if _env_truthy("SLACK_CHROME_USER_AGENT_DISABLE"):
         return None
     ua = (os.getenv("SLACK_CHROME_USER_AGENT") or "").strip()
-    return ua if ua else _DEFAULT_SLACK_USER_AGENT
+    return ua if ua else _default_slack_user_agent()
 
 
 def _js_invite_match_snippet() -> str:

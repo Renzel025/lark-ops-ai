@@ -6,6 +6,29 @@ slack_huddle_invite_all.py so the persistent profile behaves the same.
 from __future__ import annotations
 
 import os
+import sys
+
+
+def default_slack_chrome_user_agent_string() -> str:
+    """Retail-like UA for Slack Playwright; OS-specific default avoids Windows UA on macOS/Linux.
+
+    Mismatched UA vs. real Chrome/OS is a common trigger for Slack/Cloudflare challenges.
+    Override with SLACK_CHROME_USER_AGENT or disable with SLACK_CHROME_USER_AGENT_DISABLE=1.
+    """
+    if sys.platform == "darwin":
+        return (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
+    if sys.platform.startswith("linux"):
+        return (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+    return (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
 
 
 def env_truthy(name: str) -> bool:
