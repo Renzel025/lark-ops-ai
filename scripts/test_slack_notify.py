@@ -35,10 +35,17 @@ def main() -> None:
         pass
 
     token = (os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_BOT_USER_OAUTH_TOKEN") or "").strip()
+    raw_map = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
+    print("SLACK_API_CHANNEL_MAP len:", len(raw_map), "(0 means missing — bot will skip chat.postMessage)")
+    if raw_map:
+        from p0_logic.config import _parse_incident_keyed_url_map
+
+        keys = list(_parse_incident_keyed_url_map(raw_map).keys())
+        print("parsed oc_ keys in SLACK_API_CHANNEL_MAP:", keys)
+
     ch = (os.getenv("SLACK_TEST_CHANNEL") or "").strip()
     if not ch:
-        raw = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
-        for seg in raw.split(","):
+        for seg in raw_map.split(","):
             seg = seg.strip()
             if "=" in seg:
                 _, _, v = seg.partition("=")
@@ -46,7 +53,7 @@ def main() -> None:
                 break
 
     print("SLACK_BOT_TOKEN len:", len(token), "(0 means missing)")
-    print("channel:", ch or "(set SLACK_TEST_CHANNEL=C... or SLACK_API_CHANNEL_MAP)")
+    print("channel for test:", ch or "(set SLACK_TEST_CHANNEL=C... or fix SLACK_API_CHANNEL_MAP)")
 
     if not token:
         print("FATAL: no SLACK_BOT_TOKEN")

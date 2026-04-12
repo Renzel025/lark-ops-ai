@@ -95,11 +95,24 @@ def post_slack_chat_api_message(incident_chat_id: str, text: str) -> bool:
         )
         return False
     if not channel:
-        log.warning(
-            "Slack chat.postMessage skipped: no SLACK_API_CHANNEL_MAP entry for incident_chat_id=%s "
-            "(add oc_=C... for this Lark group; must match where P0 was triggered)",
-            cid or "(empty)",
-        )
+        raw_map = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
+        if not raw_map:
+            log.warning(
+                "Slack chat.postMessage skipped: SLACK_API_CHANNEL_MAP is empty in the process — "
+                "add one line to %s (no line breaks): SLACK_API_CHANNEL_MAP=oc_xxx=C0...,oc_yyy=C0... "
+                "If token works but this is empty, a broken quoted line above in .env can hide later vars; fix quotes.",
+                _config.ENV_PATH,
+            )
+        else:
+            from p0_logic.config import _parse_incident_keyed_url_map
+
+            keys = list(_parse_incident_keyed_url_map(raw_map).keys())
+            log.warning(
+                "Slack chat.postMessage skipped: incident_chat_id=%s not in map — map has these oc_ keys "
+                "(must match Lark exactly, character for character): %s",
+                cid or "(empty)",
+                keys,
+            )
         return False
     if not body:
         return False
