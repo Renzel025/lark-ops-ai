@@ -60,6 +60,8 @@ format_participants_names_display = participants.format_participants_names_displ
 
 # Lark
 get_tenant_token = lark_client.get_tenant_token
+get_tenant_token_primary = lark_client.get_tenant_token_primary
+get_tenant_token_for_severity_dm = lark_client.get_tenant_token_for_severity_dm
 post_text_to_chat = lark_client.post_text_to_chat
 post_card_to_chat = lark_client.post_card_to_chat
 post_text_to_open_id = lark_client.post_text_to_open_id
@@ -113,6 +115,8 @@ slack_automation_enabled = config.slack_automation_enabled
 slack_huddle_on_p0_start = config.slack_huddle_on_p0_start
 slack_huddle_on_overview_send = config.slack_huddle_on_overview_send
 slack_severity_prompt_enabled = config.slack_severity_prompt_enabled
+get_lark_primary_app_credentials = config.get_lark_primary_app_credentials
+get_lark_severity_app_credentials = config.get_lark_severity_app_credentials
 get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incident_chat
 get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
 get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
@@ -162,6 +166,10 @@ __all__ = [
     "departments_line_from_names",
     "format_participants_names_display",
     "get_tenant_token",
+    "get_tenant_token_primary",
+    "get_tenant_token_for_severity_dm",
+    "get_lark_primary_app_credentials",
+    "get_lark_severity_app_credentials",
     "post_text_to_chat",
     "post_card_to_chat",
     "post_text_to_open_id",

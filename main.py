@@ -74,7 +74,30 @@ app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()
 LARK_APP_SECRET = os.getenv("LARK_APP_SECRET", "").strip()
+# Optional second app: severity / minor follow-up DMs (must match config.get_lark_severity_app_credentials).
+LARK_SEVERITY_APP_ID = (
+    os.getenv("LARK_SEVERITY_APP_ID")
+    or os.getenv("LARK_APP_ID_SEVERITY")
+    or os.getenv("LARK_APP_ID_2")
+    or ""
+).strip()
+LARK_SEVERITY_APP_SECRET = (
+    os.getenv("LARK_SEVERITY_APP_SECRET")
+    or os.getenv("LARK_APP_SECRET_SEVERITY")
+    or os.getenv("LARK_APP_SECRET_2")
+    or ""
+).strip()
 LARK_ENCRYPT_KEY = os.getenv("LARK_ENCRYPT_KEY", "").strip()
+
+log.info(
+    "Lark severity DM bot: %s",
+    (
+        f"second app (app_id tail …{LARK_SEVERITY_APP_ID[-8:]})"
+        if LARK_SEVERITY_APP_ID
+        else "NOT configured — severity cards use PRIMARY app (same as overview). "
+        "Set LARK_SEVERITY_APP_ID + LARK_SEVERITY_APP_SECRET (or LARK_APP_ID_2 + LARK_APP_SECRET_2)."
+    ),
+)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 lark_client = (
@@ -151,6 +174,26 @@ def _deep_get(d: Any, *path: str) -> Any:
             return None
         cur = cur.get(key)
     return cur
+
+
+def _tenant_token_for_card_action(payload: Dict[str, Any]) -> str:
+    """
+    Primary app: overview / Build overview / most cards.
+    When ``LARK_SEVERITY_APP_ID`` is set, card actions from the severity bot use that app's token
+    (Lark sets ``header.app_id`` on the webhook payload).
+    """
+    aid = _deep_get(payload, "header", "app_id")
+    if (
+        isinstance(aid, str)
+        and aid.strip()
+        and LARK_SEVERITY_APP_ID
+        and aid.strip() == LARK_SEVERITY_APP_ID
+    ):
+        t = get_tenant_token(LARK_SEVERITY_APP_ID, LARK_SEVERITY_APP_SECRET)
+        if t:
+            return t
+        log.error("Severity app tenant token empty; falling back to primary app.")
+    return get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
 
 
 def _first_non_empty_str(values: List[Any]) -> str:
@@ -481,7 +524,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
 
         if event_type == "card.action.trigger":
             t_card = time.perf_counter()
-            tenant_token = get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
+            tenant_token = _tenant_token_for_card_action(payload)
             if not tenant_token:
                 log.error("No tenant token; cannot process.")
                 return

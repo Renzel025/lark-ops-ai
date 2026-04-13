@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 import logging
@@ -16,18 +17,40 @@ try:
 except Exception:
     dotenv_values = None
 
-ENV_PATH = os.getenv("ENV_PATH", "/home/ubuntu/lark-ops-ai/.env")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_env_file_path() -> str:
+    """
+    Same rule as ``main._load_dotenv_early``: ``ENV_PATH`` if set, else repo ``.env`` if it exists,
+    else legacy default. Avoids ``reload_env_runtime`` reading a *different* file than startup and
+    wiping keys with empty placeholders.
+    """
+    raw = (os.getenv("ENV_PATH") or "").strip()
+    if raw:
+        return raw
+    p = _REPO_ROOT / ".env"
+    if p.is_file():
+        return str(p)
+    return "/home/ubuntu/lark-ops-ai/.env"
+
+
+ENV_PATH = resolve_env_file_path()
 
 
 def reload_env_runtime() -> None:
     if not dotenv_values:
         return
     try:
-        values = dotenv_values(ENV_PATH)
+        path = resolve_env_file_path()
+        values = dotenv_values(path)
         for k, v in (values or {}).items():
             if v is None:
                 continue
-            os.environ[k] = str(v)
+            sv = str(v).strip()
+            if not sv:
+                continue  # do not overwrite with blank (common in a second .env file)
+            os.environ[k] = sv
     except Exception as e:
         log.error("Failed to reload .env: %s", e)
 
@@ -489,6 +512,39 @@ def slack_severity_prompt_enabled() -> bool:
     reload_env_runtime()
     v = (os.getenv("SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION") or "1").strip().lower()
     return v not in ("0", "false", "no", "off")
+
+
+def get_lark_primary_app_credentials() -> Tuple[str, str]:
+    """Main bot: P0 meeting, green overview DM, most IM (``LARK_APP_ID`` / ``LARK_APP_SECRET``)."""
+    reload_env_runtime()
+    return ((os.getenv("LARK_APP_ID") or "").strip(), (os.getenv("LARK_APP_SECRET") or "").strip())
+
+
+def get_lark_severity_app_credentials() -> Tuple[str, str]:
+    """
+    Optional second bot: severity Major/Minor + minor follow-up cards only.
+
+    Set ``LARK_SEVERITY_APP_ID`` and ``LARK_SEVERITY_APP_SECRET``. Aliases:
+
+    - ``LARK_APP_ID_SEVERITY`` / ``LARK_APP_SECRET_SEVERITY``
+    - ``LARK_APP_ID_2`` / ``LARK_APP_SECRET_2`` (common when you name the second app this way)
+
+    If either id or secret is empty, severity DMs use the **primary** app (automation bot).
+    """
+    reload_env_runtime()
+    sid = (
+        os.getenv("LARK_SEVERITY_APP_ID")
+        or os.getenv("LARK_APP_ID_SEVERITY")
+        or os.getenv("LARK_APP_ID_2")
+        or ""
+    ).strip()
+    sec = (
+        os.getenv("LARK_SEVERITY_APP_SECRET")
+        or os.getenv("LARK_APP_SECRET_SEVERITY")
+        or os.getenv("LARK_APP_SECRET_2")
+        or ""
+    ).strip()
+    return sid, sec
 
 
 def get_slack_channel_url_for_incident_chat(chat_id: str) -> str:

@@ -39,7 +39,8 @@ SHEETS_BASES = _config.SHEETS_BASES
 SHEETS_V2_BASES = _config.SHEETS_V2_BASES
 MEETING_TOPIC = _config.MEETING_TOPIC
 
-_TOKEN_CACHE: Dict[str, Any] = {"token": "", "exp": 0}
+# Per ``app_id`` — two Lark apps (e.g. overview bot + severity bot) must not share one token cache.
+_TOKEN_CACHE: Dict[str, Dict[str, Any]] = {}
 _TOKEN_LOCK = __import__("threading").Lock()
 
 
@@ -48,16 +49,21 @@ def _timeout_kw() -> Dict[str, Any]:
 
 
 def get_tenant_token(app_id: str, app_secret: str) -> str:
+    """Tenant token for one app. Cached separately per ``app_id`` so multiple bots can coexist."""
     t0 = time.perf_counter()
+    aid = (app_id or "").strip()
+    if not aid or not (app_secret or "").strip():
+        return ""
     now = int(time.time())
     with _TOKEN_LOCK:
-        if _TOKEN_CACHE["token"] and now < _TOKEN_CACHE["exp"]:
+        ent = _TOKEN_CACHE.get(aid)
+        if ent and ent.get("token") and now < int(ent.get("exp") or 0):
             perf_log("tenant_token cache_hit", t0)
-            return _TOKEN_CACHE["token"]
+            return str(ent["token"])
     t_fetch = time.perf_counter()
     try:
         url = f"{LARK_BASE}/auth/v3/tenant_access_token/internal"
-        resp = _lark_http().post(url, json={"app_id": app_id, "app_secret": app_secret}, **_timeout_kw())
+        resp = _lark_http().post(url, json={"app_id": aid, "app_secret": app_secret}, **_timeout_kw())
         data = resp.json() if resp.text else {}
         if data.get("code") != 0:
             log.error("Tenant token API error: %s", data.get("msg"))
@@ -67,14 +73,45 @@ def get_tenant_token(app_id: str, app_secret: str) -> str:
             return ""
         exp = int(data.get("expire") or 3600)
         with _TOKEN_LOCK:
-            _TOKEN_CACHE["token"] = tok
-            _TOKEN_CACHE["exp"] = now + exp - 120
+            _TOKEN_CACHE[aid] = {"token": tok, "exp": now + exp - 120}
         return tok
     except Exception as e:
         log.error("Tenant token fetch error: %s", e)
         return ""
     finally:
         perf_log("tenant_token fetch", t_fetch)
+
+
+def get_tenant_token_primary() -> str:
+    """Primary Lark app: overview / meeting / default DMs (``LARK_APP_ID`` / ``LARK_APP_SECRET``)."""
+    pid, psec = _config.get_lark_primary_app_credentials()
+    return get_tenant_token(pid, psec)
+
+
+def get_tenant_token_for_severity_dm() -> str:
+    """
+    Second app for severity + minor follow-up cards only (``LARK_SEVERITY_APP_ID`` / ``SECRET``).
+    If unset, same token as primary (single-bot mode) — **severity DMs then come from the automation bot**.
+    """
+    sid, sec = _config.get_lark_severity_app_credentials()
+    pid, _psec = _config.get_lark_primary_app_credentials()
+    if sid and sec:
+        if pid and sid == pid:
+            log.warning(
+                "LARK_SEVERITY_APP_ID equals LARK_APP_ID — both use the same app; "
+                "create a separate Lark app for severity or fix .env."
+            )
+            return get_tenant_token_primary()
+        tok = get_tenant_token(sid, sec)
+        if not tok:
+            log.error(
+                "Severity app credentials are set (app_id tail=%s) but tenant token failed — "
+                "check LARK_SEVERITY_APP_SECRET; falling back to primary bot for this call.",
+                sid[-8:] if len(sid) > 8 else sid,
+            )
+            return get_tenant_token_primary()
+        return tok
+    return get_tenant_token_primary()
 
 
 def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:

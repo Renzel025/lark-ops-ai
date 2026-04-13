@@ -516,7 +516,7 @@ def end_p0_session(
     if token and chat_id:
         s_end = P0_SESSIONS.get(chat_id)
         if s_end and s_end.get("dm_instruction_deferred"):
-            _flush_deferred_dm_instruction_for_incident(chat_id, token)
+            _flush_deferred_dm_instruction_for_incident(chat_id)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
     if token:
@@ -572,7 +572,7 @@ def cancel_p0_session(
     if token and chat_id:
         s_can = P0_SESSIONS.get(chat_id)
         if s_can and s_can.get("dm_instruction_deferred"):
-            _flush_deferred_dm_instruction_for_incident(chat_id, token)
+            _flush_deferred_dm_instruction_for_incident(chat_id)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
     if token:
@@ -1035,8 +1035,9 @@ def start_p0(
                 group_label=chat_label,
                 priority=priority,
             )
+            tok_sev = _lark.get_tenant_token_for_severity_dm()
             for oid in dm_targets_list:
-                st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
+                st, body, _mid = _lark.post_card_to_open_id(oid, tok_sev, card)
                 if st != 200:
                     log.warning(
                         "start_p0: slack severity card HTTP=%s open_id=%s body=%s",
@@ -1082,11 +1083,14 @@ def _dm_instruction_item_from_session(chat_id: str, sess: Dict[str, Any]) -> Dic
     }
 
 
-def _flush_deferred_dm_instruction_for_incident(chat_id: str, token: str) -> None:
-    """Post the green DM instruction card if it was deferred for the severity-first flow."""
+def _flush_deferred_dm_instruction_for_incident(chat_id: str) -> None:
+    """Post the green DM instruction card if it was deferred for the severity-first flow (always primary bot)."""
     cid = (chat_id or "").strip()
-    tok = (token or "").strip()
-    if not cid.startswith("oc_") or not tok:
+    if not cid.startswith("oc_"):
+        return
+    tok = _lark.get_tenant_token_primary()
+    if not tok:
+        log.warning("_flush_deferred_dm_instruction_for_incident: no primary tenant token chat_id=%s", cid)
         return
     sess = P0_SESSIONS.get(cid)
     if not sess or not sess.get("dm_instruction_deferred"):
@@ -1138,7 +1142,7 @@ def apply_slack_severity_choice(
             run_slack_p0_notify_and_huddle(cid, pr, label)
         except Exception as e:
             log.warning("apply_slack_severity_choice: Slack hook failed: %s", e)
-        _flush_deferred_dm_instruction_for_incident(cid, token)
+        _flush_deferred_dm_instruction_for_incident(cid)
     elif (sender_open_id or "").strip():
         pr = str(sess.get("priority") or "P0").strip().upper()
         if pr not in ("P0", "P1"):
@@ -1151,7 +1155,8 @@ def apply_slack_severity_choice(
             group_label=lab,
             priority=pr,
         )
-        st, body, _mid = _lark.post_card_to_open_id(sender_open_id, token, card)
+        tok_sev = _lark.get_tenant_token_for_severity_dm()
+        st, body, _mid = _lark.post_card_to_open_id(sender_open_id, tok_sev, card)
         if st != 200:
             log.warning(
                 "apply_slack_severity_choice: minor role card HTTP=%s open_id=%s body=%s",
@@ -1160,6 +1165,7 @@ def apply_slack_severity_choice(
                 (body or "")[:300],
             )
     if (sender_open_id or "").strip():
+        tok_sev = _lark.get_tenant_token_for_severity_dm()
         if is_major:
             msg = (
                 "✅ Recorded as **Major** — Slack notified and huddle automation started (if enabled)."
@@ -1169,7 +1175,7 @@ def apply_slack_severity_choice(
                 "✅ Recorded as **Minor** — Slack automation skipped.\n"
                 "Use the card above to choose SRE BACKEND / SRE FE / No need (duty → Slack is stubbed)."
             )
-        _lark.post_text_to_open_id(sender_open_id, token, msg)
+        _lark.post_text_to_open_id(sender_open_id, tok_sev, msg)
     return None
 
 
@@ -1186,9 +1192,9 @@ def apply_slack_minor_card_action(
     if not _config.slack_severity_prompt_enabled():
         return "disabled"
     cid = (chat_id or "").strip()
-    tok = (token or "").strip()
     soid = (sender_open_id or "").strip()
-    if not cid.startswith("oc_") or not tok or not soid:
+    tok = _lark.get_tenant_token_for_severity_dm()
+    if not cid.startswith("oc_") or not soid or not tok:
         return "no_session"
     sess = P0_SESSIONS.get(cid)
     if not sess:
@@ -1254,7 +1260,7 @@ def apply_slack_minor_card_action(
         sess["slack_minor_phase"] = "done"
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid, tok)
+        _flush_deferred_dm_instruction_for_incident(cid)
         _lark.post_text_to_open_id(
             soid,
             tok,
@@ -1270,7 +1276,7 @@ def apply_slack_minor_card_action(
         sess["slack_minor_backend_team"] = team
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid, tok)
+        _flush_deferred_dm_instruction_for_incident(cid)
         _lark.post_text_to_open_id(soid, tok, _stub_backend(team))
         return None
 
@@ -1280,7 +1286,7 @@ def apply_slack_minor_card_action(
         sess["slack_minor_phase"] = "done"
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid, tok)
+        _flush_deferred_dm_instruction_for_incident(cid)
         _lark.post_text_to_open_id(soid, tok, _stub_fe())
         return None
 
