@@ -5,7 +5,7 @@ import logging
 import hashlib
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -92,6 +92,48 @@ def decrypt_lark_event(encrypted_b64: str, encrypt_key: str) -> Dict[str, Any]:
     cipher = AES.new(key, AES.MODE_CBC, iv=raw[:16])
     pt = cipher.decrypt(raw[16:])
     return json.loads(pt[:-pt[-1]].decode("utf-8"))
+
+
+def _lark_encrypt_keys_for_webhook() -> List[str]:
+    """
+    Each Lark app has its own **Event Encryption Key**. If two apps share the same Request URL,
+    encrypted ``challenge`` payloads must be decrypted with the matching key — a single
+    ``LARK_ENCRYPT_KEY`` only works for one app.
+
+    Set ``LARK_ENCRYPT_KEY_2`` (and optionally ``LARK_ENCRYPT_KEY_3``) to the other app's key from
+    Developer Console → your app → Event Configuration → Encryption Strategy.
+    """
+    out: List[str] = []
+    for k in (
+        LARK_ENCRYPT_KEY,
+        (os.getenv("LARK_ENCRYPT_KEY_2") or "").strip(),
+        (os.getenv("LARK_ENCRYPT_KEY_3") or "").strip(),
+    ):
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
+def _decrypt_lark_webhook_body(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Decrypt ``encrypt`` if present; try every configured key (multi-app same URL)."""
+    if "encrypt" not in body:
+        return body
+    enc = body.get("encrypt")
+    if not isinstance(enc, str) or not enc.strip():
+        return body
+    keys = _lark_encrypt_keys_for_webhook()
+    if not keys:
+        raise ValueError("LARK_ENCRYPT_KEY is empty but payload is encrypted")
+    last_err: Optional[Exception] = None
+    for i, ek in enumerate(keys):
+        try:
+            plain = decrypt_lark_event(enc, ek)
+            if i > 0:
+                log.info("lark webhook decrypt succeeded using encrypt key slot %s (not primary)", i)
+            return plain
+        except Exception as e:
+            last_err = e
+    raise last_err if last_err else ValueError("decrypt failed")
 
 
 def _safe_json_loads(s: str) -> Dict[str, Any]:
@@ -395,9 +437,13 @@ async def lark_webhook(req: Request, background: BackgroundTasks):
 
     if "encrypt" in body:
         try:
-            body = decrypt_lark_event(body["encrypt"], LARK_ENCRYPT_KEY)
+            body = _decrypt_lark_webhook_body(body)
         except Exception as e:
-            log.error("Failed decrypting lark event: %s", e, exc_info=True)
+            log.error(
+                "Failed decrypting lark event (add LARK_ENCRYPT_KEY_2 for a second app sharing this URL): %s",
+                e,
+                exc_info=True,
+            )
             return {"code": 400, "msg": "decrypt failed"}
 
     log.info("RAW webhook body=%s", json.dumps(body, ensure_ascii=False)[:4000])
