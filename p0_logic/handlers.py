@@ -25,6 +25,18 @@ log = logging.getLogger("lark-ops-ai")
 _DM_NO_OVERVIEW_TARGET_DEBOUNCE: Dict[str, float] = {}
 _DM_NO_OVERVIEW_TARGET_DEBOUNCE_SEC = 120.0
 
+# Card actions that require a stored overview preview — not severity / minor follow-up buttons.
+_PREVIEW_WORKFLOW_ACTIONS = frozenset(
+    {
+        "send_preview",
+        "generate_again",
+        "edit_preview",
+        "save_edit",
+        "back_to_preview",
+        "cancel_preview",
+    }
+)
+
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
@@ -170,9 +182,59 @@ def _extract_card_action_name(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _find_slack_dm_card_action_nested(payload: Dict[str, Any]) -> str:
+    """
+    Some Lark clients send button ``action`` under nested paths (not only ``event.action.value``).
+    Walk the payload and return the first ``slack_severity_*`` / ``slack_minor_*`` id we see.
+    """
+    out: List[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            a = node.get("action")
+            if isinstance(a, str) and a.strip():
+                s = a.strip()
+                if s.startswith("slack_severity_") or s.startswith("slack_minor_"):
+                    out.append(s)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+        elif isinstance(node, str) and node.strip().startswith("{"):
+            try:
+                walk(json.loads(node))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+    walk(payload)
+    return out[0] if out else ""
+
+
+def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
+    """Primary parse + nested fallback so severity/minor buttons never fall through to the preview branch."""
+    primary = (_extract_card_action_name(payload) or "").strip()
+    nested = _find_slack_dm_card_action_nested(payload)
+    if nested and nested != primary:
+        if not primary or primary not in (
+            "slack_severity_major",
+            "slack_severity_minor",
+            "slack_minor_sre_backend",
+            "slack_minor_sre_fe",
+            "slack_minor_no_need",
+            "slack_minor_team_fpms",
+            "slack_minor_team_cpms",
+            "slack_minor_team_pms",
+            "slack_minor_fe_reach",
+        ):
+            log.info("card_action: nested action=%s (primary was %r)", nested, primary)
+            return nested
+    return primary
+
+
 def card_action_name_from_payload(payload: Dict[str, Any]) -> str:
     """Public helper for webhook routing (e.g. fast path before BackgroundTasks)."""
-    return (_extract_card_action_name(payload) or "").strip() or "unknown"
+    return (_resolve_card_action_name(payload) or "").strip() or "unknown"
 
 
 def _show_participants_body_text() -> str:
@@ -652,8 +714,8 @@ def handle_dm_generate_overview(
 def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     from . import issues as _issues
 
-    # Do not default to "unknown" — that mis-routes to the preview branch (see _card_action_value_dict).
-    action_name = (_extract_card_action_name(payload) or "").strip()
+    # Resolve severity/minor actions even when Lark nests ``value`` oddly (see _resolve_card_action_name).
+    action_name = (_resolve_card_action_name(payload) or "").strip()
     t0 = time.perf_counter()
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
@@ -742,6 +804,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             # This branch only runs if handle_lark_card_action is invoked without that routing (e.g. tests or legacy callers).
             body = _show_participants_body_text()
             _lark.post_text_to_open_id(sender_open_id, tenant_token, body)
+            return
+        if action_name not in _PREVIEW_WORKFLOW_ACTIONS:
+            log.warning("Unknown card action: %s", action_name)
             return
         preview = _drafts.get_preview(sender_open_id)
         if not preview:
