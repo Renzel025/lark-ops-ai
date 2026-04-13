@@ -1122,8 +1122,10 @@ def start_p0(
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
     """
-    When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, Slack notify / overview mirror / huddle
-    only run if the operator chose **Major**. **Minor** or **pending** → no Slack automation.
+    When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, **initial** Slack notify + **huddle** on overview send
+    only run if the operator chose **Major**. **Minor** or **pending** → those hooks are skipped.
+
+    **Overview text mirror** to Slack on ``send_preview`` is **not** gated by this (see ``handlers.send_preview``).
 
     **P1** sessions never use the severity DM (see ``start_p0``); treat them like severity is off.
     """

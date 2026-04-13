@@ -72,6 +72,26 @@ def _deep_get(d: Any, *path: str) -> Any:
     return cur
 
 
+def _card_action_value_dict(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Lark ``card.action.trigger`` may send ``event.action.value`` as a **JSON string** or a dict.
+    Without parsing the string, ``value.action`` is invisible and routes fall through to the preview handler.
+    """
+    val = _deep_get(payload, "event", "action", "value")
+    if val is None:
+        val = _deep_get(payload, "action", "value")
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str) and val.strip():
+        try:
+            j = json.loads(val)
+            if isinstance(j, dict):
+                return j
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return {}
+
+
 def _extract_card_action_sender_open_id(payload: Dict[str, Any]) -> str:
     candidates = [
         _deep_get(payload, "event", "operator", "operator_id", "open_id"),
@@ -123,10 +143,8 @@ def _post_dm_text_primary_bot(sender_open_id: str, text: str) -> None:
 
 
 def _extract_dm_scope_from_card_payload(payload: Dict[str, Any]) -> Tuple[str, str, str]:
-    val = _deep_get(payload, "event", "action", "value")
-    if val is None:
-        val = _deep_get(payload, "action", "value")
-    if not isinstance(val, dict):
+    val = _card_action_value_dict(payload)
+    if not val:
         return "", "", ""
     tc = str(val.get("target_chat") or "").strip()
     src = str(val.get("source_incident_chat_id") or "").strip()
@@ -144,13 +162,9 @@ def _maybe_merge_dm_scope_from_card(sender_open_id: str, payload: Dict[str, Any]
 
 
 def _extract_card_action_name(payload: Dict[str, Any]) -> str:
-    candidates = [
-        _deep_get(payload, "event", "action", "value", "action"),
-        _deep_get(payload, "event", "action", "value", "button_action"),
-        _deep_get(payload, "action", "value", "action"),
-        _deep_get(payload, "action", "value", "button_action"),
-    ]
-    for x in candidates:
+    val = _card_action_value_dict(payload)
+    for key in ("action", "button_action"):
+        x = val.get(key)
         if isinstance(x, str) and x.strip():
             return x.strip()
     return ""
@@ -304,9 +318,12 @@ def handle_lark_card_action_show_participants_sync(
 
 
 def _extract_p1_confirm_nonce(payload: Dict[str, Any]) -> str:
-    v = _deep_get(payload, "event", "action", "value", "p1_nonce") or _deep_get(
-        payload, "action", "value", "p1_nonce"
-    )
+    d = _card_action_value_dict(payload)
+    v = d.get("p1_nonce")
+    if v is None:
+        v = _deep_get(payload, "event", "action", "value", "p1_nonce") or _deep_get(
+            payload, "action", "value", "p1_nonce"
+        )
     if v is None:
         return ""
     return str(v).strip()
@@ -350,6 +367,9 @@ def _extract_card_action_open_chat_id(payload: Dict[str, Any]) -> str:
 
 def _extract_form_field(payload: Dict[str, Any], field: str) -> str:
     """Read a form field value, including empty string when the user cleared the field."""
+    val_d = _card_action_value_dict(payload)
+    if field in val_d and isinstance(val_d[field], str):
+        return val_d[field].strip()
     candidates = [
         _deep_get(payload, "event", "action", "form_value", field),
         _deep_get(payload, "action", "form_value", field),
@@ -632,7 +652,8 @@ def handle_dm_generate_overview(
 def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     from . import issues as _issues
 
-    action_name = (_extract_card_action_name(payload) or "").strip() or "unknown"
+    # Do not default to "unknown" — that mis-routes to the preview branch (see _card_action_value_dict).
+    action_name = (_extract_card_action_name(payload) or "").strip()
     t0 = time.perf_counter()
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
@@ -724,7 +745,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         preview = _drafts.get_preview(sender_open_id)
         if not preview:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No preview found.")
+            _lark.post_text_to_open_id(
+                sender_open_id,
+                tenant_token,
+                "⚠️ No overview preview in this bot session. Open the **green** card from the primary bot, "
+                "paste details, then tap **Build overview**. (Declaring P0 alone does not create a preview.)",
+            )
             return
         target_chat = str(preview.get("target_chat") or "").strip()
         start_epoch = int(preview.get("start_epoch") or 0)
@@ -765,12 +791,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     try:
                         from .slack_bridge import post_text_to_slack_for_incident
 
-                        if not _session.slack_cross_post_slack_enabled_for_incident_chat(src_inc):
-                            log.info(
-                                "send_preview: Slack overview mirror skipped (minor or pending severity) oc_=%s",
-                                src_inc[:32],
-                            )
-                        elif not post_text_to_slack_for_incident(src_inc, md):
+                        # Mirror overview text to Slack whenever the operator sends to the Lark group — no Major/Minor gate.
+                        # (Severity still gates ``run_slack_p0_notify_and_huddle`` and huddle below.)
+                        if not post_text_to_slack_for_incident(src_inc, md):
                             log.warning(
                                 "send_preview: Slack mirror failed for oc_=%s — check SLACK_BOT_TOKEN, "
                                 "bot invited to channel, SLACK_API_CHANNEL_MAP, or SLACK_OVERVIEW_WEBHOOK_MAP",
