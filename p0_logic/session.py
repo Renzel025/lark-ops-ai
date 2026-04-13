@@ -1105,26 +1105,32 @@ def start_p0(
             s_id, s_sec = _config.get_lark_severity_app_credentials()
             p_id, _p = _config.get_lark_primary_app_credentials()
             log.info(
-                "start_p0 severity DM: secondary_env_ok=%s severity_app_tail=%s primary_app_tail=%s duplicate_app_id=%s",
+                "start_p0 severity DM: secondary_env_ok=%s severity_app_tail=%s primary_app_tail=%s "
+                "severity_same_app_as_primary=%s (if True, use separate LARK_SEVERITY_APP_ID for dedicated severity bot)",
                 bool(s_id and s_sec),
                 (s_id[-12:] if s_id else "MISSING"),
                 (p_id[-12:] if p_id else "none"),
                 bool(s_id and p_id and s_id == p_id),
             )
             tok_sev = _lark.get_tenant_token_for_severity_dm()
+            tok_pri = _lark.get_tenant_token_primary()
             sess_snap = P0_SESSIONS.get(chat_id) or {}
             for oid in dm_targets_list:
                 uid = _resolve_lark_user_id_for_dm(oid, sess_snap, trigger_lark_user_id if oid == trigger_open_id else "")
                 use_uid = _severity_second_app_active() and bool(uid)
                 if _severity_second_app_active() and not uid:
+                    # Second app cannot address user by open_id alone — without user_id we used to skip (looked like "overview only").
+                    # Same severity card from the primary bot: open_id works; Major/Minor still route to this service.
                     log.warning(
-                        "start_p0: cannot resolve tenant user_id for severity DM open_id_tail=%s; skipping",
+                        "start_p0: no tenant user_id for cross-app severity DM open_id_tail=%s — "
+                        "posting severity card from primary bot instead",
                         oid[-12:] if oid else "",
                     )
-                    continue
-                st, body, _mid = _lark.post_card_to_user_cross_app(
-                    oid, uid, tok_sev, card, use_user_id=use_uid
-                )
+                    st, body, _mid = _lark.post_card_to_open_id(oid, tok_pri, card)
+                else:
+                    st, body, _mid = _lark.post_card_to_user_cross_app(
+                        oid, uid, tok_sev, card, use_user_id=use_uid
+                    )
                 if st != 200:
                     log.warning(
                         "start_p0: slack severity card HTTP=%s open_id=%s body=%s",
