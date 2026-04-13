@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,35 @@ _PREVIEW_WORKFLOW_ACTIONS = frozenset(
         "cancel_preview",
     }
 )
+
+# DM card actions for Slack severity / minor follow-up — must win over preview workflow if Lark misparses value.
+_SLACK_DM_SCOPE_ACTIONS = frozenset(
+    {
+        "slack_severity_major",
+        "slack_severity_minor",
+        "slack_minor_sre_backend",
+        "slack_minor_sre_fe",
+        "slack_minor_no_need",
+        "slack_minor_team_fpms",
+        "slack_minor_team_cpms",
+        "slack_minor_team_pms",
+        "slack_minor_fe_reach",
+    }
+)
+
+# Last-resort: find real button action in raw JSON (some tenants hide event.action.value oddly).
+_SLACK_DM_ACTION_IN_JSON_RE = re.compile(
+    r'"action"\s*:\s*"(slack_severity_(?:major|minor)|slack_minor_[a-z0-9_]+)"'
+)
+
+
+def _slack_dm_action_from_payload_regex(payload: Dict[str, Any]) -> str:
+    try:
+        raw = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return ""
+    m = _SLACK_DM_ACTION_IN_JSON_RE.search(raw)
+    return m.group(1) if m else ""
 
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
@@ -215,20 +245,28 @@ def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
     """Primary parse + nested fallback so severity/minor buttons never fall through to the preview branch."""
     primary = (_extract_card_action_name(payload) or "").strip()
     nested = _find_slack_dm_card_action_nested(payload)
+    rx = _slack_dm_action_from_payload_regex(payload)
+
+    # If Lark reports send_preview / etc. but the payload still contains slack_severity_* / slack_minor_*,
+    # route to Slack DM handlers (otherwise operators see "No overview preview" when tapping Major/Minor).
+    if primary in _PREVIEW_WORKFLOW_ACTIONS:
+        if nested in _SLACK_DM_SCOPE_ACTIONS:
+            log.info("card_action: overriding preview-like primary %r with nested %r", primary, nested)
+            return nested
+        if rx in _SLACK_DM_SCOPE_ACTIONS:
+            log.info("card_action: overriding preview-like primary %r with regex %r", primary, rx)
+            return rx
+
     if nested and nested != primary:
-        if not primary or primary not in (
-            "slack_severity_major",
-            "slack_severity_minor",
-            "slack_minor_sre_backend",
-            "slack_minor_sre_fe",
-            "slack_minor_no_need",
-            "slack_minor_team_fpms",
-            "slack_minor_team_cpms",
-            "slack_minor_team_pms",
-            "slack_minor_fe_reach",
-        ):
+        if not primary or primary not in _SLACK_DM_SCOPE_ACTIONS:
             log.info("card_action: nested action=%s (primary was %r)", nested, primary)
             return nested
+    if not primary:
+        if nested in _SLACK_DM_SCOPE_ACTIONS:
+            return nested
+        if rx in _SLACK_DM_SCOPE_ACTIONS:
+            log.info("card_action: empty primary resolved to %r (regex)", rx)
+            return rx
     return primary
 
 
