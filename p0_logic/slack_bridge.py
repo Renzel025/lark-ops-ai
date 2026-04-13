@@ -231,7 +231,8 @@ def post_overview_to_slack_webhook(webhook_url: str, markdown: str) -> bool:
 
 def run_slack_p0_notify_and_huddle(incident_chat_id: str, priority: str, source_chat_label: str) -> None:
     """
-    Slack notify + optional huddle subprocess — used on ``start_p0`` (legacy) or after **Major** is chosen.
+    Slack notify + optional huddle subprocess — used on ``start_p0`` when severity prompt is off, or after
+    **Major** when declare-time ``notify_slack_p0_started`` was not used (legacy / failed declare ping).
     """
     notify_slack_p0_started(incident_chat_id, priority, source_chat_label)
     if _config.slack_huddle_on_p0_start():

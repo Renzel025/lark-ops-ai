@@ -1109,6 +1109,16 @@ def start_p0(
                             )
                     except Exception:
                         pass
+            if _config.slack_notify_channel_on_p0_declare_when_severity_prompt():
+                try:
+                    from .slack_bridge import notify_slack_p0_started
+
+                    notify_slack_p0_started(chat_id, priority, chat_label)
+                    P0_SESSIONS[chat_id]["slack_p0_channel_ping_sent"] = True
+                    if _session_disk.enabled():
+                        _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
+                except Exception as e_decl:
+                    log.warning("start_p0: notify_slack_p0_started (declare-time) failed: %s", e_decl)
         else:
             run_slack_p0_notify_and_huddle(chat_id, priority, chat_label)
     except Exception as e:
@@ -1122,8 +1132,11 @@ def start_p0(
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
     """
-    When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, **initial** Slack notify + **huddle** on overview send
-    only run if the operator chose **Major**. **Minor** or **pending** → those hooks are skipped.
+    When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, **huddle** triggered from ``send_preview``
+    (see ``SLACK_HUDDLE_ON_OVERVIEW_SEND``) only runs if the operator chose **Major**. **Minor** or
+    **pending** → that hook is skipped.
+
+    **Declare-time** Slack channel ping (when enabled) happens in ``start_p0`` and is separate from this.
 
     **Overview text mirror** to Slack on ``send_preview`` is **not** gated by this (see ``handlers.send_preview``).
 
@@ -1215,9 +1228,18 @@ def apply_slack_severity_choice(
         if pr not in ("P0", "P1"):
             pr = "P0"
         try:
-            from .slack_bridge import run_slack_p0_notify_and_huddle
+            from .slack_bridge import enqueue_slack_huddle_automation, run_slack_p0_notify_and_huddle
 
-            run_slack_p0_notify_and_huddle(cid, pr, label)
+            if sess.get("slack_p0_channel_ping_sent"):
+                if _config.slack_huddle_on_p0_start():
+                    enqueue_slack_huddle_automation(cid, pr)
+                else:
+                    log.warning(
+                        "apply_slack_severity_choice: huddle NOT started (SLACK_HUDDLE_ON_P0_START=0) chat_id=%s",
+                        cid,
+                    )
+            else:
+                run_slack_p0_notify_and_huddle(cid, pr, label)
         except Exception as e:
             log.warning("apply_slack_severity_choice: Slack hook failed: %s", e)
     elif (sender_open_id or "").strip():
@@ -1248,14 +1270,27 @@ def apply_slack_severity_choice(
         tok_sev = _lark.get_tenant_token_for_severity_dm()
         use_uid = _severity_second_app_active() and bool(luid)
         if is_major:
-            msg = (
-                "✅ Recorded as **Major** — Slack notified and huddle automation started (if enabled)."
-            )
+            if sess.get("slack_p0_channel_ping_sent"):
+                msg = (
+                    "✅ Recorded as **Major** — huddle automation started if enabled "
+                    "(Slack channel was already notified when P0 was declared)."
+                )
+            else:
+                msg = (
+                    "✅ Recorded as **Major** — Slack notified and huddle automation started (if enabled)."
+                )
         else:
-            msg = (
-                "✅ Recorded as **Minor** — Slack automation skipped.\n"
-                "Use the card above to choose SRE BACKEND / SRE FE / No need (duty → Slack is stubbed)."
-            )
+            if sess.get("slack_p0_channel_ping_sent"):
+                msg = (
+                    "✅ Recorded as **Minor** — optional huddle/OM automation skipped "
+                    "(Slack channel may have been pinged when P0 was declared).\n"
+                    "Use the card above to choose SRE BACKEND / SRE FE / No need (duty → Slack is stubbed)."
+                )
+            else:
+                msg = (
+                    "✅ Recorded as **Minor** — Slack automation skipped.\n"
+                    "Use the card above to choose SRE BACKEND / SRE FE / No need (duty → Slack is stubbed)."
+                )
         _lark.post_text_to_user_cross_app(sender_open_id, luid, tok_sev, msg, use_user_id=use_uid)
     return None
 

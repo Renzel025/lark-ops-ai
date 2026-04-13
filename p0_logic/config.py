@@ -517,6 +517,18 @@ def slack_severity_prompt_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def slack_notify_channel_on_p0_declare_when_severity_prompt() -> bool:
+    """
+    When True (default): if ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, the Slack incident channel
+    is notified as soon as P0 is declared (before Major/Minor). After **Major**, only huddle automation
+    runs (no duplicate channel ping). Set ``SLACK_NOTIFY_CHANNEL_ON_P0_DECLARE_WITH_SEVERITY=0`` to keep
+    the legacy behavior: first Slack channel ping only after **Major**.
+    """
+    reload_env_runtime()
+    v = (os.getenv("SLACK_NOTIFY_CHANNEL_ON_P0_DECLARE_WITH_SEVERITY") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def get_lark_primary_app_credentials() -> Tuple[str, str]:
     """Main bot: P0 meeting, green overview DM, most IM (``LARK_APP_ID`` / ``LARK_APP_SECRET``)."""
     reload_env_runtime()
