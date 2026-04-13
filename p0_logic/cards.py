@@ -498,6 +498,242 @@ def build_slack_severity_prompt_card(
     }
 
 
+def build_slack_minor_role_prompt_card(
+    *,
+    source_incident_chat_id: str,
+    target_chat: str,
+    group_label: str,
+    priority: str = "P0",
+) -> Dict[str, Any]:
+    """
+    After **Minor**: ask whether to involve SRE Backend, SRE FE, or neither.
+    """
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    label = (group_label or "").strip() or "incident group"
+    sc = dict(
+        target_chat=str(target_chat or ""),
+        source_incident_chat_id=str(source_incident_chat_id or ""),
+        draft_priority=prio,
+    )
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"🔎 {prio} minor — SRE reach-out"}},
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**{prio}** in **{label}** is recorded as **minor** (no full Slack blast).\n\n"
+                            "Will an SRE check this issue? Pick who to reach on Slack (duty ping is **not** wired yet)."
+                        ),
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "column_set",
+                    "flex_mode": "none",
+                    "background_style": "default",
+                    "horizontal_spacing": "8px",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "SRE BACKEND"},
+                                    "type": "primary",
+                                    "value": _dm_button_value("slack_minor_sre_backend", **sc),
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "SRE FE"},
+                                    "type": "default",
+                                    "value": _dm_button_value("slack_minor_sre_fe", **sc),
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "No need"},
+                                    "type": "default",
+                                    "value": _dm_button_value("slack_minor_no_need", **sc),
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def build_slack_minor_backend_team_card(
+    *,
+    source_incident_chat_id: str,
+    target_chat: str,
+    group_label: str,
+    priority: str = "P0",
+) -> Dict[str, Any]:
+    """Which backend department should be reached on Slack (duty stub)."""
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    label = (group_label or "").strip() or "incident group"
+    sc = dict(
+        target_chat=str(target_chat or ""),
+        source_incident_chat_id=str(source_incident_chat_id or ""),
+        draft_priority=prio,
+    )
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"🧩 {prio} minor — backend team"}},
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**Which team will handle the issue?** Select the exact department to reach them on Slack.\n"
+                            f"({label})\n\n"
+                            "Duty lookup → Slack ping: **coming soon** (stub)."
+                        ),
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "column_set",
+                    "flex_mode": "none",
+                    "background_style": "default",
+                    "horizontal_spacing": "8px",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "FPMS"},
+                                    "type": "primary",
+                                    "value": _dm_button_value("slack_minor_team_fpms", **sc),
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "CPMS"},
+                                    "type": "default",
+                                    "value": _dm_button_value("slack_minor_team_cpms", **sc),
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "PMS"},
+                                    "type": "default",
+                                    "value": _dm_button_value("slack_minor_team_pms", **sc),
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def build_slack_minor_fe_reach_card(
+    *,
+    source_incident_chat_id: str,
+    target_chat: str,
+    group_label: str,
+    priority: str = "P0",
+) -> Dict[str, Any]:
+    """Optional FE dev reach-out (duty stub)."""
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    label = (group_label or "").strip() or "incident group"
+    sc = dict(
+        target_chat=str(target_chat or ""),
+        source_incident_chat_id=str(source_incident_chat_id or ""),
+        draft_priority=prio,
+    )
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"🎨 {prio} minor — FE"}},
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            "**Need to reach out to FE devs?**\n"
+                            f"({label})\n\n"
+                            "Press **FE** if you need to ping them on Slack. FE duty → Slack: **coming soon** (stub)."
+                        ),
+                    },
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "column_set",
+                    "flex_mode": "none",
+                    "background_style": "default",
+                    "horizontal_spacing": "8px",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "FE"},
+                                    "type": "primary",
+                                    "value": _dm_button_value("slack_minor_fe_reach", **sc),
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
 def _dm_scope_button_fields(
     *,
     target_chat: str = "",

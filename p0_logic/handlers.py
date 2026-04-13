@@ -135,6 +135,47 @@ def _show_participants_body_text() -> str:
     return empty_msg if not line.strip() else f"Participants\n{line}"
 
 
+def _handle_slack_minor_followup(payload: Dict[str, Any], tenant_token: str, action_name: str) -> None:
+    """Minor severity sub-cards: SRE BACKEND/FE, team FPMS/CPMS/PMS, FE reach (duty stubs)."""
+    sender_open_id = _extract_card_action_sender_open_id(payload)
+    _maybe_merge_dm_scope_from_card(sender_open_id, payload)
+    _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
+    chat_id = (src_inc or "").strip()
+    if not chat_id.startswith("oc_"):
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.")
+        return
+    err = _session.apply_slack_minor_card_action(chat_id, tenant_token, sender_open_id, action_name)
+    if err == "no_session":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.")
+        return
+    if err == "disabled":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Severity prompt is disabled in configuration.")
+        return
+    if err == "not_minor":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Minor follow-up only applies when severity is **Minor**.")
+        return
+    if err == "already_done":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ This minor flow was already completed.")
+        return
+    if err == "bad_phase":
+        if sender_open_id:
+            _lark.post_text_to_open_id(
+                sender_open_id,
+                tenant_token,
+                "ℹ️ Use the latest card in this thread — an earlier step may be outdated.",
+            )
+        return
+    if err == "unknown_action":
+        if sender_open_id:
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Unknown minor action.")
+        return
+
+
 def _handle_slack_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
     """DM card: Major / Minor before Slack automation."""
     sender_open_id = _extract_card_action_sender_open_id(payload)
@@ -581,6 +622,17 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
 
         if not sender_open_id or not action_name:
             log.warning("card.action.trigger missing sender/action payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
+            return
+        if action_name in (
+            "slack_minor_sre_backend",
+            "slack_minor_sre_fe",
+            "slack_minor_no_need",
+            "slack_minor_team_fpms",
+            "slack_minor_team_cpms",
+            "slack_minor_team_pms",
+            "slack_minor_fe_reach",
+        ):
+            _handle_slack_minor_followup(payload, tenant_token, action_name)
             return
         if action_name in ("slack_severity_major", "slack_severity_minor"):
             _handle_slack_severity_choice(payload, tenant_token, action_name == "slack_severity_major")

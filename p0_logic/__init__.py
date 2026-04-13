@@ -85,7 +85,11 @@ build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
 build_overview_result_card = cards.build_overview_result_card
 build_slack_severity_prompt_card = cards.build_slack_severity_prompt_card
+build_slack_minor_role_prompt_card = cards.build_slack_minor_role_prompt_card
+build_slack_minor_backend_team_card = cards.build_slack_minor_backend_team_card
+build_slack_minor_fe_reach_card = cards.build_slack_minor_fe_reach_card
 build_bilingual_overview_md = cards.build_bilingual_overview_md
+apply_slack_minor_card_action = session.apply_slack_minor_card_action
 
 # Config (for callers that need env)
 reload_env_runtime = config.reload_env_runtime
@@ -175,7 +179,11 @@ __all__ = [
     "build_edit_overview_card",
     "build_overview_result_card",
     "build_slack_severity_prompt_card",
+    "build_slack_minor_role_prompt_card",
+    "build_slack_minor_backend_team_card",
+    "build_slack_minor_fe_reach_card",
     "build_bilingual_overview_md",
+    "apply_slack_minor_card_action",
     "reload_env_runtime",
     "get_incident_group_chat_ids",
     "get_emergency_topic_for_source_chat",
