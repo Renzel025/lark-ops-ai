@@ -67,6 +67,28 @@ def _slack_dm_action_from_payload_regex(payload: Dict[str, Any]) -> str:
     m = _SLACK_DM_ACTION_IN_JSON_RE.search(raw)
     return m.group(1) if m else ""
 
+
+def _forced_slack_dm_action_from_event_action(payload: Dict[str, Any]) -> str:
+    """
+    Match Slack severity / minor follow-up ids inside ``event.action`` only (not the whole webhook).
+
+    Some Lark builds mis-parse ``value.action``; substring match on the **action** subtree keeps
+    Major/Minor out of the overview preview path.
+    """
+    ev = payload.get("event") or {}
+    act = ev.get("action")
+    if not isinstance(act, dict):
+        return ""
+    try:
+        chunk = json.dumps(act, ensure_ascii=False)
+    except Exception:
+        return ""
+    for name in sorted(_SLACK_DM_SCOPE_ACTIONS, key=len, reverse=True):
+        if name in chunk:
+            return name
+    return ""
+
+
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
@@ -243,7 +265,14 @@ def _find_slack_dm_card_action_nested(payload: Dict[str, Any]) -> str:
 
 def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
     """Primary parse + nested fallback so severity/minor buttons never fall through to the preview branch."""
+    forced = _forced_slack_dm_action_from_event_action(payload)
     primary = (_extract_card_action_name(payload) or "").strip()
+    if forced and forced != primary:
+        log.info("card_action: using event.action substring %r (primary was %r)", forced, primary)
+        return forced
+    if forced:
+        return forced
+
     nested = _find_slack_dm_card_action_nested(payload)
     rx = _slack_dm_action_from_payload_regex(payload)
 
@@ -614,6 +643,43 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
     return True
 
 
+def _recover_preview_from_draft_if_needed(
+    sender_open_id: str, tenant_token: str, action_name: str
+) -> bool:
+    """
+    Rebuild persisted preview from draft when the preview JSON is missing (restart, worker race,
+    rare store glitch) but draft content and ``oc_`` scope are still present.
+    """
+    if action_name == "cancel_preview":
+        return False
+    draft = _drafts.get_draft(sender_open_id)
+    if not draft:
+        return False
+    target_chat = str(draft.get("target_chat") or "").strip()
+    if not target_chat.startswith("oc_"):
+        return False
+    src_inc = str(draft.get("source_incident_chat_id") or "").strip()
+    if not _ensure_dm_preview_incident_session(sender_open_id, tenant_token, src_inc, target_chat):
+        return False
+    _chat_id, sess = _session.find_session_by_target_chat(target_chat)
+    start_epoch = int(sess.get("start_epoch") or time.time()) if sess else int(time.time())
+    md = _drafts.build_preview_from_draft(
+        sender_open_id=sender_open_id,
+        tenant_token=tenant_token,
+        target_chat=target_chat,
+        start_epoch=start_epoch,
+        draft=draft,
+    )
+    if not md or not _drafts.get_preview(sender_open_id):
+        return False
+    log.info(
+        "preview recovered from draft action=%s open_id_tail=%s",
+        action_name,
+        sender_open_id[-8:] if len(sender_open_id) > 8 else sender_open_id,
+    )
+    return True
+
+
 def handle_dm_generate_overview(
     sender_open_id: str,
     tenant_token: str,
@@ -847,6 +913,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             log.warning("Unknown card action: %s", action_name)
             return
         preview = _drafts.get_preview(sender_open_id)
+        if not preview:
+            _recover_preview_from_draft_if_needed(sender_open_id, tenant_token, action_name)
+            preview = _drafts.get_preview(sender_open_id)
         if not preview:
             _lark.post_text_to_open_id(
                 sender_open_id,
