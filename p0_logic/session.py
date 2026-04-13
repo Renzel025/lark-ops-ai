@@ -895,6 +895,31 @@ def p0_cooldown_remaining_sec(chat_id: str) -> int:
         return int(P0_COOLDOWN_SEC - elapsed)
 
 
+def _severity_second_app_active() -> bool:
+    sid, sec = _config.get_lark_severity_app_credentials()
+    pid, _ = _config.get_lark_primary_app_credentials()
+    return bool(sid and sec and pid and sid != pid)
+
+
+def _resolve_lark_user_id_for_dm(
+    operator_open_id: str,
+    sess: Dict[str, Any],
+    explicit_lark_user_id: str,
+) -> str:
+    """Tenant user_id for cross-app DM; prefer event payload, then session trigger, then contact lookup."""
+    ex = (explicit_lark_user_id or "").strip()
+    if ex:
+        return ex
+    oid = (operator_open_id or "").strip()
+    tr_open = str(sess.get("trigger_open_id") or "").strip()
+    if oid and tr_open and oid == tr_open:
+        u = str(sess.get("trigger_lark_user_id") or "").strip()
+        if u:
+            return u
+    tok_p = _lark.get_tenant_token_primary()
+    return _lark.get_tenant_user_id_by_open_id(tok_p, oid)
+
+
 def clear_p0_cooldown(chat_id: str) -> None:
     """
     Drop the per-chat cooldown timestamp so **p0** / **p1** keywords can fire again
@@ -914,12 +939,14 @@ def start_p0(
     trigger_open_id: str,
     priority: str = "P0",
     source_chat_name: str = "",
+    trigger_lark_user_id: str = "",
 ) -> None:
     from . import participants as _participants
 
     _config.reload_env_runtime()
     chat_id = (chat_id or "").strip()
     trigger_open_id = (trigger_open_id or "").strip()
+    trigger_lark_user_id = (trigger_lark_user_id or "").strip()
     priority = (priority or "P0").strip().upper()
     if not chat_id:
         return
@@ -969,6 +996,7 @@ def start_p0(
             "meeting_no": vc.get("meeting_no", ""),
             "meeting_id": vc.get("meeting_id", ""),
             "trigger_open_id": trigger_open_id,
+            "trigger_lark_user_id": trigger_lark_user_id,
             "source_chat": chat_id,
             "target_chat": target_chat,
             "source_chat_name": chat_label,
@@ -1020,13 +1048,18 @@ def start_p0(
         "label": chat_label,
     }
     dm_targets_list = [x for x in dm_targets if (x or "").strip()]
-    # Severity prompt before the usual DM instruction card so operators see Major/Minor first.
+    # Severity (2nd bot) only for **P0**. P1 sessions get the usual primary-bot overview DM immediately.
+    use_severity_for_session = (
+        _config.slack_severity_prompt_enabled()
+        and dm_targets_list
+        and priority == "P0"
+    )
+    # Severity bot (P0 only) can DM in parallel with the primary bot's green overview card.
     try:
         from .slack_bridge import run_slack_p0_notify_and_huddle
 
-        if _config.slack_severity_prompt_enabled() and dm_targets_list:
+        if use_severity_for_session:
             P0_SESSIONS[chat_id]["slack_severity"] = "pending"
-            P0_SESSIONS[chat_id]["dm_instruction_deferred"] = True
             if _session_disk.enabled():
                 _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
             card = _cards.build_slack_severity_prompt_card(
@@ -1035,9 +1068,29 @@ def start_p0(
                 group_label=chat_label,
                 priority=priority,
             )
+            s_id, s_sec = _config.get_lark_severity_app_credentials()
+            p_id, _p = _config.get_lark_primary_app_credentials()
+            log.info(
+                "start_p0 severity DM: secondary_env_ok=%s severity_app_tail=%s primary_app_tail=%s duplicate_app_id=%s",
+                bool(s_id and s_sec),
+                (s_id[-12:] if s_id else "MISSING"),
+                (p_id[-12:] if p_id else "none"),
+                bool(s_id and p_id and s_id == p_id),
+            )
             tok_sev = _lark.get_tenant_token_for_severity_dm()
+            sess_snap = P0_SESSIONS.get(chat_id) or {}
             for oid in dm_targets_list:
-                st, body, _mid = _lark.post_card_to_open_id(oid, tok_sev, card)
+                uid = _resolve_lark_user_id_for_dm(oid, sess_snap, trigger_lark_user_id if oid == trigger_open_id else "")
+                use_uid = _severity_second_app_active() and bool(uid)
+                if _severity_second_app_active() and not uid:
+                    log.warning(
+                        "start_p0: cannot resolve tenant user_id for severity DM open_id_tail=%s; skipping",
+                        oid[-12:] if oid else "",
+                    )
+                    continue
+                st, body, _mid = _lark.post_card_to_user_cross_app(
+                    oid, uid, tok_sev, card, use_user_id=use_uid
+                )
                 if st != 200:
                     log.warning(
                         "start_p0: slack severity card HTTP=%s open_id=%s body=%s",
@@ -1045,28 +1098,43 @@ def start_p0(
                         oid,
                         (body or "")[:300],
                     )
+                else:
+                    try:
+                        jb = json.loads(body or "{}")
+                        if isinstance(jb, dict) and jb.get("code") not in (0, None):
+                            log.warning(
+                                "start_p0: severity card Lark API code=%s msg=%s (still using this token; check bot / permission)",
+                                jb.get("code"),
+                                jb.get("msg"),
+                            )
+                    except Exception:
+                        pass
         else:
             run_slack_p0_notify_and_huddle(chat_id, priority, chat_label)
     except Exception as e:
         log.warning("start_p0: slack bridge hook failed: %s", e)
-    # When severity DM is shown first, defer the green "Send overview" card until Major/Minor (and minor sub-flow) complete.
-    if not (_config.slack_severity_prompt_enabled() and dm_targets_list):
-        for oid in dm_targets:
-            if not oid:
-                continue
-            enqueue_dm_instruction_if_needed(oid, token, item)
+    # Primary bot always DM's the green overview card (same declaration as severity bot for P0 when enabled).
+    for oid in dm_targets:
+        if not oid:
+            continue
+        enqueue_dm_instruction_if_needed(oid, token, item)
 
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
     """
     When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, Slack notify / overview mirror / huddle
     only run if the operator chose **Major**. **Minor** or **pending** → no Slack automation.
+
+    **P1** sessions never use the severity DM (see ``start_p0``); treat them like severity is off.
     """
     if not _config.slack_severity_prompt_enabled():
         return True
     sess = P0_SESSIONS.get((chat_id or "").strip())
     if not sess:
         return False
+    pr = str(sess.get("priority") or "P0").strip().upper()
+    if pr == "P1":
+        return True
     sev = (sess.get("slack_severity") or "pending").strip().lower()
     return sev == "major"
 
@@ -1084,7 +1152,7 @@ def _dm_instruction_item_from_session(chat_id: str, sess: Dict[str, Any]) -> Dic
 
 
 def _flush_deferred_dm_instruction_for_incident(chat_id: str) -> None:
-    """Post the green DM instruction card if it was deferred for the severity-first flow (always primary bot)."""
+    """Legacy: post the green DM if ``dm_instruction_deferred`` is still set (older sessions / cancel+end flush)."""
     cid = (chat_id or "").strip()
     if not cid.startswith("oc_"):
         return
@@ -1110,9 +1178,14 @@ def apply_slack_severity_choice(
     token: str,
     sender_open_id: str,
     is_major: bool,
+    operator_lark_user_id: str = "",
 ) -> Optional[str]:
     """
-    Handle Major/Minor DM button. Returns ``None`` on success, or ``no_session`` / ``already_answered`` / ``disabled``.
+    Handle Major/Minor DM button. Returns ``None`` on success, or
+    ``no_session`` / ``already_answered`` / ``disabled`` / ``missing_user_id``.
+
+    ``operator_lark_user_id`` (tenant ``user_id``, e.g. ``SNT0006``) is required for a **second** Lark app
+    sending DMs — ``open_id`` is app-scoped (99992361 ``open_id cross app``).
     """
     if not _config.slack_severity_prompt_enabled():
         return "disabled"
@@ -1125,6 +1198,9 @@ def apply_slack_severity_choice(
     sev = (sess.get("slack_severity") or "pending").strip().lower()
     if sev not in ("pending", ""):
         return "already_answered"
+    luid = _resolve_lark_user_id_for_dm(sender_open_id, sess, operator_lark_user_id or "")
+    if _severity_second_app_active() and not luid:
+        return "missing_user_id"
     severity = "major" if is_major else "minor"
     sess["slack_severity"] = severity
     if not is_major:
@@ -1142,7 +1218,6 @@ def apply_slack_severity_choice(
             run_slack_p0_notify_and_huddle(cid, pr, label)
         except Exception as e:
             log.warning("apply_slack_severity_choice: Slack hook failed: %s", e)
-        _flush_deferred_dm_instruction_for_incident(cid)
     elif (sender_open_id or "").strip():
         pr = str(sess.get("priority") or "P0").strip().upper()
         if pr not in ("P0", "P1"):
@@ -1156,7 +1231,10 @@ def apply_slack_severity_choice(
             priority=pr,
         )
         tok_sev = _lark.get_tenant_token_for_severity_dm()
-        st, body, _mid = _lark.post_card_to_open_id(sender_open_id, tok_sev, card)
+        use_uid = _severity_second_app_active() and bool(luid)
+        st, body, _mid = _lark.post_card_to_user_cross_app(
+            sender_open_id, luid, tok_sev, card, use_user_id=use_uid
+        )
         if st != 200:
             log.warning(
                 "apply_slack_severity_choice: minor role card HTTP=%s open_id=%s body=%s",
@@ -1166,6 +1244,7 @@ def apply_slack_severity_choice(
             )
     if (sender_open_id or "").strip():
         tok_sev = _lark.get_tenant_token_for_severity_dm()
+        use_uid = _severity_second_app_active() and bool(luid)
         if is_major:
             msg = (
                 "✅ Recorded as **Major** — Slack notified and huddle automation started (if enabled)."
@@ -1175,7 +1254,7 @@ def apply_slack_severity_choice(
                 "✅ Recorded as **Minor** — Slack automation skipped.\n"
                 "Use the card above to choose SRE BACKEND / SRE FE / No need (duty → Slack is stubbed)."
             )
-        _lark.post_text_to_open_id(sender_open_id, tok_sev, msg)
+        _lark.post_text_to_user_cross_app(sender_open_id, luid, tok_sev, msg, use_user_id=use_uid)
     return None
 
 
@@ -1184,10 +1263,12 @@ def apply_slack_minor_card_action(
     token: str,
     sender_open_id: str,
     action_name: str,
+    operator_lark_user_id: str = "",
 ) -> Optional[str]:
     """
     Minor follow-up cards after severity. Returns ``None`` on success, or
-    ``disabled`` / ``no_session`` / ``not_minor`` / ``already_done`` / ``bad_phase`` / ``unknown_action``.
+    ``disabled`` / ``no_session`` / ``not_minor`` / ``already_done`` / ``bad_phase`` /
+    ``unknown_action`` / ``missing_user_id``.
     """
     if not _config.slack_severity_prompt_enabled():
         return "disabled"
@@ -1210,6 +1291,10 @@ def apply_slack_minor_card_action(
     if pr not in ("P0", "P1"):
         pr = "P0"
     tgt = str(sess.get("target_chat") or "").strip()
+    luid = _resolve_lark_user_id_for_dm(soid, sess, operator_lark_user_id or "")
+    use_uid = _severity_second_app_active() and bool(luid)
+    if _severity_second_app_active() and not luid:
+        return "missing_user_id"
 
     def _stub_backend(team: str) -> str:
         return (
@@ -1232,7 +1317,7 @@ def apply_slack_minor_card_action(
             group_label=lab,
             priority=pr,
         )
-        st, body, _ = _lark.post_card_to_open_id(soid, tok, card)
+        st, body, _ = _lark.post_card_to_user_cross_app(soid, luid, tok, card, use_user_id=use_uid)
         if st != 200:
             log.warning("apply_slack_minor: backend team card HTTP=%s body=%s", st, (body or "")[:300])
         return None
@@ -1249,7 +1334,7 @@ def apply_slack_minor_card_action(
             group_label=lab,
             priority=pr,
         )
-        st, body, _ = _lark.post_card_to_open_id(soid, tok, card)
+        st, body, _ = _lark.post_card_to_user_cross_app(soid, luid, tok, card, use_user_id=use_uid)
         if st != 200:
             log.warning("apply_slack_minor: fe card HTTP=%s body=%s", st, (body or "")[:300])
         return None
@@ -1260,11 +1345,12 @@ def apply_slack_minor_card_action(
         sess["slack_minor_phase"] = "done"
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid)
-        _lark.post_text_to_open_id(
+        _lark.post_text_to_user_cross_app(
             soid,
+            luid,
             tok,
-            "✅ **No SRE reach-out** recorded. The DM overview card should appear if it was deferred.",
+            "✅ **No SRE reach-out** recorded. Use the green **Send overview** card from the primary bot DM if you still need to post an overview.",
+            use_user_id=use_uid,
         )
         return None
 
@@ -1276,8 +1362,7 @@ def apply_slack_minor_card_action(
         sess["slack_minor_backend_team"] = team
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid)
-        _lark.post_text_to_open_id(soid, tok, _stub_backend(team))
+        _lark.post_text_to_user_cross_app(soid, luid, tok, _stub_backend(team), use_user_id=use_uid)
         return None
 
     if act == "slack_minor_fe_reach":
@@ -1286,8 +1371,7 @@ def apply_slack_minor_card_action(
         sess["slack_minor_phase"] = "done"
         if _session_disk.enabled():
             _session_disk.save_session(cid, sess)
-        _flush_deferred_dm_instruction_for_incident(cid)
-        _lark.post_text_to_open_id(soid, tok, _stub_fe())
+        _lark.post_text_to_user_cross_app(soid, luid, tok, _stub_fe(), use_user_id=use_uid)
         return None
 
     return "unknown_action"

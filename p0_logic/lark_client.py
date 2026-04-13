@@ -191,6 +191,30 @@ def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]
     return r.status_code, (r.text or "")
 
 
+def post_text_to_user_cross_app(
+    open_id: str,
+    lark_user_id: str,
+    token: str,
+    text: str,
+    *,
+    use_user_id: bool,
+) -> Tuple[int, str]:
+    """
+    DM text. If ``use_user_id`` and ``lark_user_id`` is set, use ``receive_id_type=user_id`` so the
+    same tenant user can be reached when ``token`` is for a **different** Lark app (avoids 99992361
+    ``open_id cross app``).
+    """
+    if use_user_id and (lark_user_id or "").strip():
+        url = f"{LARK_BASE}/im/v1/messages?receive_id_type=user_id"
+        rid = (lark_user_id or "").strip()
+    else:
+        url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
+        rid = (open_id or "").strip()
+    payload = {"receive_id": rid, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}
+    r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+    return r.status_code, (r.text or "")
+
+
 def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str, str]:
     t0 = time.perf_counter()
     try:
@@ -201,6 +225,34 @@ def post_card_to_open_id(open_id: str, token: str, card: Dict[str, Any]) -> Tupl
         return r.status_code, txt, parse_im_message_id_from_response(txt)
     finally:
         perf_log("lark post_card_to_open_id", t0)
+
+
+def post_card_to_user_cross_app(
+    open_id: str,
+    lark_user_id: str,
+    token: str,
+    card: Dict[str, Any],
+    *,
+    use_user_id: bool,
+) -> Tuple[int, str, str]:
+    """
+    DM interactive card. Use ``use_user_id=True`` with ``lark_user_id`` when the token belongs to a
+    second app (severity bot) — ``open_id`` from the primary app cannot be used (99992361).
+    """
+    t0 = time.perf_counter()
+    try:
+        if use_user_id and (lark_user_id or "").strip():
+            url = f"{LARK_BASE}/im/v1/messages?receive_id_type=user_id"
+            rid = (lark_user_id or "").strip()
+        else:
+            url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
+            rid = (open_id or "").strip()
+        payload = {"receive_id": rid, "msg_type": "interactive", "content": json.dumps(card, ensure_ascii=False)}
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+        txt = r.text or ""
+        return r.status_code, txt, parse_im_message_id_from_response(txt)
+    finally:
+        perf_log("lark post_card_to_user_cross_app", t0)
 
 
 def get_group_chat_name(chat_id: str, token: str) -> str:
@@ -474,3 +526,26 @@ def lookup_user_name_by_open_id(tenant_token: str, open_id: str) -> str:
     except Exception as e:
         log.warning("lookup host name exception open_id=%s err=%s", open_id, e)
     return ""
+
+
+def get_tenant_user_id_by_open_id(tenant_token: str, open_id: str) -> str:
+    """
+    Lark tenant ``user_id`` (e.g. ``SNT0006``) for a user ``open_id``, using **primary** app token.
+    Needed when sending with a **second** app token: ``open_id`` is app-scoped; ``user_id`` is not (99992361).
+    """
+    open_id = (open_id or "").strip()
+    if not tenant_token or not open_id:
+        return ""
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    url = f"{LARK_BASE}/contact/v3/users/{quote(open_id, safe='')}"
+    try:
+        r = _lark_http().get(url, headers=headers, params={"user_id_type": "open_id"}, **_timeout_kw())
+        if r.status_code != 200:
+            return ""
+        j = r.json() if r.text else {}
+        if j.get("code") != 0:
+            return ""
+        user = (j.get("data") or {}).get("user") or {}
+        return str(user.get("user_id") or "").strip()
+    except Exception:
+        return ""

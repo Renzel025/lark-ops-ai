@@ -503,11 +503,14 @@ def slack_huddle_on_overview_send() -> bool:
 
 def slack_severity_prompt_enabled() -> bool:
     """
-    When True (default): after ``start_p0``, DM operators a **Major / Minor** card before any
-    Slack notify or huddle. **Major** runs the usual Slack automation; **Minor** skips it.
+    When True (default): after a **P0** session starts, the **2nd** bot DMs **Major / Minor** while the
+    **primary** bot DMs the green overview card in parallel. **Major** runs the usual Slack automation;
+    **Minor** skips it.
+
+    **P1** sessions do not use this prompt (only the primary bot sends the green overview DM).
 
     Set ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION=0`` to restore immediate Slack on meeting start
-    (no DM prompt).
+    (no severity DM prompt).
     """
     reload_env_runtime()
     v = (os.getenv("SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION") or "1").strip().lower()
@@ -518,6 +521,12 @@ def get_lark_primary_app_credentials() -> Tuple[str, str]:
     """Main bot: P0 meeting, green overview DM, most IM (``LARK_APP_ID`` / ``LARK_APP_SECRET``)."""
     reload_env_runtime()
     return ((os.getenv("LARK_APP_ID") or "").strip(), (os.getenv("LARK_APP_SECRET") or "").strip())
+
+
+def _strip_lark_env_val(raw: str) -> str:
+    """Strip whitespace and UTF-8 BOM (bad editor / copy-paste) from .env values."""
+    s = (raw or "").strip().strip("\ufeff")
+    return s.strip()
 
 
 def get_lark_severity_app_credentials() -> Tuple[str, str]:
@@ -532,18 +541,18 @@ def get_lark_severity_app_credentials() -> Tuple[str, str]:
     If either id or secret is empty, severity DMs use the **primary** app (automation bot).
     """
     reload_env_runtime()
-    sid = (
+    sid = _strip_lark_env_val(
         os.getenv("LARK_SEVERITY_APP_ID")
         or os.getenv("LARK_APP_ID_SEVERITY")
         or os.getenv("LARK_APP_ID_2")
         or ""
-    ).strip()
-    sec = (
+    )
+    sec = _strip_lark_env_val(
         os.getenv("LARK_SEVERITY_APP_SECRET")
         or os.getenv("LARK_APP_SECRET_SEVERITY")
         or os.getenv("LARK_APP_SECRET_2")
         or ""
-    ).strip()
+    )
     return sid, sec
 
 

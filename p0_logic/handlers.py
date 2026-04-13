@@ -87,6 +87,41 @@ def _extract_card_action_sender_open_id(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _extract_card_action_operator_lark_user_id(payload: Dict[str, Any]) -> str:
+    """Tenant ``user_id`` (e.g. ``SNT0006``) on ``event.operator`` — needed when DM uses a second app token."""
+    candidates = [
+        _deep_get(payload, "event", "operator", "user_id"),
+        _deep_get(payload, "event", "operator", "operator_id", "user_id"),
+    ]
+    for x in candidates:
+        if isinstance(x, str) and x.strip():
+            return x.strip()
+    return ""
+
+
+def _post_dm_text_card_action(sender_open_id: str, tenant_token: str, text: str, operator_lark_user_id: str) -> None:
+    """Reply in DM; use ``user_id`` receive when severity is a separate Lark app (open_id is app-scoped)."""
+    oid = (sender_open_id or "").strip()
+    uid = (operator_lark_user_id or "").strip()
+    sid, _ssec = _config.get_lark_severity_app_credentials()
+    pid, _ = _config.get_lark_primary_app_credentials()
+    use_uid = bool(sid and pid and sid != pid and uid)
+    if use_uid:
+        _lark.post_text_to_user_cross_app(oid, uid, tenant_token, text, use_user_id=True)
+    else:
+        _lark.post_text_to_open_id(oid, tenant_token, text)
+
+
+def _post_dm_text_primary_bot(sender_open_id: str, text: str) -> None:
+    """Fallback DM using the primary app token (correct ``open_id`` scope when severity bot cannot address the user)."""
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return
+    tok = _lark.get_tenant_token_primary()
+    if tok:
+        _lark.post_text_to_open_id(oid, tok, text)
+
+
 def _extract_dm_scope_from_card_payload(payload: Dict[str, Any]) -> Tuple[str, str, str]:
     val = _deep_get(payload, "event", "action", "value")
     if val is None:
@@ -138,73 +173,100 @@ def _show_participants_body_text() -> str:
 def _handle_slack_minor_followup(payload: Dict[str, Any], tenant_token: str, action_name: str) -> None:
     """Minor severity sub-cards: SRE BACKEND/FE, team FPMS/CPMS/PMS, FE reach (duty stubs)."""
     sender_open_id = _extract_card_action_sender_open_id(payload)
+    op_uid = _extract_card_action_operator_lark_user_id(payload)
     _maybe_merge_dm_scope_from_card(sender_open_id, payload)
     _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
     chat_id = (src_inc or "").strip()
     if not chat_id.startswith("oc_"):
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.", op_uid)
         return
-    err = _session.apply_slack_minor_card_action(chat_id, tenant_token, sender_open_id, action_name)
+    err = _session.apply_slack_minor_card_action(
+        chat_id, tenant_token, sender_open_id, action_name, operator_lark_user_id=op_uid
+    )
     if err == "no_session":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.")
+            _post_dm_text_card_action(
+                sender_open_id, tenant_token, "⚠️ This incident session is no longer active.", op_uid
+            )
         return
     if err == "disabled":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Severity prompt is disabled in configuration.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "ℹ️ Severity prompt is disabled in configuration.", op_uid)
         return
     if err == "not_minor":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Minor follow-up only applies when severity is **Minor**.")
+            _post_dm_text_card_action(
+                sender_open_id, tenant_token, "ℹ️ Minor follow-up only applies when severity is **Minor**.", op_uid
+            )
         return
     if err == "already_done":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ This minor flow was already completed.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "ℹ️ This minor flow was already completed.", op_uid)
         return
     if err == "bad_phase":
         if sender_open_id:
-            _lark.post_text_to_open_id(
+            _post_dm_text_card_action(
                 sender_open_id,
                 tenant_token,
                 "ℹ️ Use the latest card in this thread — an earlier step may be outdated.",
+                op_uid,
             )
         return
     if err == "unknown_action":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Unknown minor action.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Unknown minor action.", op_uid)
+        return
+    if err == "missing_user_id":
+        if sender_open_id:
+            _post_dm_text_primary_bot(
+                sender_open_id,
+                "⚠️ Cannot DM from the severity bot: missing tenant **user_id** (grant contact scope on the primary app, or ensure the incident was started from a group message so the sender id is stored).",
+            )
         return
 
 
 def _handle_slack_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
     """DM card: Major / Minor before Slack automation."""
     sender_open_id = _extract_card_action_sender_open_id(payload)
+    op_uid = _extract_card_action_operator_lark_user_id(payload)
     _maybe_merge_dm_scope_from_card(sender_open_id, payload)
     _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
     chat_id = (src_inc or "").strip()
     if not chat_id.startswith("oc_"):
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.", op_uid)
         return
-    err = _session.apply_slack_severity_choice(chat_id, tenant_token, sender_open_id, is_major)
+    err = _session.apply_slack_severity_choice(
+        chat_id, tenant_token, sender_open_id, is_major, operator_lark_user_id=op_uid
+    )
     if err == "no_session":
         if sender_open_id:
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.")
+            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.", op_uid)
         return
     if err == "already_answered":
         if sender_open_id:
-            _lark.post_text_to_open_id(
+            _post_dm_text_card_action(
                 sender_open_id,
                 tenant_token,
                 "ℹ️ A Major/Minor choice was already recorded for this incident.",
+                op_uid,
             )
         return
     if err == "disabled":
         if sender_open_id:
-            _lark.post_text_to_open_id(
+            _post_dm_text_card_action(
                 sender_open_id,
                 tenant_token,
                 "ℹ️ Severity prompt is disabled in configuration.",
+                op_uid,
+            )
+        return
+    if err == "missing_user_id":
+        if sender_open_id:
+            _post_dm_text_primary_bot(
+                sender_open_id,
+                "⚠️ Cannot DM from the severity bot: missing tenant **user_id**. Grant **contact:user.base:readonly** (or equivalent) on the **primary** Lark app, or start the incident from a group message so the sender id is stored.",
             )
         return
 

@@ -620,6 +620,10 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
         sender_open_id = (
             (((evt.get("sender") or {}).get("sender_id") or {}).get("open_id") or "").strip()
         )
+        # Tenant user_id (e.g. SNT0006) — stable across Lark apps; open_id is app-scoped (cross-app DM).
+        sender_lark_user_id = (
+            (((evt.get("sender") or {}).get("sender_id") or {}).get("user_id") or "").strip()
+        )
 
         msg_type, text, image_keys = _extract_message_parts(msg)
         mention_names = _extract_mention_names(msg)
@@ -683,6 +687,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             mention_names=mention_names,
             chat_type=chat_type,
             source_chat_name=_extract_group_chat_display_name(evt),
+            sender_lark_user_id=sender_lark_user_id,
         )
 
     except Exception as e:

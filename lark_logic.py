@@ -159,6 +159,7 @@ def process_message(
     mention_names = _clean_mention_names(kwargs.get("mention_names") or kwargs.get("mentions"))
     tenant_token = str(kwargs.get("tenant_token") or token or "").strip()
     chat_type = str(kwargs.get("chat_type") or "").strip().lower()
+    sender_lark_user_id = str(kwargs.get("sender_lark_user_id") or "").strip()
 
     active_chat_id = _get_active_session_chat_id()
     has_active_session = bool(active_chat_id)
@@ -269,7 +270,14 @@ def process_message(
                 return
 
             log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
-            start_p0(chat_id, token, user_id, priority="P0", source_chat_name=source_chat_name)
+            start_p0(
+                chat_id,
+                token,
+                user_id,
+                priority="P0",
+                source_chat_name=source_chat_name,
+                trigger_lark_user_id=sender_lark_user_id,
+            )
             return
 
         # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
