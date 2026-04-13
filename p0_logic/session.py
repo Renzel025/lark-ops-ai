@@ -120,7 +120,14 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
     if priority not in ("P0", "P1"):
         priority = "P0"
     label = str(item.get("label") or "").strip()
-    norm = {"chat_id": chat_id, "target_chat": target_chat, "priority": priority, "label": label}
+    op_uid = str(item.get("operator_lark_user_id") or "").strip()
+    norm = {
+        "chat_id": chat_id,
+        "target_chat": target_chat,
+        "priority": priority,
+        "label": label,
+        "operator_lark_user_id": op_uid,
+    }
     send_now = False
     with _DM_INSTR_LOCK:
         if oid not in _DM_ACTIVE_ITEM:
@@ -157,6 +164,7 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
         context="DM instruction",
         target_chat=target_chat,
         source_incident_chat_id=chat_id,
+        operator_lark_user_id=op_uid,
     )
 
 
@@ -213,6 +221,7 @@ def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_sourc
         if pr not in ("P0", "P1"):
             pr = "P0"
         lab = str(next_item.get("label") or "").strip()
+        q_op = str(next_item.get("operator_lark_user_id") or "").strip()
         _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
         _send_dm_instruction_card_logged(
             oid,
@@ -222,6 +231,7 @@ def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_sourc
             context="queued DM instruction",
             target_chat=tc,
             source_incident_chat_id=cid,
+            operator_lark_user_id=q_op,
         )
 
 
@@ -258,6 +268,7 @@ def release_standalone_overview_cancel(operator_open_id: str, token: str) -> Non
         if pr not in ("P0", "P1"):
             pr = "P0"
         lab = str(next_item.get("label") or "").strip()
+        q_op = str(next_item.get("operator_lark_user_id") or "").strip()
         _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
         _send_dm_instruction_card_logged(
             oid,
@@ -267,6 +278,7 @@ def release_standalone_overview_cancel(operator_open_id: str, token: str) -> Non
             context="queued DM after standalone cancel",
             target_chat=tc,
             source_incident_chat_id=cid,
+            operator_lark_user_id=q_op,
         )
 
 
@@ -651,6 +663,21 @@ def _parse_lark_api_code(raw: Any) -> int:
         return -1
 
 
+def _dm_instruction_lark_response_ok(st: int, resp_body: str) -> bool:
+    """True when HTTP 200 and Lark ``code`` is 0 (or missing)."""
+    if st != 200:
+        return False
+    try:
+        j = json.loads(resp_body) if resp_body else {}
+    except Exception:
+        return False
+    if not isinstance(j, dict):
+        return False
+    if "code" not in j:
+        return True
+    return _parse_lark_api_code(j.get("code")) == 0
+
+
 def _send_dm_instruction_card_logged(
     open_id: str,
     tenant_token: str,
@@ -660,11 +687,14 @@ def _send_dm_instruction_card_logged(
     *,
     target_chat: str = "",
     source_incident_chat_id: str = "",
+    operator_lark_user_id: str = "",
 ) -> None:
     """
-    Send the overview / DM instruction card to one user (``receive_id_type=open_id``).
+    Send the green **Build overview** DM instruction card.
 
-    Logs HTTP status and Lark ``code``/``msg`` so silent failures (e.g. 200 + code 9499) are visible.
+    Prefers ``receive_id_type=user_id`` when ``operator_lark_user_id`` is set (same tenant id as group
+    messages) — some tenants return HTTP 400 / 230099 for interactive cards via ``open_id`` only.
+    Falls back to ``open_id`` if the user_id path fails.
     """
     oid = (open_id or "").strip()
     if not oid:
@@ -676,38 +706,48 @@ def _send_dm_instruction_card_logged(
         target_chat=target_chat,
         source_incident_chat_id=source_incident_chat_id,
     )
+    uid = (operator_lark_user_id or "").strip()
+    attempts: List[Tuple[str, Any]] = []
+    if uid:
+        attempts.append(
+            (
+                "user_id",
+                lambda: _lark.post_card_to_user_cross_app(oid, uid, tenant_token, card, use_user_id=True),
+            )
+        )
+    attempts.append(("open_id", lambda: _lark.post_card_to_open_id(oid, tenant_token, card)))
     try:
-        st, resp_body, mid = _lark.post_card_to_open_id(oid, tenant_token, card)
-        body_head = (resp_body or "")[:800]
-        if st != 200:
+        st, resp_body, mid = 0, "", ""
+        mode_used = "open_id"
+        for i, (name, fn) in enumerate(attempts):
+            st, resp_body, mid = fn()
+            if _dm_instruction_lark_response_ok(st, resp_body):
+                mode_used = name
+                break
+            if i + 1 < len(attempts):
+                log.warning(
+                    "%s: %s path failed HTTP=%s open_id_tail=%s body=%s — retrying",
+                    label,
+                    name,
+                    st,
+                    oid[-8:] if len(oid) > 8 else oid,
+                    (resp_body or "")[:400],
+                )
+        else:
+            body_head = (resp_body or "")[:800]
             log.error(
-                "%s failed HTTP=%s priority=%s open_id=%s body=%s",
+                "%s failed after %s priority=%s open_id=%s body=%s",
                 label,
-                st,
+                [a[0] for a in attempts],
                 priority,
                 oid,
                 body_head,
             )
             return
-        try:
-            j = json.loads(resp_body) if resp_body else {}
-        except Exception:
-            j = {}
-        if isinstance(j, dict) and "code" in j:
-            api_code = _parse_lark_api_code(j.get("code"))
-            if api_code != 0:
-                log.error(
-                    "%s Lark API code=%s msg=%r priority=%s open_id=%s",
-                    label,
-                    j.get("code"),
-                    j.get("msg"),
-                    priority,
-                    oid,
-                )
-                return
         log.info(
-            "%s sent OK priority=%s open_id=%s message_id=%s",
+            "%s sent OK via %s priority=%s open_id=%s message_id=%s",
             label,
+            mode_used,
             priority,
             oid,
             (mid or "").strip() or "(none)",
@@ -1041,12 +1081,6 @@ def start_p0(
         len([x for x in dm_targets if (x or "").strip()]),
         [x for x in dm_targets if (x or "").strip()],
     )
-    item = {
-        "chat_id": chat_id,
-        "target_chat": target_chat,
-        "priority": priority,
-        "label": chat_label,
-    }
     dm_targets_list = [x for x in dm_targets if (x or "").strip()]
     # Severity (2nd bot) only for **P0**. P1 sessions get the usual primary-bot overview DM immediately.
     use_severity_for_session = (
@@ -1127,7 +1161,15 @@ def start_p0(
     for oid in dm_targets:
         if not oid:
             continue
-        enqueue_dm_instruction_if_needed(oid, token, item)
+        dm_item: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "target_chat": target_chat,
+            "priority": priority,
+            "label": chat_label,
+        }
+        if oid == trigger_open_id and trigger_lark_user_id:
+            dm_item["operator_lark_user_id"] = trigger_lark_user_id
+        enqueue_dm_instruction_if_needed(oid, token, dm_item)
 
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
