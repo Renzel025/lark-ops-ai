@@ -1175,8 +1175,9 @@ def start_p0(
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
     """
     When ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, **huddle** triggered from ``send_preview``
-    (see ``SLACK_HUDDLE_ON_OVERVIEW_SEND``) only runs if the operator chose **Major**. **Minor** or
-    **pending** → that hook is skipped.
+    (see ``SLACK_HUDDLE_ON_OVERVIEW_SEND``) runs unless the operator chose **Minor**.
+
+    **Pending** (Major/Minor not answered yet) or **Major** → allowed. **Minor** → skipped.
 
     **Declare-time** Slack channel ping (when enabled) happens in ``start_p0`` and is separate from this.
 
@@ -1193,7 +1194,7 @@ def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
     if pr == "P1":
         return True
     sev = (sess.get("slack_severity") or "pending").strip().lower()
-    return sev == "major"
+    return sev != "minor"
 
 
 def _dm_instruction_item_from_session(chat_id: str, sess: Dict[str, Any]) -> Dict[str, Any]:

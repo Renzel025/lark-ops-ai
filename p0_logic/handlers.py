@@ -895,7 +895,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         from .slack_bridge import post_text_to_slack_for_incident
 
                         # Mirror overview text to Slack whenever the operator sends to the Lark group — no Major/Minor gate.
-                        # (Severity still gates ``run_slack_p0_notify_and_huddle`` and huddle below.)
+                        # (Severity still gates ``run_slack_p0_notify_and_huddle``; huddle below skips only when Minor.)
                         if not post_text_to_slack_for_incident(src_inc, md):
                             log.warning(
                                 "send_preview: Slack mirror failed for oc_=%s — check SLACK_BOT_TOKEN, "
