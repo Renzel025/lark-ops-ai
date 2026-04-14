@@ -235,6 +235,22 @@ def _extract_mention_names(msg: Dict[str, Any]) -> List[str]:
     return uniq
 
 
+def _mention_field_to_open_id(raw: Any) -> str:
+    """
+    Lark sometimes sends ``mentions[].id`` as a string ``ou_...``; newer payloads may nest
+    an object (``id: { open_id: ... }``). Normalize to a single ``ou_`` string or ``""``.
+    """
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, dict):
+        for k in ("open_id", "id", "user_id"):
+            v = raw.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return ""
+    return ""
+
+
 def _extract_mention_open_ids(msg: Dict[str, Any]) -> List[str]:
     """Lark ``mentions[].id`` is typically the user's ``ou_...`` open_id (for @mentions in group text)."""
     out: List[str] = []
@@ -243,7 +259,7 @@ def _extract_mention_open_ids(msg: Dict[str, Any]) -> List[str]:
         for m in mentions:
             if not isinstance(m, dict):
                 continue
-            oid = (m.get("id") or m.get("open_id") or "").strip()
+            oid = _mention_field_to_open_id(m.get("id")) or _mention_field_to_open_id(m.get("open_id"))
             if oid.startswith("ou_"):
                 out.append(oid)
     seen = set()
