@@ -1,10 +1,20 @@
 import os
 import re
+import time
 import logging
-from typing import Any, List
+import threading
+from typing import Any, Dict, List, Optional
 
 from wiki_ai_logic import handle_wiki_ai
-from p0_logic.config import get_incident_group_chat_ids, get_p0_trigger_ignore_open_ids
+from p0_logic.config import (
+    get_incident_group_chat_ids,
+    get_p0_thread_confirm_allow_toplevel_yes,
+    get_p0_thread_confirm_asker_open_ids,
+    get_p0_thread_confirm_responder_open_ids,
+    get_p0_thread_confirm_toplevel_grace_sec,
+    get_p0_thread_confirm_ttl_sec,
+    get_p0_trigger_ignore_open_ids,
+)
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
@@ -98,6 +108,196 @@ P1_PENDING_DECLINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Thread: designated asker posts "is this P0?" → someone else replies "yes" → start P0 ---
+# Requires ``?`` in the message to reduce accidental arms. See ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS``.
+# Phrase may appear after @mentions (e.g. "@QA Team is this P0?").
+P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
+    r"(?is)"
+    r"(?:is\s+this\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+that\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+it\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
+    r")"
+)
+P0_THREAD_CONFIRM_YES_RE = re.compile(
+    r"^(?:yes|yep|yeah|confirmed|confirm|是|对的|确认)\b",
+    re.IGNORECASE,
+)
+
+_P0_THREAD_LOCK = threading.Lock()
+# chat_id -> { "question_message_id", "asker_open_id", "exp" }
+_P0_THREAD_PENDING: Dict[str, Dict[str, Any]] = {}
+# pending value: question_message_id, asker_open_id, exp, armed_at (epoch float)
+
+
+def _p0_thread_prune_expired(chat_id: str) -> None:
+    with _P0_THREAD_LOCK:
+        p = _P0_THREAD_PENDING.get(chat_id)
+        if not p:
+            return
+        if time.time() > float(p.get("exp") or 0):
+            _P0_THREAD_PENDING.pop(chat_id, None)
+
+
+def _thread_reply_targets_question(parent_id: str, root_id: str, question_message_id: str) -> bool:
+    q = (question_message_id or "").strip()
+    if not q:
+        return False
+    p = (parent_id or "").strip()
+    r = (root_id or "").strip()
+    return p == q or r == q
+
+
+def _is_p0_thread_confirm_question(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or "?" not in t:
+        return False
+    return bool(P0_THREAD_CONFIRM_QUESTION_RE.search(t))
+
+
+def _toplevel_yes_context_ok(
+    pend: Dict[str, Any],
+    asker_open_id: str,
+    mention_open_ids: List[str],
+) -> bool:
+    """
+    Top-level (non-thread) yes: accept if @asker is in Lark ``mentions`` **or** still within
+    grace seconds after ``armed_at`` (same conversation window).
+    """
+    asker = (asker_open_id or "").strip()
+    if not asker:
+        return False
+    mids = [x.strip() for x in (mention_open_ids or []) if (x or "").strip()]
+    if asker in mids:
+        return True
+    grace = float(get_p0_thread_confirm_toplevel_grace_sec())
+    if grace <= 0:
+        return False
+    armed = float((pend or {}).get("armed_at") or 0)
+    if armed <= 0:
+        return False
+    return (time.time() - armed) <= grace
+
+
+def _is_p0_thread_confirm_yes(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    line = t.split("\n")[0].strip()
+    line = re.sub(r"<[^>]+>", "", line).strip()
+    line = re.sub(r"^\s*@\S+\s+", "", line).strip()
+    return bool(P0_THREAD_CONFIRM_YES_RE.match(line))
+
+
+def _try_handle_p0_thread_confirm(
+    chat_id: str,
+    user_id: str,
+    text_raw: str,
+    message_id: str,
+    parent_id: str,
+    root_id: str,
+    token: str,
+    source_chat_name: str,
+    sender_lark_user_id: str,
+    mention_open_ids: Optional[List[str]] = None,
+) -> bool:
+    """
+    Returns True if this message was fully handled (armed pending or started P0).
+    """
+    askers = get_p0_thread_confirm_asker_open_ids()
+    if not askers:
+        return False
+
+    _p0_thread_prune_expired(chat_id)
+    oid = (user_id or "").strip()
+
+    with _P0_THREAD_LOCK:
+        pend = _P0_THREAD_PENDING.get(chat_id)
+
+    if pend:
+        qmid = str(pend.get("question_message_id") or "").strip()
+        asker = str(pend.get("asker_open_id") or "").strip()
+        p = (parent_id or "").strip()
+        r = (root_id or "").strip()
+        thread_ok = bool(qmid and _thread_reply_targets_question(parent_id, root_id, qmid))
+        toplevel_raw = bool(
+            qmid
+            and get_p0_thread_confirm_allow_toplevel_yes()
+            and not p
+            and not r
+        )
+        toplevel_ok = bool(
+            toplevel_raw
+            and _toplevel_yes_context_ok(pend, asker, list(mention_open_ids or []))
+        )
+        if toplevel_raw and not thread_ok and not toplevel_ok and _is_p0_thread_confirm_yes(text_raw):
+            log.info(
+                "Incident group: P0 thread toplevel yes ignored (outside grace or @asker not in mentions) "
+                "chat_id=%s grace_sec=%s",
+                chat_id,
+                get_p0_thread_confirm_toplevel_grace_sec(),
+            )
+        if thread_ok or toplevel_ok:
+            responders = get_p0_thread_confirm_responder_open_ids()
+            if oid == asker:
+                log.info(
+                    "Incident group: P0 thread confirm ignored (asker replied to own question) chat_id=%s",
+                    chat_id,
+                )
+                return True
+            if responders and oid not in responders:
+                log.info(
+                    "Incident group: P0 thread confirm ignored (responder not in allowlist) chat_id=%s",
+                    chat_id,
+                )
+                return False
+            if not _is_p0_thread_confirm_yes(text_raw):
+                return False
+            with _P0_THREAD_LOCK:
+                _P0_THREAD_PENDING.pop(chat_id, None)
+            if chat_has_active_session(chat_id):
+                log.info("Incident group: P0 thread confirm skipped (session already active) chat_id=%s", chat_id)
+                return True
+            mode = "thread reply" if thread_ok else "toplevel yes (P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES=1)"
+            log.info(
+                "Incident group: P0 thread confirm — starting P0 chat_id=%s confirmer=%s via %s",
+                chat_id,
+                oid,
+                mode,
+            )
+            start_p0(
+                chat_id,
+                token,
+                oid,
+                priority="P0",
+                source_chat_name=source_chat_name,
+                trigger_lark_user_id=sender_lark_user_id,
+            )
+            return True
+
+    if oid in askers and _is_p0_thread_confirm_question(text_raw):
+        mid = (message_id or "").strip()
+        if not mid:
+            return False
+        ttl = float(get_p0_thread_confirm_ttl_sec())
+        with _P0_THREAD_LOCK:
+            _P0_THREAD_PENDING[chat_id] = {
+                "question_message_id": mid,
+                "asker_open_id": oid,
+                "exp": time.time() + ttl,
+                "armed_at": time.time(),
+            }
+        log.info(
+            "Incident group: P0 thread confirm armed asker=%s question_message_id=%s chat_id=%s ttl_sec=%s",
+            oid[-12:] if oid else "",
+            mid,
+            chat_id,
+            int(ttl),
+        )
+        return True
+
+    return False
+
+
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
     out: List[str] = []
     if not raw_mentions:
@@ -155,6 +355,8 @@ def process_message(
 
     message_type = str(kwargs.get("message_type") or "").strip().lower()
     message_id = str(kwargs.get("message_id") or "").strip()
+    parent_id = str(kwargs.get("parent_id") or "").strip()
+    root_id = str(kwargs.get("root_id") or "").strip()
     image_key = str(kwargs.get("image_key") or kwargs.get("file_key") or "").strip()
     mention_names = _clean_mention_names(kwargs.get("mention_names") or kwargs.get("mentions"))
     tenant_token = str(kwargs.get("tenant_token") or token or "").strip()
@@ -217,6 +419,20 @@ def process_message(
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
                 return
+
+        if _try_handle_p0_thread_confirm(
+            chat_id,
+            user_id,
+            text_raw,
+            message_id,
+            parent_id,
+            root_id,
+            token,
+            source_chat_name,
+            sender_lark_user_id,
+            mention_open_ids=kwargs.get("mention_open_ids"),
+        ):
+            return
 
         # Cancel command (optional reason after the keyword phrase)
         cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)

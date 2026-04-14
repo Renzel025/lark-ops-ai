@@ -447,6 +447,82 @@ def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
     return frozenset(x for x in ids if is_open_id(x))
 
 
+def get_p0_thread_confirm_asker_open_ids() -> FrozenSet[str]:
+    """
+    ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS`` — comma-separated ``ou_...``.
+
+    Only these users may post a question like **\"is this P0?\"** to **arm** a thread
+    confirmation (someone else replies **yes** → ``start_p0``). If empty, this flow is off.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_THREAD_CONFIRM_ASKER_OPEN_IDS") or "").strip()
+    if not raw:
+        return frozenset()
+    ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(x for x in ids if is_open_id(x))
+
+
+def get_p0_thread_confirm_responder_open_ids() -> FrozenSet[str]:
+    """
+    ``P0_THREAD_CONFIRM_RESPONDER_OPEN_IDS`` — optional comma-separated ``ou_...``.
+
+    If **non-empty**, only these users may reply **yes** to confirm. If **empty**, any user
+    except the asker may confirm.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_THREAD_CONFIRM_RESPONDER_OPEN_IDS") or "").strip()
+    if not raw:
+        return frozenset()
+    ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(x for x in ids if is_open_id(x))
+
+
+def get_p0_thread_confirm_ttl_sec() -> int:
+    """``P0_THREAD_CONFIRM_TTL_SEC`` — how long a question stays armed (default 3600)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_THREAD_CONFIRM_TTL_SEC") or "3600").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 3600
+    return max(60, min(n, 86400 * 7))
+
+
+def get_p0_thread_confirm_allow_toplevel_yes() -> bool:
+    """
+    ``P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES`` — if ``1``, while a question is **armed**,
+    a **top-level** message in the same group (no ``parent_id`` / ``root_id``) that starts
+    with **yes** can confirm P0, not only a **Reply** to the question.
+
+    Default ``0`` (stricter: must use Reply / thread so Lark ties the message to the question).
+
+    When enabled, see also ``P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC`` and @mention of the asker
+    (from webhook ``mentions[].id``) to limit false positives.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_thread_confirm_toplevel_grace_sec() -> float:
+    """
+    ``P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC`` — after the duty user arms **\"is this P0?\"**,
+    for this many seconds a **plain** top-level **yes** (no ``@`` to the asker) still counts
+    as in-conversation confirmation. After the grace window, a top-level yes must **@mention**
+    the asker's ``ou_...`` (as sent in the webhook ``mentions`` list) or the confirmer must
+    use **Reply** to the question message.
+
+    Default ``180``. Set ``0`` to require @mention (or thread reply) for **every** top-level yes.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC") or "180").strip()
+    try:
+        n = float(raw)
+    except Exception:
+        n = 180.0
+    return max(0.0, min(n, float(86400 * 7)))
+
+
 def get_incident_group_command_open_ids() -> FrozenSet[str]:
     """
     Parsed from ``P0_INCIDENT_GROUP_COMMAND_OPEN_IDS`` (comma-separated ``ou_...``).

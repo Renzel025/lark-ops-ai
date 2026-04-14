@@ -235,6 +235,27 @@ def _extract_mention_names(msg: Dict[str, Any]) -> List[str]:
     return uniq
 
 
+def _extract_mention_open_ids(msg: Dict[str, Any]) -> List[str]:
+    """Lark ``mentions[].id`` is typically the user's ``ou_...`` open_id (for @mentions in group text)."""
+    out: List[str] = []
+    mentions = msg.get("mentions") or []
+    if isinstance(mentions, list):
+        for m in mentions:
+            if not isinstance(m, dict):
+                continue
+            oid = (m.get("id") or m.get("open_id") or "").strip()
+            if oid.startswith("ou_"):
+                out.append(oid)
+    seen = set()
+    uniq: List[str] = []
+    for x in out:
+        if x in seen:
+            continue
+        seen.add(x)
+        uniq.append(x)
+    return uniq
+
+
 def _find_all_image_keys_anywhere(x: Any) -> List[str]:
     out: List[str] = []
 
@@ -616,6 +637,8 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
         chat_id = (msg.get("chat_id") or "").strip()
         chat_type = (msg.get("chat_type") or "").strip().lower()
         message_id = (msg.get("message_id") or "").strip()
+        parent_id = (msg.get("parent_id") or "").strip()
+        root_id = (msg.get("root_id") or "").strip()
 
         sender_open_id = (
             (((evt.get("sender") or {}).get("sender_id") or {}).get("open_id") or "").strip()
@@ -627,6 +650,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
 
         msg_type, text, image_keys = _extract_message_parts(msg)
         mention_names = _extract_mention_names(msg)
+        mention_open_ids = _extract_mention_open_ids(msg)
 
         if chat_type == "p2p":
             log.info(
@@ -683,11 +707,14 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             GROQ_API_KEY,
             message_type=msg_type,
             message_id=message_id,
+            parent_id=parent_id,
+            root_id=root_id,
             image_key=image_keys[0] if image_keys else "",
             mention_names=mention_names,
             chat_type=chat_type,
             source_chat_name=_extract_group_chat_display_name(evt),
             sender_lark_user_id=sender_lark_user_id,
+            mention_open_ids=mention_open_ids,
         )
 
     except Exception as e:
