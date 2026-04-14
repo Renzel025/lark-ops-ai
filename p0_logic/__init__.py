@@ -99,6 +99,8 @@ get_incident_group_chat_ids = config.get_incident_group_chat_ids
 get_emergency_topic_for_source_chat = config.get_emergency_topic_for_source_chat
 get_vc_meeting_topic_for_source_chat = config.get_vc_meeting_topic_for_source_chat
 get_overview_post_chat_id = config.get_overview_post_chat_id
+get_overview_target_chat_id_for_source_incident = config.get_overview_target_chat_id_for_source_incident
+get_incident_overview_target_map = config.get_incident_overview_target_map
 get_dm_overview_target_chat_id = config.get_dm_overview_target_chat_id
 get_standalone_overview_target_chat_id_for_tag = config.get_standalone_overview_target_chat_id_for_tag
 get_target_group_chat_id = config.get_target_group_chat_id
@@ -197,6 +199,8 @@ __all__ = [
     "get_emergency_topic_for_source_chat",
     "get_vc_meeting_topic_for_source_chat",
     "get_overview_post_chat_id",
+    "get_overview_target_chat_id_for_source_incident",
+    "get_incident_overview_target_map",
     "get_dm_overview_target_chat_id",
     "get_standalone_overview_target_chat_id_for_tag",
     "get_target_group_chat_id",

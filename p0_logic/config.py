@@ -80,9 +80,58 @@ def get_overview_post_chat_id() -> str:
     """
     If set, \"Send overview\" posts to this oc_ chat; otherwise posts to the group
     where the session started (per-chat_id session).
+
+    Per-detection-group routing takes precedence when ``INCIDENT_OVERVIEW_TARGET_MAP`` is set
+    (see ``get_overview_target_chat_id_for_source_incident``).
     """
     reload_env_runtime()
     return (os.getenv("OVERVIEW_TARGET_GROUP_CHAT_ID") or os.getenv("P0_OVERVIEW_POST_CHAT_ID") or "").strip()
+
+
+def _parse_incident_overview_target_map(raw: str) -> Dict[str, str]:
+    """
+    Comma-separated ``oc_detection=oc_prompt`` pairs (both sides must be ``oc_...`` group chat ids).
+    """
+    out: Dict[str, str] = {}
+    if not (raw or "").strip():
+        return out
+    for segment in raw.split(","):
+        segment = segment.strip()
+        if "=" not in segment:
+            continue
+        key, _, val = segment.partition("=")
+        key, val = key.strip(), val.strip()
+        if key.startswith("oc_") and val.startswith("oc_"):
+            out[key] = val
+    return out
+
+
+def get_incident_overview_target_map() -> Dict[str, str]:
+    """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> prompt/overview ``oc_``)."""
+    reload_env_runtime()
+    return _parse_incident_overview_target_map(os.getenv("INCIDENT_OVERVIEW_TARGET_MAP") or "")
+
+
+def get_overview_target_chat_id_for_source_incident(source_incident_chat_id: str) -> str:
+    """
+    Where **in-group** meeting / P1 cards and session ``target_chat`` (DM + Send overview) should point.
+
+    Resolution order:
+
+    1. ``INCIDENT_OVERVIEW_TARGET_MAP[source_incident_chat_id]`` if that detection ``oc_`` is listed.
+    2. Else ``OVERVIEW_TARGET_GROUP_CHAT_ID`` / ``P0_OVERVIEW_POST_CHAT_ID`` if set (single global prompt group).
+    3. Else ``source_incident_chat_id`` (cards and overview stay in the detection group).
+    """
+    sid = (source_incident_chat_id or "").strip()
+    if not sid:
+        return ""
+    m = get_incident_overview_target_map()
+    if sid in m:
+        return m[sid]
+    g = get_overview_post_chat_id()
+    if g:
+        return g
+    return sid
 
 
 def get_target_group_chat_id() -> str:
@@ -95,6 +144,7 @@ def get_dm_overview_target_chat_id() -> str:
     Where DM drafts / \"Send overview\" attach when **no** active P0 session.
 
     Order: ``OVERVIEW_TARGET_GROUP_CHAT_ID`` / ``P0_OVERVIEW_POST_CHAT_ID`` if set;
+    else if ``INCIDENT_OVERVIEW_TARGET_MAP`` has exactly one ``oc_=oc_`` pair, use the prompt-side ``oc_``;
     else if exactly **one** incident group is configured, use that ``oc_`` id (common single-group deploys);
     else empty (multiple groups — need env or a live session).
     """
@@ -102,6 +152,9 @@ def get_dm_overview_target_chat_id() -> str:
     env_id = get_overview_post_chat_id()
     if env_id:
         return env_id
+    m = get_incident_overview_target_map()
+    if len(m) == 1:
+        return next(iter(m.values()))
     ids = list(get_incident_group_chat_ids())
     if len(ids) == 1:
         return ids[0]

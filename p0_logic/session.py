@@ -353,6 +353,12 @@ def get_active_target_chat() -> str:
     return target_chat or last_key
 
 
+def _session_prompt_chat_id(sess: Dict[str, Any], source_incident_chat_id: str) -> str:
+    """Group where meeting / P1 cards were posted: ``target_chat`` when split from detection group."""
+    t = str((sess or {}).get("target_chat") or "").strip()
+    return t or (source_incident_chat_id or "").strip()
+
+
 def _patch_meeting_invite_to_terminal(
     sess: Dict[str, Any],
     token: str,
@@ -507,10 +513,11 @@ def end_p0_session(
         duration_text = _cards.format_duration(start_epoch)
         em_topic = str(sess.get("emergency_topic") or "").strip()
         patched = _patch_meeting_invite_to_terminal(sess, token, kind="ended", duration_text=duration_text)
+        prompt_cid = _session_prompt_chat_id(sess, chat_id)
         if not patched:
             try:
                 _lark.post_card_to_chat(
-                    chat_id,
+                    prompt_cid,
                     token,
                     _cards.build_meeting_ended_card(
                         meeting_no, duration_text, priority, emergency_topic=em_topic, update_multi=False
@@ -522,7 +529,7 @@ def end_p0_session(
         if meeting_no:
             summary += f". Meeting ID: {meeting_no}"
         try:
-            _lark.post_text_to_chat(chat_id, token, summary)
+            _lark.post_text_to_chat(prompt_cid, token, summary)
         except Exception as e:
             log.warning("post_text meeting ended summary failed chat_id=%s err=%s", chat_id, e)
     if token and chat_id:
@@ -565,10 +572,11 @@ def cancel_p0_session(
         patched = _patch_meeting_invite_to_terminal(
             sess, token, kind="cancelled", duration_text=duration_text, cancel_reason=reason
         )
+        prompt_cid = _session_prompt_chat_id(sess, chat_id)
         if not patched:
             try:
                 _lark.post_card_to_chat(
-                    chat_id,
+                    prompt_cid,
                     token,
                     _cards.build_meeting_cancelled_card(
                         meeting_no=meeting_no,
@@ -817,7 +825,7 @@ def consume_p1_prompt_for_confirm(chat_id: str, nonce_from_button: str = "") -> 
 
 
 def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: str) -> bool:
-    """Post Yes/No card in the incident group; caller must set pending first."""
+    """Post Yes/No card in the prompt group (``get_overview_target_chat_id_for_source_incident``); caller must set pending first."""
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
     if not chat_id or not token:
@@ -827,7 +835,8 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     if not nonce:
         log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
         return False
-    st, body, _ = _lark.post_card_to_chat(chat_id, token, _cards.build_p1_meeting_confirm_card(nonce))
+    prompt_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id)
+    st, body, _ = _lark.post_card_to_chat(prompt_chat, token, _cards.build_p1_meeting_confirm_card(nonce))
     if st != 200:
         log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
@@ -1023,7 +1032,7 @@ def start_p0(
         if not link:
             _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
             return
-        target_chat = _config.get_overview_post_chat_id() or chat_id
+        target_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id)
         chat_label = (source_chat_name or "").strip()
         if not chat_label:
             chat_label = _lark.get_group_chat_name(chat_id, token)
@@ -1056,7 +1065,7 @@ def start_p0(
         log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
         meeting_no = str(vc.get("meeting_no", "")).strip()
         st, body, invite_mid = _lark.post_card_to_chat(
-            chat_id,
+            target_chat,
             token,
             _cards.build_meeting_card(
                 link=link,
