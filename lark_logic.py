@@ -10,6 +10,7 @@ from p0_logic.config import (
     get_incident_group_chat_ids,
     get_overview_target_chat_id_for_source_incident,
     get_p0_thread_confirm_allow_toplevel_yes,
+    get_p0_thread_confirm_allow_asker_self_yes,
     get_p0_thread_confirm_asker_open_ids,
     get_p0_thread_confirm_responder_open_ids,
     get_p0_thread_confirm_toplevel_grace_sec,
@@ -112,11 +113,13 @@ P1_PENDING_DECLINE_RE = re.compile(
 # --- Thread: designated asker posts "is this P0?" → someone else replies "yes" → start P0 ---
 # Requires ``?`` in the message to reduce accidental arms. See ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS``.
 # Phrase may appear after @mentions (e.g. "@QA Team is this P0?").
+# Also: "is this issue is p0?" (extra words before the priority token) — common in real chats.
 P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"(?is)"
     r"(?:is\s+this\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+that\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+it\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
 P0_THREAD_CONFIRM_YES_RE = re.compile(
@@ -301,7 +304,7 @@ def _try_handle_p0_thread_confirm(
             )
         if thread_ok or toplevel_ok or mirror_ok:
             responders = get_p0_thread_confirm_responder_open_ids()
-            if oid == asker:
+            if oid == asker and not get_p0_thread_confirm_allow_asker_self_yes():
                 log.info(
                     "Incident group: P0 thread confirm ignored (asker replied to own question) chat_id=%s",
                     chat_id,

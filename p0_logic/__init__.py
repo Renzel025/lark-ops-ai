@@ -111,6 +111,7 @@ get_p0_thread_confirm_asker_open_ids = config.get_p0_thread_confirm_asker_open_i
 get_p0_thread_confirm_responder_open_ids = config.get_p0_thread_confirm_responder_open_ids
 get_p0_thread_confirm_ttl_sec = config.get_p0_thread_confirm_ttl_sec
 get_p0_thread_confirm_allow_toplevel_yes = config.get_p0_thread_confirm_allow_toplevel_yes
+get_p0_thread_confirm_allow_asker_self_yes = config.get_p0_thread_confirm_allow_asker_self_yes
 get_p0_thread_confirm_toplevel_grace_sec = config.get_p0_thread_confirm_toplevel_grace_sec
 get_incident_group_command_open_ids = config.get_incident_group_command_open_ids
 can_use_incident_group_commands = config.can_use_incident_group_commands
@@ -216,6 +217,7 @@ __all__ = [
     "get_p0_thread_confirm_responder_open_ids",
     "get_p0_thread_confirm_ttl_sec",
     "get_p0_thread_confirm_allow_toplevel_yes",
+    "get_p0_thread_confirm_allow_asker_self_yes",
     "get_p0_thread_confirm_toplevel_grace_sec",
     "get_incident_group_command_open_ids",
     "can_use_incident_group_commands",

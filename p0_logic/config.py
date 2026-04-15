@@ -520,6 +520,18 @@ def get_p0_thread_confirm_allow_toplevel_yes() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_thread_confirm_allow_asker_self_yes() -> bool:
+    """
+    ``P0_THREAD_CONFIRM_ALLOW_ASKER_SELF_YES`` — if ``1``, the designated asker may reply **yes**
+    to their own **\"is this P0?\"** thread to start the meeting (same person asks + confirms).
+
+    Default ``0``: someone *else* must reply **yes** (reduces self-trigger abuse).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_THREAD_CONFIRM_ALLOW_ASKER_SELF_YES") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_thread_confirm_toplevel_grace_sec() -> float:
     """
     ``P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC`` — after the duty user arms **\"is this P0?\"**,
