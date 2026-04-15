@@ -120,6 +120,9 @@ P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"|is\s+that\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+it\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    # "is this issue considered as p0?" — words between "this" and "as p0", not only "is this p0?"
+    r"|is\s+this\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+that\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
 # Reply in the same thread: message must read like **agreement** with the question, not random chat.
@@ -196,17 +199,43 @@ def _toplevel_yes_context_ok(
     return (time.time() - armed) <= grace
 
 
-def _is_p0_thread_confirm_yes(text: str) -> bool:
+def _strip_leading_at_mentions_for_confirm(
+    line: str, mention_names: Optional[List[str]] = None
+) -> str:
+    """
+    Lark text may use ``@_user_1`` (single token) or UI-style ``@CP OM Duty`` (spaces in the label).
+    Strip **longest** ``@displayName`` first using webhook ``mentions[].name``, then ``@\\S+`` tokens.
+    """
+    line = (line or "").strip()
+    while True:
+        changed = False
+        names = [n.strip() for n in (mention_names or []) if (n or "").strip()]
+        names.sort(key=len, reverse=True)
+        for n in names:
+            prefix = "@" + n
+            if line.startswith(prefix):
+                line = line[len(prefix) :].lstrip()
+                changed = True
+                break
+        if changed:
+            continue
+        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
+        if nxt != line:
+            line = nxt.strip()
+            continue
+        break
+    return line
+
+
+def _is_p0_thread_confirm_yes(
+    text: str, mention_names: Optional[List[str]] = None
+) -> bool:
     t = (text or "").strip()
     if not t:
         return False
     line = t.split("\n")[0].strip()
     line = re.sub(r"<[^>]+>", "", line).strip()
-    while True:
-        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
-        if nxt == line:
-            break
-        line = nxt.strip()
+    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
     return bool(P0_THREAD_CONFIRM_YES_RE.match(line))
 
 
@@ -219,6 +248,7 @@ def _mirror_prompt_chat_confirm_ok(
     mention_open_ids: List[str],
     asker_open_id: str,
     text_raw: str,
+    mention_names: Optional[List[str]] = None,
 ) -> bool:
     """
     User confirmed in the **prompt / overview** group (``INCIDENT_OVERVIEW_TARGET_MAP`` target),
@@ -227,7 +257,7 @@ def _mirror_prompt_chat_confirm_ok(
     """
     if (message_chat_id or "").strip() == (source_incident_chat_id or "").strip():
         return False
-    if not _is_p0_thread_confirm_yes(text_raw):
+    if not _is_p0_thread_confirm_yes(text_raw, mention_names):
         return False
     p, r = (parent_id or "").strip(), (root_id or "").strip()
     if p or r:
@@ -248,6 +278,7 @@ def _try_handle_p0_thread_confirm(
     source_chat_name: str,
     sender_lark_user_id: str,
     mention_open_ids: Optional[List[str]] = None,
+    mention_names: Optional[List[str]] = None,
 ) -> bool:
     """
     Returns True if this message was fully handled (armed pending or started P0).
@@ -293,6 +324,7 @@ def _try_handle_p0_thread_confirm(
                 list(mention_open_ids or []),
                 asker,
                 text_raw,
+                mention_names,
             )
         )
         if (
@@ -300,7 +332,7 @@ def _try_handle_p0_thread_confirm(
             and toplevel_raw
             and not thread_ok
             and not toplevel_ok
-            and _is_p0_thread_confirm_yes(text_raw)
+            and _is_p0_thread_confirm_yes(text_raw, mention_names)
         ):
             log.info(
                 "Incident group: P0 thread toplevel yes ignored (outside grace or @asker not in mentions) "
@@ -322,7 +354,7 @@ def _try_handle_p0_thread_confirm(
                     chat_id,
                 )
                 return False
-            if not mirror_ok and not _is_p0_thread_confirm_yes(text_raw):
+            if not mirror_ok and not _is_p0_thread_confirm_yes(text_raw, mention_names):
                 return False
             _p0_thread_clear_pending_dict(pend)
             if chat_has_active_session(source_incident):
@@ -518,6 +550,7 @@ def process_message(
             source_chat_name,
             sender_lark_user_id,
             mention_open_ids=kwargs.get("mention_open_ids"),
+            mention_names=mention_names,
         ):
             return
 
