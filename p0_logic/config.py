@@ -73,7 +73,15 @@ def get_incident_group_chat_ids() -> FrozenSet[str]:
         raw = (os.getenv("INCIDENT_GROUP_ID") or "").strip()
     if not raw:
         return frozenset({_DEFAULT_INCIDENT_GROUP_FALLBACK})
-    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+    out = frozenset(x.strip() for x in raw.split(",") if x.strip())
+    for x in out:
+        if not x.startswith("oc_"):
+            log.warning(
+                "INCIDENT_GROUP_IDS has invalid entry %r — expect full Lark group ids (oc_...). "
+                "Check for duplicate INCIDENT_GROUP_IDS / INCIDENT_GROUP_ID lines or a truncated value.",
+                x,
+            )
+    return out
 
 
 def get_overview_post_chat_id() -> str:
@@ -102,6 +110,14 @@ def _parse_incident_overview_target_map(raw: str) -> Dict[str, str]:
         key, _, val = segment.partition("=")
         key, val = key.strip(), val.strip()
         if key.startswith("oc_") and val.startswith("oc_"):
+            # Reject "=oc_" placeholders (copy-paste cut off); full Lark group ids are longer.
+            if len(key) < 12 or len(val) < 12:
+                log.warning(
+                    "INCIDENT_OVERVIEW_TARGET_MAP: skip incomplete pair %r "
+                    "(each side must be a full oc_... group chat id, e.g. oc_8c1c...=oc_f4e8...)",
+                    segment,
+                )
+                continue
             out[key] = val
     return out
 

@@ -14,6 +14,7 @@ import lark_oapi as lark
 
 from lark_logic import process_message
 from p0_logic import (
+    get_incident_group_chat_ids,
     get_tenant_token,
     handle_dm_generate_overview,
     handle_lark_card_action,
@@ -68,6 +69,17 @@ log.info(
     "env loaded: SLACK_BOT_TOKEN %s (len=%s) — if len=0, Slack chat.postMessage will fail",
     "set" if _slack_tok else "MISSING",
     len(_slack_tok),
+)
+
+_ig = sorted(get_incident_group_chat_ids())
+_ig_disp = ", ".join(
+    (f"{x[:10]}…{x[-6:]}" if len(x) > 20 else x) for x in _ig
+) or "(none)"
+log.info(
+    "incident groups: count=%s chat_ids=%s — must match webhook chat_id or messages log "
+    "'Ignored message from non-allowed chat_id'",
+    len(_ig),
+    _ig_disp,
 )
 
 app = FastAPI()

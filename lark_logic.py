@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
     get_incident_group_chat_ids,
+    get_overview_target_chat_id_for_source_incident,
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_asker_open_ids,
     get_p0_thread_confirm_responder_open_ids,
@@ -123,10 +124,18 @@ P0_THREAD_CONFIRM_YES_RE = re.compile(
     re.IGNORECASE,
 )
 
-_P0_THREAD_LOCK = threading.Lock()
+_P0_THREAD_LOCK = threading.RLock()
 # chat_id -> { "question_message_id", "asker_open_id", "exp" }
 _P0_THREAD_PENDING: Dict[str, Dict[str, Any]] = {}
 # pending value: question_message_id, asker_open_id, exp, armed_at (epoch float)
+
+
+def _p0_thread_clear_pending_dict(pend: Dict[str, Any]) -> None:
+    """Remove all chat_id keys that reference the same pending object (source + mirrored prompt chat)."""
+    with _P0_THREAD_LOCK:
+        keys = [k for k, v in _P0_THREAD_PENDING.items() if v is pend]
+        for k in keys:
+            _P0_THREAD_PENDING.pop(k, None)
 
 
 def _p0_thread_prune_expired(chat_id: str) -> None:
@@ -135,7 +144,7 @@ def _p0_thread_prune_expired(chat_id: str) -> None:
         if not p:
             return
         if time.time() > float(p.get("exp") or 0):
-            _P0_THREAD_PENDING.pop(chat_id, None)
+            _p0_thread_clear_pending_dict(p)
 
 
 def _thread_reply_targets_question(parent_id: str, root_id: str, question_message_id: str) -> bool:
@@ -184,8 +193,39 @@ def _is_p0_thread_confirm_yes(text: str) -> bool:
         return False
     line = t.split("\n")[0].strip()
     line = re.sub(r"<[^>]+>", "", line).strip()
-    line = re.sub(r"^\s*@\S+\s+", "", line).strip()
+    while True:
+        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
+        if nxt == line:
+            break
+        line = nxt.strip()
     return bool(P0_THREAD_CONFIRM_YES_RE.match(line))
+
+
+def _mirror_prompt_chat_confirm_ok(
+    pend: Dict[str, Any],
+    message_chat_id: str,
+    source_incident_chat_id: str,
+    parent_id: str,
+    root_id: str,
+    mention_open_ids: List[str],
+    asker_open_id: str,
+    text_raw: str,
+) -> bool:
+    """
+    User confirmed in the **prompt / overview** group (``INCIDENT_OVERVIEW_TARGET_MAP`` target),
+    not in the detection chat: ``parent_id`` never matches the detection ``question_message_id``.
+    Accept **yes** if: reply-in-thread in prompt, or top-level with same grace/@asker rules.
+    """
+    if (message_chat_id or "").strip() == (source_incident_chat_id or "").strip():
+        return False
+    if not _is_p0_thread_confirm_yes(text_raw):
+        return False
+    p, r = (parent_id or "").strip(), (root_id or "").strip()
+    if p or r:
+        return True
+    if not get_p0_thread_confirm_allow_toplevel_yes():
+        return False
+    return _toplevel_yes_context_ok(pend, asker_open_id, mention_open_ids)
 
 
 def _try_handle_p0_thread_confirm(
@@ -214,13 +254,18 @@ def _try_handle_p0_thread_confirm(
         pend = _P0_THREAD_PENDING.get(chat_id)
 
     if pend:
+        source_incident = str(pend.get("source_incident_chat_id") or "").strip() or chat_id
         qmid = str(pend.get("question_message_id") or "").strip()
         asker = str(pend.get("asker_open_id") or "").strip()
         p = (parent_id or "").strip()
         r = (root_id or "").strip()
-        thread_ok = bool(qmid and _thread_reply_targets_question(parent_id, root_id, qmid))
+        in_source = chat_id == source_incident
+        thread_ok = bool(
+            in_source and qmid and _thread_reply_targets_question(parent_id, root_id, qmid)
+        )
         toplevel_raw = bool(
-            qmid
+            in_source
+            and qmid
             and get_p0_thread_confirm_allow_toplevel_yes()
             and not p
             and not r
@@ -229,14 +274,32 @@ def _try_handle_p0_thread_confirm(
             toplevel_raw
             and _toplevel_yes_context_ok(pend, asker, list(mention_open_ids or []))
         )
-        if toplevel_raw and not thread_ok and not toplevel_ok and _is_p0_thread_confirm_yes(text_raw):
+        mirror_ok = bool(
+            _mirror_prompt_chat_confirm_ok(
+                pend,
+                chat_id,
+                source_incident,
+                parent_id,
+                root_id,
+                list(mention_open_ids or []),
+                asker,
+                text_raw,
+            )
+        )
+        if (
+            in_source
+            and toplevel_raw
+            and not thread_ok
+            and not toplevel_ok
+            and _is_p0_thread_confirm_yes(text_raw)
+        ):
             log.info(
                 "Incident group: P0 thread toplevel yes ignored (outside grace or @asker not in mentions) "
                 "chat_id=%s grace_sec=%s",
                 chat_id,
                 get_p0_thread_confirm_toplevel_grace_sec(),
             )
-        if thread_ok or toplevel_ok:
+        if thread_ok or toplevel_ok or mirror_ok:
             responders = get_p0_thread_confirm_responder_open_ids()
             if oid == asker:
                 log.info(
@@ -250,26 +313,34 @@ def _try_handle_p0_thread_confirm(
                     chat_id,
                 )
                 return False
-            if not _is_p0_thread_confirm_yes(text_raw):
+            if not mirror_ok and not _is_p0_thread_confirm_yes(text_raw):
                 return False
-            with _P0_THREAD_LOCK:
-                _P0_THREAD_PENDING.pop(chat_id, None)
-            if chat_has_active_session(chat_id):
-                log.info("Incident group: P0 thread confirm skipped (session already active) chat_id=%s", chat_id)
+            _p0_thread_clear_pending_dict(pend)
+            if chat_has_active_session(source_incident):
+                log.info(
+                    "Incident group: P0 thread confirm skipped (session already active) source_chat=%s",
+                    source_incident,
+                )
                 return True
-            mode = "thread reply" if thread_ok else "toplevel yes (P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES=1)"
+            if mirror_ok:
+                mode = "prompt/mirror chat yes (INCIDENT_OVERVIEW_TARGET_MAP)"
+            elif thread_ok:
+                mode = "thread reply"
+            else:
+                mode = "toplevel yes (P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES=1)"
             log.info(
-                "Incident group: P0 thread confirm — starting P0 chat_id=%s confirmer=%s via %s",
+                "Incident group: P0 thread confirm — starting P0 source_chat=%s message_chat=%s confirmer=%s via %s",
+                source_incident,
                 chat_id,
                 oid,
                 mode,
             )
             start_p0(
-                chat_id,
+                source_incident,
                 token,
                 oid,
                 priority="P0",
-                source_chat_name=source_chat_name,
+                source_chat_name=source_chat_name if in_source else "",
                 trigger_lark_user_id=sender_lark_user_id,
             )
             return True
@@ -279,19 +350,26 @@ def _try_handle_p0_thread_confirm(
         if not mid:
             return False
         ttl = float(get_p0_thread_confirm_ttl_sec())
+        tgt = get_overview_target_chat_id_for_source_incident(chat_id)
+        entry = {
+            "question_message_id": mid,
+            "asker_open_id": oid,
+            "exp": time.time() + ttl,
+            "armed_at": time.time(),
+            "source_incident_chat_id": chat_id,
+        }
         with _P0_THREAD_LOCK:
-            _P0_THREAD_PENDING[chat_id] = {
-                "question_message_id": mid,
-                "asker_open_id": oid,
-                "exp": time.time() + ttl,
-                "armed_at": time.time(),
-            }
+            _P0_THREAD_PENDING[chat_id] = entry
+            if tgt and tgt != chat_id:
+                _P0_THREAD_PENDING[tgt] = entry
         log.info(
-            "Incident group: P0 thread confirm armed asker=%s question_message_id=%s chat_id=%s ttl_sec=%s",
+            "Incident group: P0 thread confirm armed asker=%s question_message_id=%s chat_id=%s ttl_sec=%s "
+            "mirror_prompt_chat=%s",
             oid[-12:] if oid else "",
             mid,
             chat_id,
             int(ttl),
+            tgt if tgt and tgt != chat_id else "",
         )
         return True
 
