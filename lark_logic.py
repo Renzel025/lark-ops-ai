@@ -122,9 +122,15 @@ P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"|is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
+# Reply in the same thread: message must read like **agreement** with the question, not random chat.
+# Not full NLP — anchored phrases only — to limit false positives outside this flow.
 P0_THREAD_CONFIRM_YES_RE = re.compile(
-    r"^(?:yes|yep|yeah|confirmed|confirm|是|对的|确认)\b",
-    re.IGNORECASE,
+    r"(?is)^(?:"
+    r"(?:yes|yep|yeah|sure|ok|okay|agreed|agree|confirm|confirmed|是|对的|确认)\b|"
+    r"we will (?:consider|proceed)\b|"
+    r"go ahead|sounds good|approved\b|proceed\b|"
+    r"\+\+"
+    r")"
 )
 
 _P0_THREAD_LOCK = threading.RLock()
