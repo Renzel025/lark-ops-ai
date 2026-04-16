@@ -87,6 +87,23 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     t = (text or "").strip().lower()
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
 
+
+def _is_manual_p0_incident_overview_template(text: str) -> bool:
+    """
+    Humans often paste the bilingual **P0 Incident Overview** block (Send overview / manual share).
+    The first line is ``P0 Incident Overview`` or ``P0 事故概览`` — not a VC declaration; skip keyword trigger.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    first = t.split("\n")[0].strip()
+    if re.match(r"(?is)P0\s+Incident\s+Overview\b", first):
+        return True
+    if re.match(r"(?is)P0\s+事故概览", first):
+        return True
+    return False
+
+
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
@@ -592,6 +609,12 @@ def process_message(
 
         # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
         if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
+            if _is_manual_p0_incident_overview_template(text_raw):
+                log.info(
+                    "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
+                    text_raw[:200],
+                )
+                return
             if _is_question_about_priority(text_raw):
                 log.info(
                     "Incident group: P0 trigger ignored (question about priority) text=%r",
