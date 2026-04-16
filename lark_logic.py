@@ -12,6 +12,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_allow_asker_self_yes,
     get_p0_thread_confirm_asker_open_ids,
+    get_p0_thread_confirm_target_open_ids,
     get_p0_thread_confirm_responder_open_ids,
     get_p0_thread_confirm_toplevel_grace_sec,
     get_p0_thread_confirm_ttl_sec,
@@ -149,6 +150,8 @@ P0_THREAD_CONFIRM_YES_RE = re.compile(
     r"(?:yes|yep|yeah|sure|ok|okay|agreed|agree|confirm|confirmed|是|对的|确认)\b|"
     r"we will (?:consider|proceed)\b|"
     r"go ahead|sounds good|approved\b|proceed\b|"
+    r"(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"(?:this|the)\s+issue\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
     r"\+\+"
     r")"
 )
@@ -301,11 +304,13 @@ def _try_handle_p0_thread_confirm(
     Returns True if this message was fully handled (armed pending or started P0).
     """
     askers = get_p0_thread_confirm_asker_open_ids()
-    if not askers:
+    targets = get_p0_thread_confirm_target_open_ids()
+    if not askers and not targets:
         return False
 
     _p0_thread_prune_expired(chat_id)
     oid = (user_id or "").strip()
+    mention_oids = {x.strip() for x in (mention_open_ids or []) if (x or "").strip()}
 
     with _P0_THREAD_LOCK:
         pend = _P0_THREAD_PENDING.get(chat_id)
@@ -403,33 +408,42 @@ def _try_handle_p0_thread_confirm(
             )
             return True
 
-    if oid in askers and _is_p0_thread_confirm_question(text_raw):
-        mid = (message_id or "").strip()
-        if not mid:
-            return False
-        ttl = float(get_p0_thread_confirm_ttl_sec())
-        tgt = get_overview_target_chat_id_for_source_incident(chat_id)
-        entry = {
-            "question_message_id": mid,
-            "asker_open_id": oid,
-            "exp": time.time() + ttl,
-            "armed_at": time.time(),
-            "source_incident_chat_id": chat_id,
-        }
-        with _P0_THREAD_LOCK:
-            _P0_THREAD_PENDING[chat_id] = entry
-            if tgt and tgt != chat_id:
-                _P0_THREAD_PENDING[tgt] = entry
-        log.info(
-            "Incident group: P0 thread confirm armed asker=%s question_message_id=%s chat_id=%s ttl_sec=%s "
-            "mirror_prompt_chat=%s",
-            oid[-12:] if oid else "",
-            mid,
-            chat_id,
-            int(ttl),
-            tgt if tgt and tgt != chat_id else "",
-        )
-        return True
+    if _is_p0_thread_confirm_question(text_raw):
+        arm_via_asker = bool(askers and oid in askers)
+        arm_via_target = bool(targets and (mention_oids & targets))
+        if arm_via_asker or arm_via_target:
+            mid = (message_id or "").strip()
+            if not mid:
+                return False
+            ttl = float(get_p0_thread_confirm_ttl_sec())
+            tgt = get_overview_target_chat_id_for_source_incident(chat_id)
+            entry = {
+                "question_message_id": mid,
+                "asker_open_id": oid,
+                "exp": time.time() + ttl,
+                "armed_at": time.time(),
+                "source_incident_chat_id": chat_id,
+            }
+            with _P0_THREAD_LOCK:
+                _P0_THREAD_PENDING[chat_id] = entry
+                if tgt and tgt != chat_id:
+                    _P0_THREAD_PENDING[tgt] = entry
+            mode = []
+            if arm_via_asker:
+                mode.append("designated_asker")
+            if arm_via_target:
+                mode.append("target_mention")
+            log.info(
+                "Incident group: P0 thread confirm armed asker=%s question_message_id=%s chat_id=%s ttl_sec=%s "
+                "mirror_prompt_chat=%s mode=%s",
+                oid[-12:] if oid else "",
+                mid,
+                chat_id,
+                int(ttl),
+                tgt if tgt and tgt != chat_id else "",
+                "+".join(mode) if mode else "",
+            )
+            return True
 
     return False
 

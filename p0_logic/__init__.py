@@ -108,6 +108,7 @@ get_owner_ids = config.get_owner_ids
 get_host_and_dm_open_id = config.get_host_and_dm_open_id
 get_p0_trigger_ignore_open_ids = config.get_p0_trigger_ignore_open_ids
 get_p0_thread_confirm_asker_open_ids = config.get_p0_thread_confirm_asker_open_ids
+get_p0_thread_confirm_target_open_ids = config.get_p0_thread_confirm_target_open_ids
 get_p0_thread_confirm_responder_open_ids = config.get_p0_thread_confirm_responder_open_ids
 get_p0_thread_confirm_ttl_sec = config.get_p0_thread_confirm_ttl_sec
 get_p0_thread_confirm_allow_toplevel_yes = config.get_p0_thread_confirm_allow_toplevel_yes
@@ -214,6 +215,7 @@ __all__ = [
     "get_host_and_dm_open_id",
     "get_p0_trigger_ignore_open_ids",
     "get_p0_thread_confirm_asker_open_ids",
+    "get_p0_thread_confirm_target_open_ids",
     "get_p0_thread_confirm_responder_open_ids",
     "get_p0_thread_confirm_ttl_sec",
     "get_p0_thread_confirm_allow_toplevel_yes",

@@ -478,6 +478,27 @@ def get_p0_thread_confirm_asker_open_ids() -> FrozenSet[str]:
     return frozenset(x for x in ids if is_open_id(x))
 
 
+def get_p0_thread_confirm_target_open_ids() -> FrozenSet[str]:
+    """
+    ``P0_THREAD_CONFIRM_TARGET_OPEN_IDS`` — comma-separated ``ou_...`` (optional).
+
+    If **non-empty**, a qualifying **\"is this P0?\"** message also **arms** when **at least one**
+    of these users appears in Lark ``mentions`` (someone @'d them to confirm), even if the sender
+    is **not** in ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS``.
+
+    Use with ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS`` (OR): duty users can still arm without @'s;
+    anyone can arm when @'ing a designated confirmer.
+
+    If both this and ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS`` are empty, thread confirm is off.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_THREAD_CONFIRM_TARGET_OPEN_IDS") or "").strip()
+    if not raw:
+        return frozenset()
+    ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(x for x in ids if is_open_id(x))
+
+
 def get_p0_thread_confirm_responder_open_ids() -> FrozenSet[str]:
     """
     ``P0_THREAD_CONFIRM_RESPONDER_OPEN_IDS`` — optional comma-separated ``ou_...``.
