@@ -105,6 +105,49 @@ def _is_manual_p0_incident_overview_template(text: str) -> bool:
     return False
 
 
+# Incident keyword: message contains ``p0`` but explicitly says no / not P0 / no escalation (no Groq).
+_P0_NEGATION_SUBSTRINGS = (
+    "no p0 escalation",
+    "not a p0",
+    "not p0",
+    "is not p0",
+    "is not a p0",
+    "not in p0",
+    "non-p0",
+    "non p0",
+    "without p0 escalation",
+    "without a p0",
+    "without p0",
+    "p0 escalation is not required",
+    "p0 escalation is not needed",
+    "no need for p0",
+    "no need for a p0",
+    "no p0 needed",
+    "no p0 required",
+)
+
+
+def _is_explicit_p0_negation(text: str) -> bool:
+    """
+    True when the text contains ``p0`` but clearly *declines* P0 / escalation (e.g. "No P0 escalation is required").
+    Skips the naive ``\\bp0\\b`` keyword VC trigger — no LLM required.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if not P0_KEYWORD_RE.search(t):
+        return False
+    low = " ".join(t.lower().split())
+    for s in _P0_NEGATION_SUBSTRINGS:
+        if s in low:
+            return True
+    if re.search(r"(?is)\bno\s+p0\s+escalation\b", t):
+        return True
+    if re.search(r"(?is)\b(?:not|without)\s+(?:a\s+)?p0\b", t):
+        return True
+    return False
+
+
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
@@ -626,6 +669,12 @@ def process_message(
             if _is_manual_p0_incident_overview_template(text_raw):
                 log.info(
                     "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
+                    text_raw[:200],
+                )
+                return
+            if _is_explicit_p0_negation(text_raw):
+                log.info(
+                    "Incident group: P0 trigger ignored (explicit not/no p0 or no escalation) text_head=%r",
                     text_raw[:200],
                 )
                 return
