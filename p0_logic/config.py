@@ -719,9 +719,20 @@ def get_p0_graph_screenshot_full_page() -> bool:
 
 
 def get_p0_graph_screenshot_caption() -> str:
-    """Optional text line posted before the image (empty = image only)."""
+    """
+    Optional text posted before the image (empty = a default line with capture time only).
+
+    Placeholders: ``{label}`` = incident source chat display name; ``{captured_at}`` = date/time when
+    the PNG was taken (server clock; see ``P0_GRAPH_SCREENSHOT_TIMEZONE``).
+    """
     reload_env_runtime()
     return (os.getenv("P0_GRAPH_SCREENSHOT_CAPTION") or "").strip()
+
+
+def get_p0_graph_screenshot_timezone_name() -> str:
+    """Optional IANA zone name for ``{captured_at}`` (e.g. ``Asia/Shanghai``). Empty = UTC."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_TIMEZONE") or "").strip()
 
 
 def get_p0_graph_screenshot_chromium_args() -> List[str]:

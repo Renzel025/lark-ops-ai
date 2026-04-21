@@ -2,6 +2,9 @@
 Optional: when a P0 session starts, capture a dashboard URL (e.g. **Grafana**) with Playwright and post
 the PNG to a Lark group.
 
+A text line with the **capture date/time** (when ``page.screenshot`` completed) is posted before the
+image — see ``P0_GRAPH_SCREENSHOT_CAPTION``, ``{captured_at}``, and ``P0_GRAPH_SCREENSHOT_TIMEZONE``.
+
 Without ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR``, each run uses a **fresh** Chromium — fine for
 anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile
 directory** where you completed login once (headed), similar to Slack ``SESSION_DIR``.
@@ -10,9 +13,35 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Tuple
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9 (see p0_logic/requirements.txt backports.zoneinfo)
+    from backports.zoneinfo import ZoneInfo
 
 log = logging.getLogger("lark-ops-ai")
+
+
+def _resolve_capture_tz():
+    from . import config as _config
+
+    name = _config.get_p0_graph_screenshot_timezone_name()
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        log.warning("p0 graph screenshot: invalid P0_GRAPH_SCREENSHOT_TIMEZONE=%r — using UTC", name)
+        return timezone.utc
+
+
+def _format_captured_at(dt: datetime) -> str:
+    """Human-readable 'as of' line; tz-aware ``dt``."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
@@ -51,7 +80,7 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
     from . import config as _config
     from . import lark_client as _lark
 
-    png = _capture_png_bytes()
+    png, captured_at = _capture_png_bytes()
     if not png:
         log.warning("p0 graph screenshot: capture returned empty")
         return
@@ -61,12 +90,13 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
         return
     cap = _config.get_p0_graph_screenshot_caption()
     if cap:
-        text = cap
-        if source_label and "{label}" in text:
-            text = text.replace("{label}", source_label)
-        st_t, _ = _lark.post_text_to_chat(chat_id, token, text)
-        if st_t != 200:
-            log.warning("p0 graph screenshot: caption post HTTP=%s", st_t)
+        text = cap.replace("{captured_at}", captured_at)
+        text = text.replace("{label}", (source_label or "").strip())
+    else:
+        text = f"As of: {captured_at}"
+    st_t, _ = _lark.post_text_to_chat(chat_id, token, text)
+    if st_t != 200:
+        log.warning("p0 graph screenshot: caption post HTTP=%s", st_t)
     st, body = _lark.post_image_to_chat(chat_id, token, key)
     if st != 200:
         log.warning(
@@ -78,14 +108,18 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
         log.info("p0 graph screenshot: posted image to chat_id tail=%s", chat_id[-12:])
 
 
-def _capture_png_bytes() -> Optional[bytes]:
+def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
+    """
+    Returns PNG bytes and a formatted capture timestamp (empty string if capture failed).
+    Time is recorded immediately after ``page.screenshot`` returns.
+    """
     from . import config as _config
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         log.warning("p0 graph screenshot: playwright not installed (pip install playwright; playwright install chromium)")
-        return None
+        return None, ""
 
     url = _config.get_p0_graph_screenshot_url()
     w = _config.get_p0_graph_screenshot_viewport_width()
@@ -94,6 +128,12 @@ def _capture_png_bytes() -> Optional[bytes]:
     nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
     full_page = _config.get_p0_graph_screenshot_full_page()
     user_data = _config.get_p0_graph_screenshot_playwright_user_data_dir()
+    tz = _resolve_capture_tz()
+
+    def _snap(page) -> Tuple[bytes, str]:
+        raw = page.screenshot(full_page=full_page, type="png")
+        at = datetime.now(tz)
+        return raw, _format_captured_at(at)
 
     launch_args = _config.get_p0_graph_screenshot_chromium_args()
     with sync_playwright() as p:
@@ -110,7 +150,8 @@ def _capture_png_bytes() -> Optional[bytes]:
                 page.goto(url, wait_until="load", timeout=nav_ms)
                 if wait_ms > 0:
                     page.wait_for_timeout(wait_ms)
-                return page.screenshot(full_page=full_page, type="png")
+                png, captured = _snap(page)
+                return png, captured
             finally:
                 context.close()
         browser = p.chromium.launch(headless=True, args=launch_args)
@@ -119,6 +160,7 @@ def _capture_png_bytes() -> Optional[bytes]:
             page.goto(url, wait_until="load", timeout=nav_ms)
             if wait_ms > 0:
                 page.wait_for_timeout(wait_ms)
-            return page.screenshot(full_page=full_page, type="png")
+            png, captured = _snap(page)
+            return png, captured
         finally:
             browser.close()
