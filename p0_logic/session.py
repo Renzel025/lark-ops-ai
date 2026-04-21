@@ -1172,6 +1172,12 @@ def start_p0(
             run_slack_p0_notify_and_huddle(chat_id, priority, chat_label)
     except Exception as e:
         log.warning("start_p0: slack bridge hook failed: %s", e)
+    try:
+        from .graph_screenshot import schedule_p0_graph_screenshot
+
+        schedule_p0_graph_screenshot(token, priority, chat_label)
+    except Exception as e:
+        log.warning("start_p0: graph screenshot hook failed: %s", e)
     # Primary bot always DM's the green overview card (same declaration as severity bot for P0 when enabled).
     for oid in dm_targets:
         if not oid:

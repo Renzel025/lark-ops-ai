@@ -121,6 +121,52 @@ def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:
     return r.status_code, (r.text or "")
 
 
+def upload_image_bytes_for_im_message(token: str, image_bytes: bytes, filename: str = "graph.png") -> str:
+    """
+    Upload PNG/JPEG bytes for a **chat message** image. Returns ``image_key`` (``img_...``) or "".
+    Requires ``im:resource`` (or tenant image upload scope) on the app.
+    """
+    token = (token or "").strip()
+    if not token or not image_bytes:
+        return ""
+    url = f"{LARK_BASE}/im/v1/images"
+    try:
+        files = {"image": (filename, image_bytes, "image/png")}
+        data = {"image_type": "message"}
+        r = _lark_http().post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            files=files,
+            data=data,
+            **_timeout_kw(),
+        )
+        jb = r.json() if r.text else {}
+        if jb.get("code") != 0:
+            log.warning("upload_image: Lark code=%s msg=%s", jb.get("code"), jb.get("msg"))
+            return ""
+        d = jb.get("data") or {}
+        return str(d.get("image_key") or "").strip()
+    except Exception as e:
+        log.warning("upload_image: failed: %s", e)
+        return ""
+
+
+def post_image_to_chat(chat_id: str, token: str, image_key: str) -> Tuple[int, str]:
+    """Post a single image message (after :func:`upload_image_bytes_for_im_message`)."""
+    chat_id = (chat_id or "").strip()
+    image_key = (image_key or "").strip()
+    if not chat_id or not image_key:
+        return 400, ""
+    url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
+    payload = {
+        "receive_id": chat_id,
+        "msg_type": "image",
+        "content": json.dumps({"image_key": image_key}, ensure_ascii=False),
+    }
+    r = _lark_http().post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, **_timeout_kw())
+    return r.status_code, (r.text or "")
+
+
 def parse_im_message_id_from_response(body: str) -> str:
     """Extract ``message_id`` (om_...) from im/v1/messages create response JSON."""
     try:

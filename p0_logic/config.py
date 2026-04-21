@@ -649,6 +649,108 @@ def _parse_incident_keyed_url_map(raw: str) -> Dict[str, str]:
     return out
 
 
+def p0_graph_screenshot_enabled() -> bool:
+    """
+    When True, after a **P0** session starts the bot captures a Playwright screenshot of
+    ``P0_GRAPH_SCREENSHOT_URL`` and posts it to ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_url() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_URL") or "").strip()
+
+
+def get_p0_graph_screenshot_target_chat_id() -> str:
+    """Lark group ``oc_...`` to receive the screenshot (can differ from incident group)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID") or "").strip()
+    return v if v.startswith("oc_") and len(v) > 12 else ""
+
+
+def get_p0_graph_screenshot_viewport_width() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH") or "1280").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 1280
+    return max(320, min(n, 3840))
+
+
+def get_p0_graph_screenshot_viewport_height() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_HEIGHT") or "720").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 720
+    return max(240, min(n, 2160))
+
+
+def get_p0_graph_screenshot_wait_ms() -> int:
+    """Extra wait after ``load`` so charts can render."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_WAIT_MS") or "4000").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 4000
+    return max(0, min(n, 120_000))
+
+
+def get_p0_graph_screenshot_nav_timeout_ms() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_NAV_TIMEOUT_MS") or "60000").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 60000
+    return max(5000, min(n, 300_000))
+
+
+def get_p0_graph_screenshot_full_page() -> bool:
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_FULL_PAGE") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_caption() -> str:
+    """Optional text line posted before the image (empty = image only)."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_CAPTION") or "").strip()
+
+
+def get_p0_graph_screenshot_chromium_args() -> List[str]:
+    """
+    Comma-separated extra Chromium flags for Playwright on Linux/Docker, e.g.
+    ``--no-sandbox,--disable-dev-shm-usage``. Empty = default ``--disable-dev-shm-usage`` only.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_CHROMIUM_ARGS") or "").strip()
+    if not raw:
+        return ["--disable-dev-shm-usage"]
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def get_p0_graph_screenshot_playwright_user_data_dir() -> str:
+    """
+    If set to an **existing** directory, Playwright uses ``launch_persistent_context`` so Chromium
+    keeps cookies/local storage (e.g. after you log in to **Grafana** once in a headed browser using
+    this same profile path). Same idea as Slack ``SESSION_DIR`` — without this, each run is a fresh
+    session and Grafana will usually show the login page unless the dashboard is anonymous/public.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR") or "").strip()
+    if not raw:
+        return ""
+    p = Path(raw).expanduser().resolve()
+    return str(p) if p.is_dir() else ""
+
+
 def slack_automation_enabled() -> bool:
     """Gate Playwright Slack huddle subprocess (default on when env vars are set)."""
     reload_env_runtime()
