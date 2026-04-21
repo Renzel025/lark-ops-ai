@@ -692,7 +692,7 @@ def get_p0_graph_screenshot_viewport_height() -> int:
 
 
 def get_p0_graph_screenshot_wait_ms() -> int:
-    """Extra wait after ``load`` so charts can render."""
+    """Extra wait after ``goto`` (and ``wait_until``) before ``screenshot`` — lets Grafana panels query/render."""
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_WAIT_MS") or "4000").strip()
     try:
@@ -718,21 +718,44 @@ def get_p0_graph_screenshot_full_page() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_goto_wait_until() -> str:
+    """
+    Playwright ``page.goto(..., wait_until=...)``.
+
+    - ``load`` (default): wait for load event — good when you want charts to start rendering; pair with a
+      higher ``P0_GRAPH_SCREENSHOT_WAIT_MS`` for dense Grafana dashboards.
+    - ``domcontentloaded``: earlier — page shell before many panel queries finish (lighter / “before graphs”).
+    - ``networkidle``: can hang on Grafana (WebSockets); avoid unless you know the site goes idle.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_GOTO_WAIT_UNTIL") or "load").strip().lower()
+    allowed = frozenset(("load", "domcontentloaded", "networkidle", "commit"))
+    if raw in allowed:
+        return raw
+    log.warning("P0_GRAPH_SCREENSHOT_GOTO_WAIT_UNTIL=%r invalid — using load", raw)
+    return "load"
+
+
 def get_p0_graph_screenshot_caption() -> str:
     """
     Optional text posted before the image (empty = a default line with capture time only).
 
     Placeholders: ``{label}`` = incident source chat display name; ``{captured_at}`` = date/time when
-    the PNG was taken (server clock; see ``P0_GRAPH_SCREENSHOT_TIMEZONE``).
+    the PNG was taken (default zone Malaysia ``Asia/Kuala_Lumpur``; see ``P0_GRAPH_SCREENSHOT_TIMEZONE``).
     """
     reload_env_runtime()
     return (os.getenv("P0_GRAPH_SCREENSHOT_CAPTION") or "").strip()
 
 
 def get_p0_graph_screenshot_timezone_name() -> str:
-    """Optional IANA zone name for ``{captured_at}`` (e.g. ``Asia/Shanghai``). Empty = UTC."""
+    """
+    IANA zone for ``{captured_at}`` timestamps. Default **Malaysia Time** (``Asia/Kuala_Lumpur``, MYT).
+
+    Set to ``UTC``, ``Asia/Singapore``, etc. if you need a different zone.
+    """
     reload_env_runtime()
-    return (os.getenv("P0_GRAPH_SCREENSHOT_TIMEZONE") or "").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_TIMEZONE") or "").strip()
+    return raw if raw else "Asia/Kuala_Lumpur"
 
 
 def get_p0_graph_screenshot_chromium_args() -> List[str]:

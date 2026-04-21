@@ -5,6 +5,11 @@ the PNG to a Lark group.
 A text line with the **capture date/time** (when ``page.screenshot`` completed) is posted before the
 image — see ``P0_GRAPH_SCREENSHOT_CAPTION``, ``{captured_at}``, and ``P0_GRAPH_SCREENSHOT_TIMEZONE``.
 
+For **multi-panel Grafana** dashboards (full grid like your ops view): set ``P0_GRAPH_SCREENSHOT_FULL_PAGE=1``,
+a **wide** viewport (e.g. 1920×1080), ``P0_GRAPH_SCREENSHOT_GOTO_WAIT_UNTIL=load``, and raise
+``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. 8000–15000) so panels can load. For an **earlier** grab (layout /
+loading state), use ``domcontentloaded`` and a **lower** ``P0_GRAPH_SCREENSHOT_WAIT_MS``.
+
 Without ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR``, each run uses a **fresh** Chromium — fine for
 anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile
 directory** where you completed login once (headed), similar to Slack ``SESSION_DIR``.
@@ -28,13 +33,14 @@ def _resolve_capture_tz():
     from . import config as _config
 
     name = _config.get_p0_graph_screenshot_timezone_name()
-    if not name:
-        return timezone.utc
     try:
         return ZoneInfo(name)
     except Exception:
-        log.warning("p0 graph screenshot: invalid P0_GRAPH_SCREENSHOT_TIMEZONE=%r — using UTC", name)
-        return timezone.utc
+        log.warning(
+            "p0 graph screenshot: invalid P0_GRAPH_SCREENSHOT_TIMEZONE=%r — using Asia/Kuala_Lumpur",
+            name,
+        )
+        return ZoneInfo("Asia/Kuala_Lumpur")
 
 
 def _format_captured_at(dt: datetime) -> str:
@@ -127,6 +133,7 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
     nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
     full_page = _config.get_p0_graph_screenshot_full_page()
+    goto_wait = _config.get_p0_graph_screenshot_goto_wait_until()
     user_data = _config.get_p0_graph_screenshot_playwright_user_data_dir()
     tz = _resolve_capture_tz()
 
@@ -134,6 +141,15 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
         raw = page.screenshot(full_page=full_page, type="png")
         at = datetime.now(tz)
         return raw, _format_captured_at(at)
+
+    def _goto_and_wait(page) -> None:
+        page.goto(url, wait_until=goto_wait, timeout=nav_ms)
+        try:
+            page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        if wait_ms > 0:
+            page.wait_for_timeout(wait_ms)
 
     launch_args = _config.get_p0_graph_screenshot_chromium_args()
     with sync_playwright() as p:
@@ -147,9 +163,15 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
-                page.goto(url, wait_until="load", timeout=nav_ms)
-                if wait_ms > 0:
-                    page.wait_for_timeout(wait_ms)
+                log.info(
+                    "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
+                    goto_wait,
+                    full_page,
+                    w,
+                    h,
+                    wait_ms,
+                )
+                _goto_and_wait(page)
                 png, captured = _snap(page)
                 return png, captured
             finally:
@@ -157,9 +179,15 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
         browser = p.chromium.launch(headless=True, args=launch_args)
         try:
             page = browser.new_page(viewport={"width": w, "height": h})
-            page.goto(url, wait_until="load", timeout=nav_ms)
-            if wait_ms > 0:
-                page.wait_for_timeout(wait_ms)
+            log.info(
+                "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
+                goto_wait,
+                full_page,
+                w,
+                h,
+                wait_ms,
+            )
+            _goto_and_wait(page)
             png, captured = _snap(page)
             return png, captured
         finally:
