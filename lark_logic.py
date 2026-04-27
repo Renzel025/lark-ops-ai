@@ -733,6 +733,12 @@ def process_message(
                 return
 
             log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
+            # Do NOT pass silent_when_blocked=True here. The template detector
+            # (_is_manual_p0_incident_overview_template, layers 1 + 2 above) already
+            # filters out manual overview re-pastes BEFORE we get here, so any keyword
+            # match that survives is a legitimate trigger attempt — the user expects to
+            # see a cooldown / "session active" warning in the prompt/target chat when
+            # blocked, not a silent no-op.
             start_p0(
                 chat_id,
                 token,
@@ -740,7 +746,6 @@ def process_message(
                 priority="P0",
                 source_chat_name=source_chat_name,
                 trigger_lark_user_id=sender_lark_user_id,
-                silent_when_blocked=True,
             )
             return
 
