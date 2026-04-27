@@ -89,18 +89,51 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
 
 
+_OVERVIEW_TEMPLATE_MARKERS = (
+    "incident overview",
+    "事故概览",
+    "incident start",
+    "事故开始",
+    "impact scope",
+    "影响范围",
+    "support request",
+    "支援请求",
+    "reported time",
+    "reporter",
+    "affected players",
+    "affected user",
+)
+
+
 def _is_manual_p0_incident_overview_template(text: str) -> bool:
     """
     Humans often paste the bilingual **P0 Incident Overview** block (Send overview / manual share).
-    The first line is ``P0 Incident Overview`` or ``P0 事故概览`` — not a VC declaration; skip keyword trigger.
+    Originally we only checked the first line for ``P0 Incident Overview`` / ``P0 事故概览`` — but
+    real pastes vary (leading emoji like ``📍``, ``**`` markdown, quoted-reply prefixes, custom
+    templates with ``🕐`` instead of ``🕒``, etc.) so we use two layers:
+
+    Layer 1 — first-line title check (tolerant to leading emoji / decoration / markdown).
+    Layer 2 — multi-marker heuristic: if the body contains 2+ overview field markers
+              (``Issue / Impact Scope / Support Request / Reported Time / 事故概览 / 影响范围 / …``),
+              treat as a manual overview paste even if the title line is malformed or missing.
+
+    Either layer matching → skip the keyword trigger silently.
     """
     t = (text or "").strip()
     if not t:
         return False
+
     first = t.split("\n")[0].strip()
-    if re.match(r"(?is)P0\s+Incident\s+Overview\b", first):
-        return True
-    if re.match(r"(?is)P0\s+事故概览", first):
+    first_clean = re.sub(r"^[^A-Za-z\u4e00-\u9fff]+", "", first).strip()
+    if first_clean:
+        if re.match(r"(?is)(?:P0|P1)\s+Incident\s+Overview\b", first_clean):
+            return True
+        if re.match(r"(?is)(?:P0|P1)\s*事故概览", first_clean):
+            return True
+
+    body_lc = t.lower()
+    marker_hits = sum(1 for m in _OVERVIEW_TEMPLATE_MARKERS if m in body_lc)
+    if marker_hits >= 2:
         return True
     return False
 
@@ -578,6 +611,14 @@ def process_message(
         if not text_raw:
             return
 
+        # All bot prompts/warnings/replies in the incident-group flow should land in the prompt
+        # / target chat (e.g. emergency-test group), not in the production source chat. Resolves
+        # via INCIDENT_OVERVIEW_TARGET_MAP / OVERVIEW_TARGET_GROUP_CHAT_ID; falls back to source
+        # if no target is configured.
+        notify_chat = (
+            get_overview_target_chat_id_for_source_incident(chat_id) or chat_id
+        )
+
         # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
         pend = get_p1_prompt_pending(chat_id)
         if pend:
@@ -586,13 +627,13 @@ def process_message(
                 err = handle_p1_meeting_confirm_yes(chat_id, token, user_id, nonce)
                 if err == "session_active":
                     post_text_to_chat(
-                        chat_id,
+                        notify_chat,
                         token,
                         "ℹ️ A meeting session is already active in this chat.",
                     )
                 elif err == "stale":
                     post_text_to_chat(
-                        chat_id,
+                        notify_chat,
                         token,
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
@@ -601,13 +642,13 @@ def process_message(
                 err = handle_p1_meeting_confirm_no(chat_id, token, nonce)
                 if err == "session_active":
                     post_text_to_chat(
-                        chat_id,
+                        notify_chat,
                         token,
                         "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
                     )
                 elif err == "stale":
                     post_text_to_chat(
-                        chat_id,
+                        notify_chat,
                         token,
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
@@ -647,7 +688,7 @@ def process_message(
                 log.info("Incident group: cancel requested but no active session chat_id=%s", chat_id)
                 if token:
                     st, body, _ = post_card_to_chat(
-                        chat_id, token, build_no_active_p0_session_card("cancel")
+                        notify_chat, token, build_no_active_p0_session_card("cancel")
                     )
                     if st != 200:
                         log.warning("no-session cancel prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
@@ -658,7 +699,7 @@ def process_message(
             clear_p0_cooldown(chat_id)
             if token:
                 post_text_to_chat(
-                    chat_id,
+                    notify_chat,
                     token,
                     "ℹ️ Cooldown cleared for this group. The next **p0** or **p1** declaration in this chat will no longer be blocked by cooldown.",
                 )
@@ -699,6 +740,7 @@ def process_message(
                 priority="P0",
                 source_chat_name=source_chat_name,
                 trigger_lark_user_id=sender_lark_user_id,
+                silent_when_blocked=True,
             )
             return
 

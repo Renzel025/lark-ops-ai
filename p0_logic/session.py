@@ -989,7 +989,18 @@ def start_p0(
     priority: str = "P0",
     source_chat_name: str = "",
     trigger_lark_user_id: str = "",
+    silent_when_blocked: bool = False,
 ) -> None:
+    """
+    Create a new P0/P1 VC meeting session.
+
+    ``silent_when_blocked`` — when True, do NOT post visible warnings to the source
+    chat if blocked by an active session or cooldown. Just log and return. Use this
+    from heuristic / keyword auto-trigger paths to avoid noisy false-positives in
+    production incident groups (e.g. when someone re-pastes an overview template).
+    Explicit user actions (P0 thread confirm, P1 confirm Yes) should leave this
+    False so users get a clear reason why nothing happened.
+    """
     from . import participants as _participants
 
     _config.reload_env_runtime()
@@ -1001,10 +1012,17 @@ def start_p0(
         return
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
+    # All bot-side warnings / errors should land in the prompt/target chat (e.g. emergency-test
+    # group), not in the production source incident chat. Resolves via INCIDENT_OVERVIEW_TARGET_MAP
+    # / OVERVIEW_TARGET_GROUP_CHAT_ID; falls back to source if no target is configured.
+    notify_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id) or chat_id
     with _session_disk.exclusive_lock(chat_id):
         if P0_SESSIONS.get(chat_id):
+            if silent_when_blocked:
+                log.info("start_p0: blocked (session already active) silent chat_id=%s", chat_id)
+                return
             _lark.post_text_to_chat(
-                chat_id,
+                notify_chat,
                 token,
                 "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
             )
@@ -1012,17 +1030,23 @@ def start_p0(
         sd = _session_disk.load_session(chat_id)
         if sd:
             P0_SESSIONS[chat_id] = sd
+            if silent_when_blocked:
+                log.info("start_p0: blocked (session loaded from disk) silent chat_id=%s", chat_id)
+                return
             _lark.post_text_to_chat(
-                chat_id,
+                notify_chat,
                 token,
                 "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
             )
             return
         if p0_cooldown(chat_id):
+            if silent_when_blocked:
+                log.info("start_p0: blocked (cooldown active) silent chat_id=%s", chat_id)
+                return
             total_min = max(1, (P0_COOLDOWN_SEC + 59) // 60)
             mins_label = "minute" if total_min == 1 else "minutes"
             msg = f"⚠️ Meeting was just created earlier — try again after {total_min} {mins_label}."
-            _lark.post_text_to_chat(chat_id, token, msg)
+            _lark.post_text_to_chat(notify_chat, token, msg)
             return
         now = int(time.time())
         emergency_topic = _config.get_emergency_topic_for_source_chat(chat_id)
@@ -1030,7 +1054,7 @@ def start_p0(
         vc = _lark.create_vc_reserve(token, meeting_topic=vc_meeting_topic)
         link = (vc.get("link") or "").strip()
         if not link:
-            _lark.post_text_to_chat(chat_id, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
+            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
             return
         target_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id)
         chat_label = (source_chat_name or "").strip()
@@ -1077,7 +1101,7 @@ def start_p0(
         )
         if st != 200:
             log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
-            _lark.post_text_to_chat(chat_id, token, "❌ Failed to post meeting card.")
+            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting card.")
             P0_SESSIONS.pop(chat_id, None)
             return
         if invite_mid:
