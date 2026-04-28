@@ -702,6 +702,22 @@ def get_p0_graph_screenshot_wait_ms() -> int:
     return max(0, min(n, 120_000))
 
 
+def get_p0_graph_screenshot_panel_ready_timeout_ms() -> int:
+    """
+    After navigation, wait up to this many ms for Grafana dashboard panel DOM (e.g. ``.react-grid-item``)
+    before the fixed ``P0_GRAPH_SCREENSHOT_WAIT_MS`` sleep. Reduces **blank black** screenshots when
+    ``load`` fires before React panels mount. Set **0** to skip (default). For heavy dashboards try
+    **20000–35000**.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS") or "0").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 0
+    return max(0, min(n, 120_000))
+
+
 def get_p0_graph_screenshot_nav_timeout_ms() -> int:
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_NAV_TIMEOUT_MS") or "60000").strip()

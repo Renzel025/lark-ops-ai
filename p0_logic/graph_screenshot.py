@@ -15,6 +15,11 @@ PNG or one viewport-only crop): set ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=
 full-page capture, splits at mid-height with Pillow, and posts **two** PNGs to Lark (same caption
 once, then both images). Requires ``Pillow`` in the runtime environment.
 
+If screenshots show a **black / empty** main area: Grafana often fires ``load`` before panels mount.
+Set ``P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS=25000`` (or higher), widen the viewport (e.g.
+1920×1080), raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. 12000–20000). Append ``&kiosk`` to the URL
+for a cleaner full-width layout (hides left nav).
+
 Without ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR``, each run uses a **fresh** Chromium — fine for
 anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile
 directory** where you completed login once (headed), similar to Slack ``SESSION_DIR``.
@@ -208,10 +213,34 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         at = datetime.now(tz)
         return [raw], _format_captured_at(at)
 
+    def _wait_for_grafana_panels_if_configured(page) -> None:
+        panel_timeout = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
+        if panel_timeout <= 0:
+            return
+        # Grafana 8–11: grid items; some builds use data-panel-id on the panel wrapper.
+        sel = ".react-grid-item, [data-panel-id], [data-testid='dashboard-layout-grid']"
+        try:
+            page.wait_for_selector(sel, state="visible", timeout=panel_timeout)
+            log.info(
+                "p0 graph screenshot: dashboard panel DOM ready (waited up to %sms)",
+                panel_timeout,
+            )
+        except Exception as e:
+            log.warning(
+                "p0 graph screenshot: panel readiness wait failed or timed out — continuing anyway: %s",
+                e,
+            )
+
     def _goto_and_wait(page) -> None:
         page.goto(url, wait_until=goto_wait, timeout=nav_ms)
         try:
             page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        _wait_for_grafana_panels_if_configured(page)
+        # Nudge lazy panels / below-the-fold queries (harmless if no scroll).
+        try:
+            page.evaluate("window.scrollBy(0, 600); window.scrollTo(0, 0)")
         except Exception:
             pass
         if wait_ms > 0:
