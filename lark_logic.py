@@ -68,6 +68,11 @@ _BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE = re.compile(
     r"(?is)\bis\s+.+?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
 )
 
+# Embedded if/whether clause: "please confirm if issue is p0", "need to check if this is p0".
+_IF_OR_WHETHER_PRIORITY_CLAUSE_RE = re.compile(
+    r"(?is)\b(?:if|whether)\s+.{1,220}?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
+)
+
 
 def _is_question_about_priority(text: str) -> bool:
     """
@@ -83,6 +88,8 @@ def _is_question_about_priority(text: str) -> bool:
     if "?" in t:
         return True
     if _BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE.search(t):
+        return True
+    if _IF_OR_WHETHER_PRIORITY_CLAUSE_RE.search(t):
         return True
     return bool(_QUESTION_PRIORITY_PHRASE_RE.search(t))
 
