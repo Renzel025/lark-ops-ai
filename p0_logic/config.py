@@ -718,6 +718,35 @@ def get_p0_graph_screenshot_panel_ready_timeout_ms() -> int:
     return max(0, min(n, 120_000))
 
 
+def get_p0_graph_screenshot_panel_content_ready_timeout_ms() -> int:
+    """
+    After panel scaffolding exists (``.react-grid-item`` / ``[data-panel-id]``), Grafana still needs
+    time to run queries and paint **canvas / SVG** charts. This timeout drives ``page.wait_for_function``
+    until graphs look present; set **0** to skip.
+
+    If ``P0_GRAPH_SCREENSHOT_PANEL_CONTENT_READY_TIMEOUT_MS`` is **unset** but
+    ``P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS`` **> 0**, defaults to
+    ``max(45000, panel_ready + 25000)`` (capped at **180000**) so enabling grid wait also waits for
+    chart paint unless you explicitly set ``PANEL_CONTENT_READY_TIMEOUT_MS=0``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_PANEL_CONTENT_READY_TIMEOUT_MS") or "").strip()
+    if raw:
+        try:
+            return max(0, min(int(raw), 180_000))
+        except ValueError:
+            log.warning("P0_GRAPH_SCREENSHOT_PANEL_CONTENT_READY_TIMEOUT_MS=%r invalid — using cascade", raw)
+    pr_raw = (os.getenv("P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS") or "0").strip()
+    try:
+        pr = int(pr_raw)
+    except ValueError:
+        pr = 0
+    if pr <= 0:
+        return 0
+    inferred = max(45_000, pr + 25_000)
+    return min(inferred, 180_000)
+
+
 def get_p0_graph_screenshot_nav_timeout_ms() -> int:
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_NAV_TIMEOUT_MS") or "60000").strip()

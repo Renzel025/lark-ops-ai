@@ -218,7 +218,10 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         if panel_timeout <= 0:
             return
         # Grafana 8–11: grid items; some builds use data-panel-id on the panel wrapper.
-        sel = ".react-grid-item, [data-panel-id], [data-testid='dashboard-layout-grid']"
+        sel = (
+            ".react-grid-item, [data-panel-id], [data-viz-key], "
+            "[data-testid='dashboard-layout-grid']"
+        )
         try:
             page.wait_for_selector(sel, state="visible", timeout=panel_timeout)
             log.info(
@@ -231,6 +234,68 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 e,
             )
 
+    def _wait_for_grafana_chart_content_if_configured(page) -> None:
+        """
+        Grid can exist while every panel is still an empty dark box — wait for canvas/SVG or text.
+        """
+        tmax = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
+        if tmax <= 0:
+            return
+        # Runs in browser; panels may use canvas (Time series) or SVG (Stat, bar gauge); tables have text.
+        js = r"""
+            () => {
+              const root = document.querySelector('main') || document.body;
+              if (!root) return false;
+              const panels = root.querySelectorAll(
+                '[data-panel-id], .react-grid-item, [data-viz-key], '
+                + '[data-testid*="panel"], [data-testid*="Panel"]'
+              );
+              if (panels.length < 1) return false;
+              let canv = 0;
+              root.querySelectorAll('canvas').forEach((c) => {
+                const r = c.getBoundingClientRect();
+                if (r.width > 4 && r.height > 4) canv++;
+              });
+              let bigSvg = 0;
+              root.querySelectorAll('svg').forEach((s) => {
+                const r = s.getBoundingClientRect();
+                if (r.width > 20 && r.height > 12) bigSvg++;
+              });
+              if (canv >= 1) return true;
+              if (bigSvg >= 4) return true;
+              const t = (root.innerText || '').trim();
+              if (t.length > 400 && /error|no data|query|failed|exception/i.test(t)) return true;
+              if (panels.length >= 2 && t.length > 1200) return true;
+              return false;
+            }
+        """
+        try:
+            page.wait_for_function(js, timeout=tmax, polling=400)
+            log.info(
+                "p0 graph screenshot: chart/table content signal detected (waited up to %sms)",
+                tmax,
+            )
+        except Exception as e:
+            log.warning(
+                "p0 graph screenshot: chart content wait timed out — screenshot may still be blank: %s",
+                e,
+            )
+            try:
+                diag = page.evaluate(
+                    """() => {
+                      const r = document.querySelector('main') || document.body;
+                      if (!r) return { panels: 0, canv: 0, textLen: 0 };
+                      return {
+                        panels: r.querySelectorAll('[data-panel-id], .react-grid-item').length,
+                        canv: r.querySelectorAll('canvas').length,
+                        textLen: (r.innerText || '').length
+                      };
+                    }"""
+                )
+                log.warning("p0 graph screenshot: DOM diagnostic %s", diag)
+            except Exception:
+                pass
+
     def _goto_and_wait(page) -> None:
         page.goto(url, wait_until=goto_wait, timeout=nav_ms)
         try:
@@ -238,6 +303,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         except Exception:
             pass
         _wait_for_grafana_panels_if_configured(page)
+        _wait_for_grafana_chart_content_if_configured(page)
         # Nudge lazy panels / below-the-fold queries (harmless if no scroll).
         try:
             page.evaluate("window.scrollBy(0, 600); window.scrollTo(0, 0)")
