@@ -10,6 +10,11 @@ a **wide** viewport (e.g. 1920×1080), ``P0_GRAPH_SCREENSHOT_GOTO_WAIT_UNTIL=loa
 ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. 8000–15000) so panels can load. For an **earlier** grab (layout /
 loading state), use ``domcontentloaded`` and a **lower** ``P0_GRAPH_SCREENSHOT_WAIT_MS``.
 
+For **two images (upper / lower half)** of the full scrollable Grafana page (instead of one ultra-tall
+PNG or one viewport-only crop): set ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``. That forces a
+full-page capture, splits at mid-height with Pillow, and posts **two** PNGs to Lark (same caption
+once, then both images). Requires ``Pillow`` in the runtime environment.
+
 Without ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR``, each run uses a **fresh** Chromium — fine for
 anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile
 directory** where you completed login once (headed), similar to Slack ``SESSION_DIR``.
@@ -19,7 +24,8 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from io import BytesIO
+from typing import List, Optional, Tuple
 
 try:
     from zoneinfo import ZoneInfo
@@ -82,17 +88,46 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
     t.start()
 
 
+def _split_png_vertical_halves(png_bytes: bytes) -> List[bytes]:
+    """Split a full-page PNG into upper and lower halves (same width, half height each)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        log.warning(
+            "p0 graph screenshot: Pillow not installed — cannot split; install pillow or unset "
+            "P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES"
+        )
+        return []
+    try:
+        im = Image.open(BytesIO(png_bytes))
+        im.load()
+    except Exception as e:
+        log.warning("p0 graph screenshot: failed to open PNG for split: %s", e)
+        return []
+    w, h = im.size
+    if h < 4:
+        return []
+    mid = h // 2
+    out: List[bytes] = []
+    for box in ((0, 0, w, mid), (0, mid, w, h)):
+        crop = im.crop(box)
+        buf = BytesIO()
+        try:
+            crop.save(buf, format="PNG", optimize=True)
+        except Exception as e:
+            log.warning("p0 graph screenshot: failed to encode split half: %s", e)
+            return []
+        out.append(buf.getvalue())
+    return out
+
+
 def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> None:
     from . import config as _config
     from . import lark_client as _lark
 
-    png, captured_at = _capture_png_bytes()
-    if not png:
+    pngs, captured_at = _capture_png_payloads()
+    if not pngs:
         log.warning("p0 graph screenshot: capture returned empty")
-        return
-    key = _lark.upload_image_bytes_for_im_message(token, png, "p0-dashboard.png")
-    if not key:
-        log.warning("p0 graph screenshot: Lark image upload failed (check im:resource scope)")
         return
     cap = _config.get_p0_graph_screenshot_caption()
     if cap:
@@ -103,21 +138,34 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
     st_t, _ = _lark.post_text_to_chat(chat_id, token, text)
     if st_t != 200:
         log.warning("p0 graph screenshot: caption post HTTP=%s", st_t)
-    st, body = _lark.post_image_to_chat(chat_id, token, key)
-    if st != 200:
-        log.warning(
-            "p0 graph screenshot: image message HTTP=%s body=%s",
-            st,
-            (body or "")[:400],
-        )
-    else:
-        log.info("p0 graph screenshot: posted image to chat_id tail=%s", chat_id[-12:])
+
+    for idx, png in enumerate(pngs):
+        fname = "p0-dashboard.png" if len(pngs) == 1 else f"p0-dashboard-part{idx + 1}.png"
+        key = _lark.upload_image_bytes_for_im_message(token, png, fname)
+        if not key:
+            log.warning("p0 graph screenshot: Lark image upload failed part=%s (check im:resource scope)", idx + 1)
+            continue
+        st, body = _lark.post_image_to_chat(chat_id, token, key)
+        if st != 200:
+            log.warning(
+                "p0 graph screenshot: image message part=%s HTTP=%s body=%s",
+                idx + 1,
+                st,
+                (body or "")[:400],
+            )
+        else:
+            log.info(
+                "p0 graph screenshot: posted image part=%s/%s to chat_id tail=%s",
+                idx + 1,
+                len(pngs),
+                chat_id[-12:],
+            )
 
 
-def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
+def _capture_png_payloads() -> Tuple[List[bytes], str]:
     """
-    Returns PNG bytes and a formatted capture timestamp (empty string if capture failed).
-    Time is recorded immediately after ``page.screenshot`` returns.
+    Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
+    With ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``, returns two blobs (upper / lower half).
     """
     from . import config as _config
 
@@ -125,7 +173,7 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
         from playwright.sync_api import sync_playwright
     except ImportError:
         log.warning("p0 graph screenshot: playwright not installed (pip install playwright; playwright install chromium)")
-        return None, ""
+        return [], ""
 
     url = _config.get_p0_graph_screenshot_url()
     w = _config.get_p0_graph_screenshot_viewport_width()
@@ -133,14 +181,32 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
     nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
     full_page = _config.get_p0_graph_screenshot_full_page()
+    split_halves = _config.get_p0_graph_screenshot_split_vertical_halves()
     goto_wait = _config.get_p0_graph_screenshot_goto_wait_until()
     user_data = _config.get_p0_graph_screenshot_playwright_user_data_dir()
     tz = _resolve_capture_tz()
 
-    def _snap(page) -> Tuple[bytes, str]:
+    def _snap(page) -> Tuple[List[bytes], str]:
+        if split_halves:
+            log.info(
+                "p0 graph screenshot: split vertical halves — forcing full_page capture viewport=%sx%s",
+                w,
+                h,
+            )
+            raw = page.screenshot(full_page=True, type="png")
+            parts = _split_png_vertical_halves(raw)
+            if len(parts) == 2:
+                at = datetime.now(tz)
+                return parts, _format_captured_at(at)
+            if not parts:
+                log.warning("p0 graph screenshot: split failed — posting single full_page PNG")
+            else:
+                log.warning("p0 graph screenshot: unexpected split part count=%s — single PNG", len(parts))
+            at = datetime.now(tz)
+            return [raw], _format_captured_at(at)
         raw = page.screenshot(full_page=full_page, type="png")
         at = datetime.now(tz)
-        return raw, _format_captured_at(at)
+        return [raw], _format_captured_at(at)
 
     def _goto_and_wait(page) -> None:
         page.goto(url, wait_until=goto_wait, timeout=nav_ms)
@@ -152,6 +218,7 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
             page.wait_for_timeout(wait_ms)
 
     launch_args = _config.get_p0_graph_screenshot_chromium_args()
+    snap_full = split_halves or full_page
     with sync_playwright() as p:
         if user_data:
             log.info("p0 graph screenshot: using persistent profile (Grafana session) at %s", user_data)
@@ -166,14 +233,13 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
                 log.info(
                     "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
                     goto_wait,
-                    full_page,
+                    snap_full,
                     w,
                     h,
                     wait_ms,
                 )
                 _goto_and_wait(page)
-                png, captured = _snap(page)
-                return png, captured
+                return _snap(page)
             finally:
                 context.close()
         browser = p.chromium.launch(headless=True, args=launch_args)
@@ -182,13 +248,12 @@ def _capture_png_bytes() -> Tuple[Optional[bytes], str]:
             log.info(
                 "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
                 goto_wait,
-                full_page,
+                snap_full,
                 w,
                 h,
                 wait_ms,
             )
             _goto_and_wait(page)
-            png, captured = _snap(page)
-            return png, captured
+            return _snap(page)
         finally:
             browser.close()

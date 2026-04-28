@@ -718,6 +718,20 @@ def get_p0_graph_screenshot_full_page() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_split_vertical_halves() -> bool:
+    """
+    When True: take one **full-page** Playwright screenshot, split the PNG at mid-height into
+    **upper** and **lower** halves (two images posted to Lark). Matches an ops workflow where
+    Grafana is taller than one viewport and you want "2× half" instead of one ultra-tall or
+    one clipped viewport shot. Requires Pillow; if Pillow is missing, falls back to a single
+    undivided full-page PNG. When this is on, the capture step always uses ``full_page=True``
+    regardless of ``P0_GRAPH_SCREENSHOT_FULL_PAGE``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_graph_screenshot_goto_wait_until() -> str:
     """
     Playwright ``page.goto(..., wait_until=...)``.
