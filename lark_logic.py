@@ -63,6 +63,11 @@ _QUESTION_PRIORITY_PHRASE_RE = re.compile(
     r")"
 )
 
+# Broken-English asks: "is this issue is p0" (extra words between "is … is p0") don't match phrases above.
+_BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE = re.compile(
+    r"(?is)\bis\s+.+?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
+)
+
 
 def _is_question_about_priority(text: str) -> bool:
     """
@@ -76,6 +81,8 @@ def _is_question_about_priority(text: str) -> bool:
         return False
     # Question mark: treat as non-declaration for incident keyword triggers.
     if "?" in t:
+        return True
+    if _BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE.search(t):
         return True
     return bool(_QUESTION_PRIORITY_PHRASE_RE.search(t))
 
