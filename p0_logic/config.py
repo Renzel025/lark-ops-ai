@@ -553,6 +553,18 @@ def get_p0_thread_confirm_allow_asker_self_yes() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_thread_confirm_use_groq() -> bool:
+    """
+    ``P0_THREAD_CONFIRM_USE_GROQ`` — if ``1``, when thread-confirm is **armed** and the reply
+    does **not** match the regex allowlist, call Groq once to classify whether the reply affirms P0.
+
+    Regex hits still skip Groq (fast path). Default ``0`` (regex only).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_THREAD_CONFIRM_USE_GROQ") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_thread_confirm_toplevel_grace_sec() -> float:
     """
     ``P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC`` — after the duty user arms **\"is this P0?\"**,

@@ -180,6 +180,46 @@ def _parse_json_object(raw: str) -> Optional[dict]:
             return None
 
 
+def groq_thread_confirm_affirms_p0(question_text: str, reply_text: str) -> Optional[bool]:
+    """
+    Classify whether **reply_text** affirms P0 escalation in context of **question_text**.
+
+    Returns:
+        ``True`` / ``False`` when JSON is parsed; ``None`` on missing key/API/parse failure
+        (caller must **not** start P0 on ``None`` — conservative).
+    """
+    if not GROQ_API_KEY:
+        return None
+    q = (question_text or "").strip()
+    r = (reply_text or "").strip()
+    if not q or not r:
+        return None
+    q = q[:4500]
+    r = r[:4500]
+    system_prompt = (
+        "You classify on-call chat messages about incident severity.\n"
+        "QUESTION asks whether an issue is P0 (priority 0) or whether to tag/treat/escalate as P0.\n"
+        "REPLY is someone's response.\n\n"
+        "Set affirms_p0=true ONLY if REPLY clearly agrees that the situation should be handled as P0 / "
+        "priority 0 (approve escalation, yes it is P0, tag as P0, we consider it P0, treat as P0, etc.).\n"
+        "Set affirms_p0=false if REPLY declines, says it is not P0 or only P1, is unsure without approving, "
+        "only asks for more logs, or is unrelated chit-chat.\n\n"
+        "Output ONLY valid JSON: {\"affirms_p0\": true} or {\"affirms_p0\": false}"
+    )
+    user_prompt = f"QUESTION:\n{q}\n\nREPLY:\n{r}"
+    raw = groq_chat_once(system_prompt, user_prompt, max_tokens=120)
+    obj = _parse_json_object(raw or "")
+    if not obj:
+        log.warning("groq_thread_confirm: JSON parse failed head=%s", (raw or "")[:200])
+        return None
+    v = obj.get("affirms_p0")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return None
+
+
 def _scrub_issue_source_for_model(issue_source: str) -> str:
     src = (issue_source or "").strip()
     if not src:

@@ -3,7 +3,7 @@ import re
 import time
 import logging
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
@@ -16,8 +16,10 @@ from p0_logic.config import (
     get_p0_thread_confirm_responder_open_ids,
     get_p0_thread_confirm_toplevel_grace_sec,
     get_p0_thread_confirm_ttl_sec,
+    get_p0_thread_confirm_use_groq,
     get_p0_trigger_ignore_open_ids,
 )
+from p0_logic.groq_client import groq_thread_confirm_affirms_p0
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
@@ -209,6 +211,7 @@ COOLDOWN_RESET_RE = re.compile(
 )
 
 # While P1 "create meeting?" is pending — typed confirm / decline (card has **Create meeting** / **Don't need**).
+# Strict whole-line pattern kept for reference; see _matches_p1_pending_create_reply() for handling @mentions + "yes, because …".
 P1_PENDING_CREATE_RE = re.compile(
     r"^\s*(create\s+meeting|p1\s+create|yes)\s*$",
     re.IGNORECASE,
@@ -219,29 +222,42 @@ P1_PENDING_DECLINE_RE = re.compile(
 )
 
 # --- Thread: designated asker posts "is this P0?" → someone else replies "yes" → start P0 ---
-# Requires ``?`` in the message to reduce accidental arms. See ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS``.
+# Arming still requires ``P0_THREAD_CONFIRM_ASKER_OPEN_IDS`` / ``TARGET_OPEN_IDS`` — see config.
+# ``?`` optional: "is this p0" / "can we tag this as p0" (not only questions with ``?``).
 # Phrase may appear after @mentions (e.g. "@QA Team is this P0?").
-# Also: "is this issue is p0?" (extra words before the priority token) — common in real chats.
 P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"(?is)"
     r"(?:is\s+this\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+that\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+it\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    # "is this issue considered as p0?" — words between "this" and "as p0", not only "is this p0?"
+    r"|is\s+this\s+[^\n?]+\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|if\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|if\s+that\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+this\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+that\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|could\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|shall\s+we\s+tag\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+this\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+that\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+we\s+tag\s+this\s+issue\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
-# Reply in the same thread: message must read like **agreement** with the question, not random chat.
-# Not full NLP — anchored phrases only — to limit false positives outside this flow.
+# Reply must read like **P0 approval** — phrase-prefix match (not full NLP).
 P0_THREAD_CONFIRM_YES_RE = re.compile(
     r"(?is)^(?:"
     r"(?:yes|yep|yeah|sure|ok|okay|agreed|agree|confirm|confirmed|是|对的|确认)\b|"
-    r"we will (?:consider|proceed)\b|"
-    r"go ahead|sounds good|approved\b|proceed\b|"
-    r"(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"yes\s*,?\s*this\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"we\s+(?:will\s+)?consider\s+(?:it|this|that)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"we\s+consider\s+it\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"(?:we\s+)?(?:can|could)\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"can\s+tag\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"treat(?:ing)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
     r"(?:this|the)\s+issue\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
+    r"go ahead|sounds good|approved\b|proceed\b|"
+    r"we\s+will\s+(?:consider|proceed)\b|"
     r"\+\+"
     r")"
 )
@@ -280,7 +296,7 @@ def _thread_reply_targets_question(parent_id: str, root_id: str, question_messag
 
 def _is_p0_thread_confirm_question(text: str) -> bool:
     t = (text or "").strip()
-    if not t or "?" not in t:
+    if not t:
         return False
     return bool(P0_THREAD_CONFIRM_QUESTION_RE.search(t))
 
@@ -349,25 +365,43 @@ def _is_p0_thread_confirm_yes(
     return bool(P0_THREAD_CONFIRM_YES_RE.match(line))
 
 
-def _mirror_prompt_chat_confirm_ok(
-    pend: Dict[str, Any],
+def _matches_p1_pending_create_reply(
+    text_raw: str, mention_names: Optional[List[str]] = None
+) -> bool:
+    """P1 card typed confirm: allow @mentions and short explanations after **yes** / **create meeting**."""
+    t = (text_raw or "").strip()
+    if not t:
+        return False
+    line = t.split("\n")[0].strip()
+    line = re.sub(r"<[^>]+>", "", line).strip()
+    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
+    s = line.strip()
+    if not s:
+        return False
+    if P1_PENDING_CREATE_RE.match(s):
+        return True
+    return bool(
+        re.match(r"^\s*(?:create\s+meeting|p1\s+create)\b", s, re.IGNORECASE)
+        or re.match(r"^\s*yes\b", s, re.IGNORECASE)
+    )
+
+
+def _mirror_prompt_chat_situation_ok(
     message_chat_id: str,
     source_incident_chat_id: str,
     parent_id: str,
     root_id: str,
+    pend: Dict[str, Any],
     mention_open_ids: List[str],
     asker_open_id: str,
-    text_raw: str,
-    mention_names: Optional[List[str]] = None,
 ) -> bool:
     """
-    User confirmed in the **prompt / overview** group (``INCIDENT_OVERVIEW_TARGET_MAP`` target),
-    not in the detection chat: ``parent_id`` never matches the detection ``question_message_id``.
-    Accept **yes** if: reply-in-thread in prompt, or top-level with same grace/@asker rules.
+    Same placement rules as legacy mirror confirm, but **without** judging reply text.
+
+    True when the message is in the **prompt / overview** chat (not source incident id),
+    and either in a **thread** or allowed **toplevel** yes (grace / @asker) per config.
     """
     if (message_chat_id or "").strip() == (source_incident_chat_id or "").strip():
-        return False
-    if not _is_p0_thread_confirm_yes(text_raw, mention_names):
         return False
     p, r = (parent_id or "").strip(), (root_id or "").strip()
     if p or r:
@@ -375,6 +409,30 @@ def _mirror_prompt_chat_confirm_ok(
     if not get_p0_thread_confirm_allow_toplevel_yes():
         return False
     return _toplevel_yes_context_ok(pend, asker_open_id, mention_open_ids)
+
+
+def _p0_thread_reply_affirms(
+    pend: Dict[str, Any],
+    text_raw: str,
+    mention_names: Optional[List[str]],
+) -> Tuple[bool, str]:
+    """Returns (affirms, how) where how is regex | groq | no_match."""
+    if _is_p0_thread_confirm_yes(text_raw, mention_names):
+        return True, "regex"
+    if not get_p0_thread_confirm_use_groq():
+        return False, "no_match"
+    q = str(pend.get("question_text") or "").strip()
+    if not q:
+        log.info("P0 thread confirm: Groq skipped (no question_text on pending arm)")
+        return False, "no_match"
+    g = groq_thread_confirm_affirms_p0(q, text_raw)
+    if g is True:
+        return True, "groq"
+    if g is False:
+        log.info("P0 thread confirm: Groq classified reply as not affirming P0")
+    else:
+        log.warning("P0 thread confirm: Groq uncertain or failed parse — not starting P0")
+    return False, "no_match"
 
 
 def _try_handle_p0_thread_confirm(
@@ -426,18 +484,14 @@ def _try_handle_p0_thread_confirm(
             toplevel_raw
             and _toplevel_yes_context_ok(pend, asker, list(mention_open_ids or []))
         )
-        mirror_ok = bool(
-            _mirror_prompt_chat_confirm_ok(
-                pend,
-                chat_id,
-                source_incident,
-                parent_id,
-                root_id,
-                list(mention_open_ids or []),
-                asker,
-                text_raw,
-                mention_names,
-            )
+        mirror_situation = _mirror_prompt_chat_situation_ok(
+            chat_id,
+            source_incident,
+            parent_id,
+            root_id,
+            pend,
+            list(mention_open_ids or []),
+            asker,
         )
         if (
             in_source
@@ -452,7 +506,7 @@ def _try_handle_p0_thread_confirm(
                 chat_id,
                 get_p0_thread_confirm_toplevel_grace_sec(),
             )
-        if thread_ok or toplevel_ok or mirror_ok:
+        if thread_ok or toplevel_ok or mirror_situation:
             responders = get_p0_thread_confirm_responder_open_ids()
             if oid == asker and not get_p0_thread_confirm_allow_asker_self_yes():
                 log.info(
@@ -466,7 +520,8 @@ def _try_handle_p0_thread_confirm(
                     chat_id,
                 )
                 return False
-            if not mirror_ok and not _is_p0_thread_confirm_yes(text_raw, mention_names):
+            affirms, affirm_how = _p0_thread_reply_affirms(pend, text_raw, mention_names)
+            if not affirms:
                 return False
             _p0_thread_clear_pending_dict(pend)
             if chat_has_active_session(source_incident):
@@ -475,12 +530,14 @@ def _try_handle_p0_thread_confirm(
                     source_incident,
                 )
                 return True
-            if mirror_ok:
-                mode = "prompt/mirror chat yes (INCIDENT_OVERVIEW_TARGET_MAP)"
+            if mirror_situation:
+                mode = "prompt/mirror chat (INCIDENT_OVERVIEW_TARGET_MAP)"
             elif thread_ok:
                 mode = "thread reply"
             else:
                 mode = "toplevel yes (P0_THREAD_CONFIRM_ALLOW_TOPLEVEL_YES=1)"
+            if affirm_how == "groq":
+                mode = f"{mode} groq_classify"
             log.info(
                 "Incident group: P0 thread confirm — starting P0 source_chat=%s message_chat=%s confirmer=%s via %s",
                 source_incident,
@@ -513,6 +570,7 @@ def _try_handle_p0_thread_confirm(
                 "exp": time.time() + ttl,
                 "armed_at": time.time(),
                 "source_incident_chat_id": chat_id,
+                "question_text": (text_raw or "").strip()[:8000],
             }
             with _P0_THREAD_LOCK:
                 _P0_THREAD_PENDING[chat_id] = entry
@@ -637,7 +695,7 @@ def process_message(
         pend = get_p1_prompt_pending(chat_id)
         if pend:
             nonce = str(pend.get("nonce") or "").strip()
-            if P1_PENDING_CREATE_RE.match(text_raw.strip()):
+            if _matches_p1_pending_create_reply(text_raw, mention_names):
                 err = handle_p1_meeting_confirm_yes(chat_id, token, user_id, nonce)
                 if err == "session_active":
                     post_text_to_chat(
