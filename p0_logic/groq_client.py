@@ -198,12 +198,14 @@ def groq_thread_confirm_affirms_p0(question_text: str, reply_text: str) -> Optio
     r = r[:4500]
     system_prompt = (
         "You classify on-call chat messages about incident severity.\n"
-        "QUESTION asks whether an issue is P0 (priority 0) or whether to tag/treat/escalate as P0.\n"
-        "REPLY is someone's response.\n\n"
-        "Set affirms_p0=true ONLY if REPLY clearly agrees that the situation should be handled as P0 / "
-        "priority 0 (approve escalation, yes it is P0, tag as P0, we consider it P0, treat as P0, etc.).\n"
-        "Set affirms_p0=false if REPLY declines, says it is not P0 or only P1, is unsure without approving, "
-        "only asks for more logs, or is unrelated chit-chat.\n\n"
+        "QUESTION is the earlier message that asked whether an issue is P0 (or whether to tag/escalate as P0).\n"
+        "REPLY is a newer message that might be an answer OR might be yet another question.\n\n"
+        "Set affirms_p0=true ONLY if REPLY **clearly answers** and **agrees** that the situation should be "
+        "handled as P0 (e.g. yes, agreed, it is P0, tag it as P0 as decided, we consider it P0, go ahead as P0).\n"
+        "Set affirms_p0=false if REPLY:\n"
+        "- is itself asking permission or repeating a question (e.g. \"can we tag as P0?\", "
+        "\"is this P0?\", \"may we…\", \"should we tag…\") — even if it mentions P0;\n"
+        "- declines, says not P0 / only P1, is unsure without approving, only requests more logs, or is unrelated.\n\n"
         "Output ONLY valid JSON: {\"affirms_p0\": true} or {\"affirms_p0\": false}"
     )
     user_prompt = f"QUESTION:\n{q}\n\nREPLY:\n{r}"

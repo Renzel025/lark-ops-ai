@@ -365,6 +365,35 @@ def _is_p0_thread_confirm_yes(
     return bool(P0_THREAD_CONFIRM_YES_RE.match(line))
 
 
+def _p0_thread_reply_looks_like_p0_question_not_answer(
+    text_raw: str, mention_names: Optional[List[str]] = None
+) -> bool:
+    """
+    True if the message reads like **another** arming-style P0 question, not an approval.
+
+    Prevents: armed \"is this P0?\" + follow-up **\"can we tag it as P0\"** from being
+    treated as *toplevel yes* + Groq true. Call only after ``_is_p0_thread_confirm_yes`` is false.
+    """
+    t = (text_raw or "").strip()
+    if not t:
+        return False
+    line = t.split("\n")[0].strip()
+    line = re.sub(r"<[^>]+>", "", line).strip()
+    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
+    if not line:
+        return False
+    if P0_THREAD_CONFIRM_QUESTION_RE.match(line):
+        return True
+    if "?" in line and P0_THREAD_CONFIRM_QUESTION_RE.search(line):
+        return True
+    if P0_THREAD_CONFIRM_QUESTION_RE.search(line) and re.match(
+        r"(?is)^\s*(?:can|could|shall|may|are\s+we|do\s+we|should\s+we|would\s+we)\b",
+        line,
+    ):
+        return True
+    return False
+
+
 def _matches_p1_pending_create_reply(
     text_raw: str, mention_names: Optional[List[str]] = None
 ) -> bool:
@@ -419,6 +448,11 @@ def _p0_thread_reply_affirms(
     """Returns (affirms, how) where how is regex | groq | no_match."""
     if _is_p0_thread_confirm_yes(text_raw, mention_names):
         return True, "regex"
+    if _p0_thread_reply_looks_like_p0_question_not_answer(text_raw, mention_names):
+        log.info(
+            "P0 thread confirm: reply looks like a P0 question (not an approval) — skipping confirm/Groq"
+        )
+        return False, "no_match"
     if not get_p0_thread_confirm_use_groq():
         return False, "no_match"
     q = str(pend.get("question_text") or "").strip()
