@@ -424,13 +424,24 @@ def _png_list_all_uniformly_blank(pngs: List[bytes]) -> bool:
     return True
 
 
-def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> None:
+def post_p0_graph_screenshots_to_chat(
+    tenant_token: str,
+    chat_id: str,
+    pngs: List[bytes],
+    captured_at: str,
+    source_label: str = "",
+) -> None:
+    """
+    Post the **As of:** line + image part(s) to a Lark group — same as the P0 auto flow.
+    Used by ``_capture_and_post`` and by ``scripts/grafana_screenshot_run_once.py --post-lark``.
+    """
     from . import config as _config
     from . import lark_client as _lark
 
-    pngs, captured_at = _capture_png_payloads()
-    if not pngs:
-        log.warning("p0 graph screenshot: capture returned empty")
+    tok = (tenant_token or "").strip()
+    cid = (chat_id or "").strip()
+    if not tok or not cid:
+        log.warning("p0 graph screenshot: post skipped — missing token or chat_id")
         return
     cap = _config.get_p0_graph_screenshot_caption()
     if cap:
@@ -438,17 +449,17 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
         text = text.replace("{label}", (source_label or "").strip())
     else:
         text = f"As of: {captured_at}"
-    st_t, _ = _lark.post_text_to_chat(chat_id, token, text)
+    st_t, _ = _lark.post_text_to_chat(cid, tok, text)
     if st_t != 200:
         log.warning("p0 graph screenshot: caption post HTTP=%s", st_t)
 
     for idx, png in enumerate(pngs):
         fname = "p0-dashboard.png" if len(pngs) == 1 else f"p0-dashboard-part{idx + 1}.png"
-        key = _lark.upload_image_bytes_for_im_message(token, png, fname)
+        key = _lark.upload_image_bytes_for_im_message(tok, png, fname)
         if not key:
             log.warning("p0 graph screenshot: Lark image upload failed part=%s (check im:resource scope)", idx + 1)
             continue
-        st, body = _lark.post_image_to_chat(chat_id, token, key)
+        st, body = _lark.post_image_to_chat(cid, tok, key)
         if st != 200:
             log.warning(
                 "p0 graph screenshot: image message part=%s HTTP=%s body=%s",
@@ -461,8 +472,16 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
                 "p0 graph screenshot: posted image part=%s/%s to chat_id tail=%s",
                 idx + 1,
                 len(pngs),
-                chat_id[-12:],
+                cid[-12:],
             )
+
+
+def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> None:
+    pngs, captured_at = _capture_png_payloads()
+    if not pngs:
+        log.warning("p0 graph screenshot: capture returned empty")
+        return
+    post_p0_graph_screenshots_to_chat(token, chat_id, pngs, captured_at, source_label)
 
 
 def _capture_png_payloads() -> Tuple[List[bytes], str]:

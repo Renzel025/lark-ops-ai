@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Run the **same** Playwright capture as the P0 bot, but save PNG(s) to disk (no Lark upload).
+Run the **same** Playwright capture as the P0 bot. By default saves PNG(s) to disk **only**
+(no Lark) — use that to verify URL, profile, clip, and timings.
 
-Use this to verify URL, profile, clip, and timings without triggering a real P0.
-
-From repo root, same venv as the bot:
-
-  # Optional: watch the browser (needs DISPLAY, e.g. VNC)
-  export P0_GRAPH_SCREENSHOT_HEADED=1
-
+  # Local files only (default dir: logs/grafana-screenshot-manual/)
   python3 scripts/grafana_screenshot_run_once.py
+
+  # Custom output directory
   python3 scripts/grafana_screenshot_run_once.py /tmp/my-shots
 
-Requires ``P0_GRAPH_SCREENSHOT_URL`` in ``.env`` (and profile path if Grafana is not public).
-``P0_GRAPH_SCREENSHOT_ENABLED`` does **not** need to be on for this script.
+  # Also post caption + images to the Lark group in ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``
+  # (needs ``LARK_APP_ID`` / ``LARK_APP_SECRET`` or whatever ``get_tenant_token_primary`` uses in .env)
+  python3 scripts/grafana_screenshot_run_once.py --post-lark
+
+  # Optional: watch Chromium on VNC
+  export P0_GRAPH_SCREENSHOT_HEADED=1
+
+Requires ``P0_GRAPH_SCREENSHOT_URL`` in ``.env``. ``P0_GRAPH_SCREENSHOT_ENABLED`` does **not**
+need to be on for this script.
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -44,7 +49,21 @@ def main() -> int:
         level=logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    out_dir = (sys.argv[1] if len(sys.argv) >= 2 else "").strip()
+    ap = argparse.ArgumentParser(description="Grafana screenshot — same Playwright path as the P0 bot.")
+    ap.add_argument(
+        "out_dir",
+        nargs="?",
+        default="",
+        help="Directory to write PNG(s). Default: logs/grafana-screenshot-manual/",
+    )
+    ap.add_argument(
+        "--post-lark",
+        action="store_true",
+        help="After capture, post caption + image(s) to P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID (tenant token from .env).",
+    )
+    args = ap.parse_args()
+
+    out_dir = (args.out_dir or "").strip()
     if not out_dir:
         out_dir = os.path.join(_REPO_ROOT, "logs", "grafana-screenshot-manual")
     os.makedirs(out_dir, exist_ok=True)
@@ -59,7 +78,7 @@ def main() -> int:
         )
         return 1
 
-    from p0_logic.graph_screenshot import _capture_png_payloads
+    from p0_logic.graph_screenshot import _capture_png_payloads, post_p0_graph_screenshots_to_chat
 
     pngs, captured_at = _capture_png_payloads()
     if not pngs:
@@ -78,6 +97,33 @@ def main() -> int:
     print(f"captured_at: {captured_at}")
     for p in paths:
         print(p)
+
+    if args.post_lark:
+        from p0_logic import lark_client as lark
+
+        chat_id = cfg.get_p0_graph_screenshot_target_chat_id()
+        if not chat_id:
+            print(
+                "ERROR: --post-lark requires P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID=oc_... in .env",
+                file=sys.stderr,
+            )
+            return 3
+        tok = lark.get_tenant_token_primary()
+        if not tok:
+            print(
+                "ERROR: could not get tenant token (set LARK_APP_ID + LARK_APP_SECRET or your bot's token vars).",
+                file=sys.stderr,
+            )
+            return 4
+        post_p0_graph_screenshots_to_chat(
+            tok,
+            chat_id,
+            pngs,
+            captured_at,
+            source_label="manual grafana_screenshot_run_once",
+        )
+        print(f"post-lark: sent to chat_id tail={chat_id[-12:]}")
+
     return 0
 
 
