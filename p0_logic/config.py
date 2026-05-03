@@ -812,11 +812,12 @@ def get_p0_graph_screenshot_full_page() -> bool:
 
 def get_p0_graph_screenshot_full_document() -> bool:
     """
-    When ``1``: capture the **entire scrollable browser document** with ``page.screenshot(full_page=True)``
-    **without** any ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR`` box.
+    When ``1``: ``page.screenshot(full_page=True)`` over the **entire document** (no CSS clip).
 
-    Use this for **full multi-panel** dashboards (e.g. Core Metrics): the default clip chain often matches an
-    **inner** ``.scrollbar-view`` (one panel’s table scroller), which produces a narrow or single-graph crop.
+    That can produce a **very tall** PNG (whole scroll), often with large empty bands if panels lazy-load —
+    bad for Lark. For **two images that each show half of what you see in the browser window** (fixed
+    viewport, like 1920×1080), use ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` + ``SPLIT_VERTICAL_HALVES=1``
+    and keep this off.
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_FULL_DOCUMENT") or "0").strip().lower()
@@ -825,11 +826,13 @@ def get_p0_graph_screenshot_full_document() -> bool:
 
 def get_p0_graph_screenshot_split_vertical_halves() -> bool:
     """
-    When True: capture the dashboard (or full page if no clip matches) and post **two** PNGs —
-    upper and lower vertical halves. Uses **Playwright clip** (no Pillow). If the clip path fails,
-    falls back to Pillow on a single full-page buffer, then to one undivided PNG.
+    When True: post **two** PNGs — upper and lower vertical halves of the captured image.
 
-    When on, the capture step always uses ``full_page=True`` for clips (and for the Pillow fallback).
+    - With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1``: one viewport screenshot (``full_page=False``), split
+      with **Pillow** (install ``pillow``).
+    - With ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1``: one full-document screenshot, split with Pillow.
+    - Otherwise: prefer **Playwright** vertical clips on a ``full_page`` capture; if that fails, Pillow split
+      or a single PNG.
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES") or "0").strip().lower()

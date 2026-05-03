@@ -9,8 +9,12 @@ image — see ``P0_GRAPH_SCREENSHOT_CAPTION``, ``{captured_at}``, and ``P0_GRAPH
 the URL (hides left navigation). ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR`` (or the built-in fallback chain)
 picks the **dashboard body** — but on wide **multi-panel** boards (e.g. Core Metrics) that chain often
 matches an **inner** ``.scrollbar-view`` (one panel’s scroller), so you only get a slice of the UI.
-Set ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` to capture the **entire scrollable page** (full kiosk
-dashboard). ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` then splits that tall PNG with Pillow.
+
+**Two Lark-style images (top / bottom of *what’s on screen* — like your refs):** set
+``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` + ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` and leave
+``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=0``. That is one **viewport** PNG split with Pillow (not the whole
+scroll). ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` is **full document** height (``full_page=True``) — often
+an enormous, half-empty strip when Grafana’s layout is tall; use only when you really want entire scroll.
 
 For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
 raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. **12000–20000**). Enable
@@ -548,8 +552,9 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
             return [raw], cap_time
         if _config.get_p0_graph_screenshot_full_document():
             log.info(
-                "p0 graph screenshot: FULL_DOCUMENT=1 — full scrollable page (no CSS clip); "
-                "entire kiosk UI, not one panel’s internal scrollbar"
+                "p0 graph screenshot: FULL_DOCUMENT=1 — full **scroll height** (can be very tall / mostly empty). "
+                "For **two halves of one on-screen view** (typical Lark layout), use "
+                "P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 + SPLIT_VERTICAL_HALVES=1 and turn FULL_DOCUMENT off."
             )
             raw = page.screenshot(full_page=True, type="png")
             if split_halves:
