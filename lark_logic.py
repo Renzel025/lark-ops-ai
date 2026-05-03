@@ -59,6 +59,10 @@ _QUESTION_PRIORITY_PHRASE_RE = re.compile(
     r"could\s+we\s+refer\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"can\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"could\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"should\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"can\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"could\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"should\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
@@ -255,6 +259,10 @@ P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"|could\s+we\s+refer\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+this\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|is\s+that\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|should\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
 # Reply must read like **P0 approval** — phrase-prefix match (not full NLP).
@@ -569,7 +577,13 @@ def _try_handle_p0_thread_confirm(
                 return False
             affirms, affirm_how = _p0_thread_reply_affirms(pend, text_raw, mention_names)
             if not affirms:
-                return False
+                # Fully handled: do not fall through to ``\bp0\b`` keyword (e.g. "should we declare it as p0").
+                log.info(
+                    "Incident group: P0 thread confirm reply did not affirm — ignoring keyword for this message "
+                    "chat_id=%s",
+                    chat_id,
+                )
+                return True
             _p0_thread_clear_pending_dict(pend)
             if chat_has_active_session(source_incident):
                 log.info(

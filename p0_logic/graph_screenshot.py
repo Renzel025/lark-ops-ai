@@ -15,11 +15,13 @@ raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. **12000–20000**). Enable
 content wait can follow from config.
 
 **Two images (upper / lower half):** ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` uses **two**
-``full_page`` screenshots with vertical **clips** (no Pillow required). Grafana ``.scrollbar-view``
-often has ``scrollHeight >> clientHeight`` (virtualized tables): bisecting the full clip **yields a
-black upper PNG** (un-painted rows). In that case we **scroll** the matched element to the top and
-to the bottom and capture **two viewport-sized** clips instead. If clips cannot be computed, falls
-back to Pillow split, then a single full-page PNG.
+``full_page`` screenshots with vertical **clips** (no Pillow required). Grafana nests several
+``.scrollbar-view`` nodes; we pick the one with the largest scroll overflow for scrolling. Virtualized
+tables have ``scrollHeight >> clientHeight``: bisecting the full clip **yields a black upper PNG**. In
+that case we **scroll** that target to the top and bottom and capture **two viewport-sized** clips. If
+the clip box is still absurdly tall vs what’s visible, we skip geometric bisection and fall back to one
+full-page capture (Pillow split if installed). If clips cannot be computed, falls back to Pillow split,
+then a single full-page PNG.
 
 Logged-in runs should use a **fixed browser zoom** in the persistent Playwright profile (100 % is
 simplest): e.g. 50 % zoom changes how much fits in the viewport and alters scroll/virtualized metrics.
@@ -173,6 +175,68 @@ def _scrollbar_virtualized_metrics(
         return int(raw[0]), int(raw[1])
     except (TypeError, ValueError):
         return None
+
+
+def _mark_best_scroll_target_under_root(page, root_selector: str) -> str:
+    """
+    Grafana nests several ``.scrollbar-view`` / scroll regions. The first match from config is often
+    an **outer** wrapper with ``scrollHeight ≈ clientHeight`` while a **child** holds the virtualized
+    table (huge ``scrollHeight``). Mark the descendant with the largest ``scrollHeight - clientHeight``
+    and return a stable selector; otherwise return ``root_selector``.
+    """
+    try:
+        placed = page.evaluate(
+            """(rootSel) => {
+              const root = document.querySelector(rootSel);
+              if (!root) return false;
+              document.querySelectorAll('[data-p0-capture-scroll]').forEach((e) =>
+                e.removeAttribute('data-p0-capture-scroll')
+              );
+              const nodes = [root];
+              root.querySelectorAll('.scrollbar-view, .scrollbar__view').forEach((n) =>
+                nodes.push(n)
+              );
+              let best = null;
+              let bestDelta = -1;
+              for (const e of nodes) {
+                const ch = Math.ceil(e.clientHeight || 0);
+                const sh = Math.ceil(e.scrollHeight || 0);
+                const d = sh - ch;
+                if (ch >= 100 && d > bestDelta) {
+                  bestDelta = d;
+                  best = e;
+                }
+              }
+              if (best && bestDelta >= 40) {
+                best.setAttribute('data-p0-capture-scroll', '1');
+                return true;
+              }
+              return false;
+            }""",
+            root_selector,
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: scroll-target mark failed: %s", e)
+        return root_selector
+    if placed:
+        log.info(
+            "p0 graph screenshot: nested scroll — using descendant with largest overflow (marked data-p0-capture-scroll)"
+        )
+        return "[data-p0-capture-scroll='1']"
+    return root_selector
+
+
+def _clear_p0_scroll_target_marks(page) -> None:
+    try:
+        page.evaluate(
+            """() => {
+              document.querySelectorAll('[data-p0-capture-scroll]').forEach((e) =>
+                e.removeAttribute('data-p0-capture-scroll')
+              );
+            }"""
+        )
+    except Exception:
+        pass
 
 
 def _split_clip_vertical_halves(clip: Dict[str, int]) -> Tuple[Dict[str, int], Dict[str, int]]:
@@ -358,68 +422,96 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 clip if clip else "full document (no selector match)",
             )
             if clip and clip_sel:
-                vh = _scrollbar_virtualized_metrics(page, clip_sel)
-                if vh:
-                    sh, ch = vh
-                    max_scroll = max(0, sh - ch)
-                    # Grafana table bodies use a tall scrollHeight but only paint the viewport —
-                    # bisecting document clip yields a black upper half.
-                    if ch > 80 and sh > int(ch * 1.2) and max_scroll > 0:
-                        log.info(
-                            "p0 graph screenshot: virtualized scroll (scroll_h=%s client_h=%s) — "
-                            "top/bottom viewport captures instead of geometric clip split",
-                            sh,
-                            ch,
-                        )
-                        try:
-                            page.evaluate(
-                                """(sel) => {
-                                  const e = document.querySelector(sel);
-                                  if (e) e.scrollTop = 0;
-                                }""",
-                                clip_sel,
-                            )
-                            page.wait_for_timeout(300)
-                            vis1 = _measure_visible_clip_rect(page, clip_sel)
-                            if not vis1:
-                                vis1 = clip
-                            p1 = page.screenshot(full_page=True, type="png", clip=vis1)
-                            bottom_st = max_scroll
-                            page.evaluate(
-                                """({ sel, st }) => {
-                                  const e = document.querySelector(sel);
-                                  if (e) e.scrollTop = st;
-                                }""",
-                                {"sel": clip_sel, "st": bottom_st},
-                            )
-                            page.wait_for_timeout(450)
-                            vis2 = _measure_visible_clip_rect(page, clip_sel) or vis1
-                            p2 = page.screenshot(full_page=True, type="png", clip=vis2)
-                            if p1 and p2:
-                                try:
-                                    page.evaluate(
-                                        """(sel) => {
-                                          const e = document.querySelector(sel);
-                                          if (e) e.scrollTop = 0;
-                                        }""",
-                                        clip_sel,
-                                    )
-                                except Exception:
-                                    pass
-                                return [p1, p2], cap_time
-                        except Exception as e:
-                            log.warning(
-                                "p0 graph screenshot: virtualized dual viewport capture failed: %s",
-                                e,
-                            )
-                c1, c2 = _split_clip_vertical_halves(clip)
+                scroll_sel = _mark_best_scroll_target_under_root(page, clip_sel)
                 try:
-                    p1 = page.screenshot(full_page=True, type="png", clip=c1)
-                    p2 = page.screenshot(full_page=True, type="png", clip=c2)
-                    if p1 and p2:
-                        return [p1, p2], cap_time
-                except Exception as e:
-                    log.warning("p0 graph screenshot: dual clip screenshot failed: %s", e)
+                    vh = _scrollbar_virtualized_metrics(page, scroll_sel)
+                    vis_root = _measure_visible_clip_rect(page, clip_sel)
+                    vis_h = int((vis_root or {}).get("height") or 0)
+                    clip_h = int(clip.get("height") or 0)
+                    # Tall logical clip vs visible dashboard body → geometric bisect is unsafe (virtualized / undrawn band).
+                    tall_clip = vis_h > 80 and clip_h > int(vis_h * 1.15)
+                    if vh:
+                        sh, ch = vh
+                        max_scroll = max(0, sh - ch)
+                        # Slightly above 1.0: 50 % zoom and nested layouts often sit just above 1.2×.
+                        looks_virtualized = ch > 80 and sh > int(ch * 1.05) and max_scroll > 0
+                        # Grafana table bodies use a tall scrollHeight but only paint the viewport —
+                        # bisecting document clip yields a black upper half.
+                        if looks_virtualized or (tall_clip and max_scroll > 0):
+                            log.info(
+                                "p0 graph screenshot: viewport pair capture scroll_h=%s client_h=%s "
+                                "max_scroll=%s scroll_sel=%s tall_clip=%s",
+                                sh,
+                                ch,
+                                max_scroll,
+                                scroll_sel[:48] + ("…" if len(scroll_sel) > 48 else ""),
+                                tall_clip,
+                            )
+                            try:
+                                page.evaluate(
+                                    """(sel) => {
+                                      const e = document.querySelector(sel);
+                                      if (e) e.scrollTop = 0;
+                                    }""",
+                                    scroll_sel,
+                                )
+                                page.wait_for_timeout(450)
+                                vis1 = _measure_visible_clip_rect(page, scroll_sel)
+                                if not vis1:
+                                    vis1 = _measure_visible_clip_rect(page, clip_sel) or clip
+                                p1 = page.screenshot(full_page=True, type="png", clip=vis1)
+                                bottom_st = max_scroll
+                                page.evaluate(
+                                    """({ sel, st }) => {
+                                      const e = document.querySelector(sel);
+                                      if (e) e.scrollTop = st;
+                                    }""",
+                                    {"sel": scroll_sel, "st": bottom_st},
+                                )
+                                page.wait_for_timeout(600)
+                                vis2 = (
+                                    _measure_visible_clip_rect(page, scroll_sel)
+                                    or vis1
+                                )
+                                p2 = page.screenshot(full_page=True, type="png", clip=vis2)
+                                if p1 and p2:
+                                    try:
+                                        page.evaluate(
+                                            """(sel) => {
+                                              const e = document.querySelector(sel);
+                                              if (e) e.scrollTop = 0;
+                                            }""",
+                                            scroll_sel,
+                                        )
+                                    except Exception:
+                                        pass
+                                    return [p1, p2], cap_time
+                            except Exception as e:
+                                log.warning(
+                                    "p0 graph screenshot: virtualized dual viewport capture failed: %s",
+                                    e,
+                                )
+                    if tall_clip:
+                        log.info(
+                            "p0 graph screenshot: skip geometric clip split (clip_h=%s >> vis_h=%s) — single full_page",
+                            clip_h,
+                            vis_h,
+                        )
+                        raw_fb = page.screenshot(full_page=True, type="png")
+                        parts_fb = _split_png_vertical_halves(raw_fb)
+                        if len(parts_fb) == 2:
+                            return parts_fb, cap_time
+                        return [raw_fb], cap_time
+                    c1, c2 = _split_clip_vertical_halves(clip)
+                    try:
+                        p1 = page.screenshot(full_page=True, type="png", clip=c1)
+                        p2 = page.screenshot(full_page=True, type="png", clip=c2)
+                        if p1 and p2:
+                            return [p1, p2], cap_time
+                    except Exception as e:
+                        log.warning("p0 graph screenshot: dual clip screenshot failed: %s", e)
+                finally:
+                    _clear_p0_scroll_target_marks(page)
             raw = page.screenshot(full_page=True, type="png")
             parts = _split_png_vertical_halves(raw)
             if len(parts) == 2:
