@@ -1027,6 +1027,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         log.info("p0 graph screenshot: SwiftShader (ANGLE) flags enabled for headless GL")
     headless = _config.get_p0_graph_screenshot_playwright_headless()
     snap_full = split_halves or full_page or bool(clip_selectors)
+    dsf = _config.get_p0_graph_screenshot_device_scale_factor()
     with sync_playwright() as p:
         if user_data:
             log.info(
@@ -1038,16 +1039,19 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 user_data,
                 headless=headless,
                 viewport={"width": w, "height": h},
+                device_scale_factor=dsf,
                 args=launch_args,
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 log.info(
-                    "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
+                    "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s "
+                    "device_scale_factor=%s wait_after_ms=%s",
                     goto_wait,
                     snap_full,
                     w,
                     h,
+                    dsf,
                     wait_ms,
                 )
                 _goto_and_wait(page)
@@ -1056,13 +1060,18 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 context.close()
         browser = p.chromium.launch(headless=headless, args=launch_args)
         try:
-            page = browser.new_page(viewport={"width": w, "height": h})
+            page = browser.new_page(
+                viewport={"width": w, "height": h},
+                device_scale_factor=dsf,
+            )
             log.info(
-                "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s wait_after_ms=%s",
+                "p0 graph screenshot: goto wait_until=%s full_page=%s viewport=%sx%s "
+                "device_scale_factor=%s wait_after_ms=%s",
                 goto_wait,
                 snap_full,
                 w,
                 h,
+                dsf,
                 wait_ms,
             )
             _goto_and_wait(page)

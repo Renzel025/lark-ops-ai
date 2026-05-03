@@ -738,6 +738,24 @@ def get_p0_graph_screenshot_viewport_height() -> int:
     return max(240, min(n, 2160))
 
 
+def get_p0_graph_screenshot_device_scale_factor() -> float:
+    """
+    Playwright ``device_scale_factor`` (CSS pixel ratio for screenshots). ``2`` renders **2×** device
+    pixels per CSS pixel — much sharper when Lark downscales wide dashboards; default ``1``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_DEVICE_SCALE_FACTOR") or "1").strip()
+    try:
+        x = float(raw)
+    except Exception:
+        x = 1.0
+    if x < 1.0:
+        return 1.0
+    if x > 3.0:
+        return 3.0
+    return x
+
+
 def get_p0_graph_screenshot_wait_ms() -> int:
     """Extra wait after ``goto`` (and ``wait_until``) before ``screenshot`` — lets Grafana panels query/render."""
     reload_env_runtime()
