@@ -689,7 +689,8 @@ def get_p0_graph_screenshot_append_kiosk() -> bool:
 
 def get_p0_graph_screenshot_clip_selectors() -> List[str]:
     """
-    Comma-separated CSS selectors (first match wins) for the **dashboard body** to screenshot.
+    Comma-separated CSS selectors (first **substantial** visible match) for the **dashboard body**.
+    Narrow ``.scrollbar-view`` hits (side gutter ~400px wide) are skipped so screenshots are not blank gray.
     Playwright uses the element’s box + ``scrollHeight`` as the ``full_page`` clip — excluding
     most browser chrome; pair with ``P0_GRAPH_SCREENSHOT_KIOSK=1`` (default).
 

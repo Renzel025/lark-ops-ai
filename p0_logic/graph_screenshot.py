@@ -23,6 +23,9 @@ the clip box is still absurdly tall vs what’s visible, we skip geometric bisec
 full-page capture (Pillow split if installed). If clips cannot be computed, falls back to Pillow split,
 then a single full-page PNG.
 
+If Lark shows **solid gray / blank** PNGs, the first CSS match was often a **narrow** scroll strip
+(not the dashboard); the bot now skips those and tries the next selector (e.g. ``main``).
+
 Logged-in runs should use a **fixed browser zoom** in the persistent Playwright profile (100 % is
 simplest): e.g. 50 % zoom changes how much fits in the viewport and alters scroll/virtualized metrics.
 
@@ -38,6 +41,9 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+# Playwright: imported inside ``_capture_png_payloads`` only, so this module loads even when
+# ``playwright`` is not installed (optional feature / lighter test imports).
 
 try:
     from zoneinfo import ZoneInfo
@@ -102,13 +108,55 @@ def _measure_clip_rect(page, selector: str) -> Optional[Dict[str, int]]:
         return None
 
 
-def _pick_dashboard_clip(page, selectors: List[str]) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+def _visible_clip_substantial(
+    vis: Dict[str, int], viewport_w: int, viewport_h: int
+) -> bool:
+    """
+    Grafana's first ``querySelector('main .scrollbar-view')`` often hits a **narrow** scroller (e.g.
+    ~300–400px wide on the right) — not the dashboard canvas — producing **blank gray** PNGs.
+    Require a minimum visible footprint relative to the Playwright viewport.
+    """
+    w = int(vis.get("width") or 0)
+    h = int(vis.get("height") or 0)
+    vw = max(int(viewport_w or 0), 320)
+    vh = max(int(viewport_h or 0), 240)
+    min_w = max(480, vw // 3)
+    min_h = max(260, vh // 5)
+    if w < min_w or h < min_h:
+        return False
+    return True
+
+
+def _pick_dashboard_clip(
+    page,
+    selectors: List[str],
+    viewport_w: int,
+    viewport_h: int,
+) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
     for sel in selectors:
         clip = _measure_clip_rect(page, sel)
-        if clip:
-            log.info("p0 graph screenshot: using clip selector %r box=%s", sel, clip)
-            return clip, sel
-    log.info("p0 graph screenshot: no clip selector matched — full viewport/page capture")
+        vis = _measure_visible_clip_rect(page, sel)
+        if not clip or not vis:
+            continue
+        if not _visible_clip_substantial(vis, viewport_w, viewport_h):
+            log.info(
+                "p0 graph screenshot: clip selector %r visible box=%s too small vs viewport %sx%s — trying next",
+                sel,
+                vis,
+                viewport_w,
+                viewport_h,
+            )
+            continue
+        log.info(
+            "p0 graph screenshot: using clip selector %r box=%s visible=%s",
+            sel,
+            clip,
+            vis,
+        )
+        return clip, sel
+    log.info(
+        "p0 graph screenshot: no clip selector with substantial visible area — full viewport/page capture"
+    )
     return None, None
 
 
@@ -413,7 +461,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         clip: Optional[Dict[str, int]] = None
         clip_sel: Optional[str] = None
         if clip_selectors:
-            clip, clip_sel = _pick_dashboard_clip(page, clip_selectors)
+            clip, clip_sel = _pick_dashboard_clip(page, clip_selectors, w, h)
         if split_halves:
             log.info(
                 "p0 graph screenshot: split vertical halves viewport=%sx%s effective_clip=%s",
