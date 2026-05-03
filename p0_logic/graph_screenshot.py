@@ -12,8 +12,10 @@ matches an **inner** ``.scrollbar-view`` (one panel’s scroller), so you only g
 
 **Two Lark-style images (top / bottom of *what’s on screen* — like your refs):** set
 ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` + ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` and leave
-``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=0``. That is one **viewport** PNG split with Pillow (not the whole
-scroll). ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` is **full document** height (``full_page=True``) — often
+``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=0``. That captures the **viewport at scroll top**, then **scrolls the
+main dashboard down by ~one viewport** and captures again (two different “pages” of panels — not a
+50/50 pixel crop of one frame). If the page does not scroll, falls back to Pillow split of a single
+viewport. ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` is **full document** height (``full_page=True``) — often
 an enormous, half-empty strip when Grafana’s layout is tall; use only when you really want entire scroll.
 
 For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
@@ -284,6 +286,183 @@ def _mark_best_scroll_target_under_root(page, root_selector: str) -> str:
     return root_selector
 
 
+def _clear_p0_dash_page_scroll_marks(page) -> None:
+    try:
+        page.evaluate(
+            """() => {
+              document.querySelectorAll('[data-p0-dash-page-scroll]').forEach((e) =>
+                e.removeAttribute('data-p0-dash-page-scroll')
+              );
+            }"""
+        )
+    except Exception:
+        pass
+
+
+def _mark_wide_dashboard_scroll_container(page) -> bool:
+    """
+    Tag the **widest** scrollable ``.scrollbar-view`` under ``main`` (dashboard body), not a narrow
+    table scroller — used to page down for a second viewport screenshot.
+    """
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+              document.querySelectorAll('[data-p0-dash-page-scroll]').forEach((e) =>
+                e.removeAttribute('data-p0-dash-page-scroll')
+              );
+              const main = document.querySelector('main') || document.body;
+              if (!main) return false;
+              const vw = window.innerWidth || 1280;
+              const minW = Math.max(480, Math.floor(vw * 0.42));
+              let best = null;
+              let bestArea = -1;
+              main.querySelectorAll('.scrollbar-view, .scrollbar__view').forEach((el) => {
+                const ch = Math.ceil(el.clientHeight || 0);
+                const sh = Math.ceil(el.scrollHeight || 0);
+                if (sh <= ch + 12) return;
+                const cw = Math.ceil(el.clientWidth || 0);
+                if (cw < minW) return;
+                const area = cw * ch;
+                if (area > bestArea) {
+                  bestArea = area;
+                  best = el;
+                }
+              });
+              if (best) {
+                best.setAttribute('data-p0-dash-page-scroll', '1');
+                return true;
+              }
+              const m = document.querySelector('main');
+              if (m) {
+                const mch = Math.ceil(m.clientHeight || 0);
+                const msh = Math.ceil(m.scrollHeight || 0);
+                const mcw = Math.ceil(m.clientWidth || 0);
+                if (msh > mch + 12 && mcw >= minW) {
+                  m.setAttribute('data-p0-dash-page-scroll', '1');
+                  return true;
+                }
+              }
+              return false;
+            }"""
+            )
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: wide dashboard scroll mark failed: %s", e)
+        return False
+
+
+def _scroll_pair_reset_top(page, scroll_sel: Optional[str]) -> None:
+    try:
+        page.evaluate(
+            """() => {
+              window.scrollTo(0, 0);
+              const se = document.scrollingElement;
+              if (se) se.scrollTop = 0;
+            }"""
+        )
+        if scroll_sel:
+            page.evaluate(
+                """(sel) => {
+                  const e = document.querySelector(sel);
+                  if (e) e.scrollTop = 0;
+                }""",
+                scroll_sel,
+            )
+    except Exception:
+        pass
+
+
+def _compute_viewport_pair_scroll_delta(
+    page, scroll_sel: Optional[str], viewport_h: int
+) -> int:
+    if scroll_sel:
+        m = _scrollbar_virtualized_metrics(page, scroll_sel)
+        if m:
+            sh, ch = m
+            max_scroll = max(0, sh - ch)
+            if max_scroll <= 0:
+                return 0
+            delta = min(max_scroll, max(int(ch * 0.92), 1))
+            return delta
+    try:
+        raw = page.evaluate(
+            """() => {
+              const se = document.scrollingElement || document.documentElement;
+              const sh = Math.max(se ? se.scrollHeight : 0, document.body ? document.body.scrollHeight : 0);
+              const ch = window.innerHeight || se.clientHeight || 720;
+              return { sh: Math.ceil(sh), ch: Math.ceil(ch) };
+            }"""
+        )
+        sh = int(raw["sh"])
+        ch = int(raw["ch"])
+        max_scroll = max(0, sh - ch)
+        if max_scroll <= 0:
+            return 0
+        vh = max(int(viewport_h or ch), 240)
+        return min(max_scroll, max(int(vh * 0.92), 1))
+    except Exception:
+        return max(1, int(max(viewport_h, 720) * 0.92))
+
+
+def _apply_viewport_pair_scroll(page, scroll_sel: Optional[str], delta: int) -> None:
+    if delta <= 0:
+        return
+    if scroll_sel:
+        page.evaluate(
+            """({ sel, d }) => {
+              const e = document.querySelector(sel);
+              if (!e) return;
+              const maxTop = Math.max(0, (e.scrollHeight || 0) - (e.clientHeight || 0));
+              e.scrollTop = Math.min(maxTop, (e.scrollTop || 0) + d);
+            }""",
+            {"sel": scroll_sel, "d": delta},
+        )
+    else:
+        page.evaluate("(d) => window.scrollBy(0, d)", delta)
+
+
+def _viewport_scroll_pair_screenshots(
+    page,
+    viewport_h: int,
+) -> List[bytes]:
+    """
+    Two viewport-sized PNGs: first at scroll top, second after scrolling the main dashboard down by
+    ~one viewport (shows below-the-fold panels). Returns [] if the page does not scroll enough.
+    """
+    scroll_sel: Optional[str] = None
+    try:
+        _clear_p0_dash_page_scroll_marks(page)
+        if _mark_wide_dashboard_scroll_container(page):
+            scroll_sel = "[data-p0-dash-page-scroll='1']"
+        _scroll_pair_reset_top(page, scroll_sel)
+        page.wait_for_timeout(420)
+        p1 = page.screenshot(full_page=False, type="png")
+        delta = _compute_viewport_pair_scroll_delta(page, scroll_sel, viewport_h)
+        if delta <= 0:
+            log.info(
+                "p0 graph screenshot: viewport scroll pair skipped — no vertical overflow (delta=0)"
+            )
+            return []
+        log.info(
+            "p0 graph screenshot: viewport scroll pair delta=%s scroll_sel=%s",
+            delta,
+            scroll_sel or "window",
+        )
+        _apply_viewport_pair_scroll(page, scroll_sel, delta)
+        page.wait_for_timeout(680)
+        p2 = page.screenshot(full_page=False, type="png")
+        if p1 and p2:
+            return [p1, p2]
+        return []
+    except Exception as e:
+        log.warning("p0 graph screenshot: viewport scroll pair failed: %s", e)
+        return []
+    finally:
+        _scroll_pair_reset_top(page, scroll_sel)
+        _clear_p0_dash_page_scroll_marks(page)
+
+
 def _clear_p0_scroll_target_marks(page) -> None:
     try:
         page.evaluate(
@@ -509,7 +688,7 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
 def _capture_png_payloads() -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
-    With ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``, returns two blobs (upper / lower half).
+    With ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``, returns two blobs (viewport scroll pair or Pillow halves).
     """
     from . import config as _config
 
@@ -540,8 +719,16 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         cap_time = _format_captured_at(at)
         if _config.get_p0_graph_screenshot_viewport_only():
             log.info(
-                "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip, viewport capture"
+                "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip/body clip chain"
             )
+            if split_halves:
+                scroll_parts = _viewport_scroll_pair_screenshots(page, h)
+                if len(scroll_parts) == 2:
+                    return scroll_parts, cap_time
+                log.info(
+                    "p0 graph screenshot: viewport scroll pair missing or no overflow — "
+                    "fallback Pillow split on single viewport (install pillow for two PNGs)"
+                )
             raw = page.screenshot(full_page=False, type="png")
             if split_halves:
                 parts = _split_png_vertical_halves(raw)
@@ -553,7 +740,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         if _config.get_p0_graph_screenshot_full_document():
             log.info(
                 "p0 graph screenshot: FULL_DOCUMENT=1 — full **scroll height** (can be very tall / mostly empty). "
-                "For **two halves of one on-screen view** (typical Lark layout), use "
+                "For **two viewport screenshots** (top of board, then scrolled down), use "
                 "P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 + SPLIT_VERTICAL_HALVES=1 and turn FULL_DOCUMENT off."
             )
             raw = page.screenshot(full_page=True, type="png")
@@ -701,12 +888,21 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         )
         at2 = datetime.now(tz)
         cap2 = _format_captured_at(at2)
-        raw = page.screenshot(full_page=False, type="png")
-        if split_halves:
-            parts = _split_png_vertical_halves(raw)
-            pngs2: List[bytes] = parts if len(parts) == 2 else [raw]
+        if split_halves and _config.get_p0_graph_screenshot_viewport_only():
+            pair = _viewport_scroll_pair_screenshots(page, h)
+            if len(pair) == 2:
+                pngs2 = pair
+            else:
+                raw = page.screenshot(full_page=False, type="png")
+                parts = _split_png_vertical_halves(raw)
+                pngs2 = parts if len(parts) == 2 else [raw]
         else:
-            pngs2 = [raw]
+            raw = page.screenshot(full_page=False, type="png")
+            if split_halves:
+                parts = _split_png_vertical_halves(raw)
+                pngs2 = parts if len(parts) == 2 else [raw]
+            else:
+                pngs2 = [raw]
         if not pngs2 or _png_list_all_uniformly_blank(pngs2):
             log.warning(
                 "p0 graph screenshot: viewport retry still blank — install pillow, use "

@@ -826,10 +826,11 @@ def get_p0_graph_screenshot_full_document() -> bool:
 
 def get_p0_graph_screenshot_split_vertical_halves() -> bool:
     """
-    When True: post **two** PNGs — upper and lower vertical halves of the captured image.
+    When True: post **two** PNGs — upper area of the dashboard, then content **after scrolling down**.
 
-    - With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1``: one viewport screenshot (``full_page=False``), split
-      with **Pillow** (install ``pillow``).
+    - With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1``: prefer **two viewport** captures (scroll the wide
+      dashboard body ~one screen, then shoot again); if the page does not scroll, falls back to **Pillow**
+      cutting one viewport in half (install ``pillow``).
     - With ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1``: one full-document screenshot, split with Pillow.
     - Otherwise: prefer **Playwright** vertical clips on a ``full_page`` capture; if that fails, Pillow split
       or a single PNG.
