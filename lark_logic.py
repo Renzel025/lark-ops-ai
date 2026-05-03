@@ -86,6 +86,9 @@ def _is_question_about_priority(text: str) -> bool:
         return False
     if not (P0_KEYWORD_RE.search(t) or P1_KEYWORD_RE.search(t)):
         return False
+    # Phrases that arm **thread confirm** are never keyword declarations (e.g. "can we tag it as p0" without `?`).
+    if _is_p0_thread_confirm_question(t):
+        return True
     # Question mark: treat as non-declaration for incident keyword triggers.
     if "?" in t:
         return True
