@@ -25,6 +25,9 @@ then a single full-page PNG.
 
 If Lark shows **solid gray / blank** PNGs, the first CSS match was often a **narrow** scroll strip
 (not the dashboard); the bot now skips those and tries the next selector (e.g. ``main``).
+**Solid black** on Linux headless is often missing GPU compositing — SwiftShader flags are enabled by
+default on Linux (see ``get_p0_graph_screenshot_swiftshader``); set ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` to force off.
+Install **Pillow** so uniformly-dark captures can trigger an automatic viewport-only retry.
 
 Logged-in runs should use a **fixed browser zoom** in the persistent Playwright profile (100 % is
 simplest): e.g. 50 % zoom changes how much fits in the viewport and alters scroll/virtualized metrics.
@@ -385,6 +388,42 @@ def _split_png_vertical_halves(png_bytes: bytes) -> List[bytes]:
     return out
 
 
+def _png_bytes_uniformly_blank(png: bytes) -> bool:
+    """
+    Heuristic: near-black PNG with almost no luminance spread → headless compositor / wrong clip.
+    """
+    try:
+        from PIL import Image
+        from PIL.ImageStat import Stat
+    except ImportError:
+        return False
+    try:
+        im = Image.open(BytesIO(png))
+        im.load()
+        im = im.convert("L")
+        im.thumbnail((160, 160))
+        st = Stat(im)
+        mean = float(st.mean[0])
+        lo, hi = st.extrema[0]
+        spread = float(hi) - float(lo)
+    except Exception:
+        return False
+    if mean <= 8.0:
+        return True
+    if mean <= 18.0 and spread <= 12.0:
+        return True
+    return False
+
+
+def _png_list_all_uniformly_blank(pngs: List[bytes]) -> bool:
+    if not pngs:
+        return False
+    for p in pngs:
+        if not _png_bytes_uniformly_blank(p):
+            return False
+    return True
+
+
 def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> None:
     from . import config as _config
     from . import lark_client as _lark
@@ -458,6 +497,18 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
     def _snap(page) -> Tuple[List[bytes], str]:
         at = datetime.now(tz)
         cap_time = _format_captured_at(at)
+        if _config.get_p0_graph_screenshot_viewport_only():
+            log.info(
+                "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip, viewport capture"
+            )
+            raw = page.screenshot(full_page=False, type="png")
+            if split_halves:
+                parts = _split_png_vertical_halves(raw)
+                if len(parts) == 2:
+                    return parts, cap_time
+                if not parts:
+                    return [raw], cap_time
+            return [raw], cap_time
         clip: Optional[Dict[str, int]] = None
         clip_sel: Optional[str] = None
         if clip_selectors:
@@ -578,6 +629,34 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         raw = page.screenshot(full_page=full_page, type="png")
         return [raw], cap_time
 
+    def _snap_with_blank_viewport_fallback(page) -> Tuple[List[bytes], str]:
+        out = _snap(page)
+        pngs, cap = out
+        if not _config.get_p0_graph_screenshot_blank_fallback_viewport():
+            return out
+        if not pngs or not _png_list_all_uniformly_blank(pngs):
+            return out
+        log.warning(
+            "p0 graph screenshot: capture looks uniformly blank — retry viewport-only "
+            "(try P0_GRAPH_SCREENSHOT_SWIFTSHADER=1 on Linux if still black; see env.example)"
+        )
+        at2 = datetime.now(tz)
+        cap2 = _format_captured_at(at2)
+        raw = page.screenshot(full_page=False, type="png")
+        if split_halves:
+            parts = _split_png_vertical_halves(raw)
+            pngs2: List[bytes] = parts if len(parts) == 2 else [raw]
+        else:
+            pngs2 = [raw]
+        if not pngs2 or _png_list_all_uniformly_blank(pngs2):
+            log.warning(
+                "p0 graph screenshot: viewport retry still blank — install pillow, use "
+                "HEADED=1 on VNC, or verify Grafana login/session in profile"
+            )
+            return out
+        log.info("p0 graph screenshot: viewport-only retry succeeded (non-blank)")
+        return pngs2, cap2
+
     def _wait_for_grafana_panels_if_configured(page) -> None:
         panel_timeout = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
         if panel_timeout <= 0:
@@ -677,14 +756,23 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         if wait_ms > 0:
             page.wait_for_timeout(wait_ms)
 
-    launch_args = _config.get_p0_graph_screenshot_chromium_args()
+    launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
+    if _config.get_p0_graph_screenshot_swiftshader():
+        extra = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+        launch_args.extend([a for a in extra if a not in launch_args])
+        log.info("p0 graph screenshot: SwiftShader (ANGLE) flags enabled for headless GL")
+    headless = _config.get_p0_graph_screenshot_playwright_headless()
     snap_full = split_halves or full_page or bool(clip_selectors)
     with sync_playwright() as p:
         if user_data:
-            log.info("p0 graph screenshot: using persistent profile (Grafana session) at %s", user_data)
+            log.info(
+                "p0 graph screenshot: using persistent profile (Grafana session) at %s headless=%s",
+                user_data,
+                headless,
+            )
             context = p.chromium.launch_persistent_context(
                 user_data,
-                headless=True,
+                headless=headless,
                 viewport={"width": w, "height": h},
                 args=launch_args,
             )
@@ -699,10 +787,10 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                     wait_ms,
                 )
                 _goto_and_wait(page)
-                return _snap(page)
+                return _snap_with_blank_viewport_fallback(page)
             finally:
                 context.close()
-        browser = p.chromium.launch(headless=True, args=launch_args)
+        browser = p.chromium.launch(headless=headless, args=launch_args)
         try:
             page = browser.new_page(viewport={"width": w, "height": h})
             log.info(
@@ -714,6 +802,6 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 wait_ms,
             )
             _goto_and_wait(page)
-            return _snap(page)
+            return _snap_with_blank_viewport_fallback(page)
         finally:
             browser.close()

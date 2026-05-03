@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
@@ -887,6 +888,53 @@ def get_p0_graph_screenshot_playwright_user_data_dir() -> str:
         return ""
     p = Path(raw).expanduser().resolve()
     return str(p) if p.is_dir() else ""
+
+
+def get_p0_graph_screenshot_playwright_headless() -> bool:
+    """
+    Default **headless** Chromium. Set ``P0_GRAPH_SCREENSHOT_HEADED=1`` for a visible window
+    (e.g. manual debugging on VNC — same capture path as the bot).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_HEADED") or "0").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return False
+    return True
+
+
+def get_p0_graph_screenshot_swiftshader() -> bool:
+    """
+    Append ANGLE + **SwiftShader** Chromium flags (software GL). Fixes **solid black** screenshots
+    on many Linux/VPS headless setups where the GPU stack does not composite Web/canvas.
+
+    * Explicit ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` → off.
+    * Explicit ``1`` → on.
+    * **Unset** → **on** when ``sys.platform`` is Linux (ose-bot style servers); off on macOS/Windows.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_SWIFTSHADER") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return sys.platform.startswith("linux")
+
+
+def get_p0_graph_screenshot_viewport_only() -> bool:
+    """If ``1``, skip CSS clip and capture **viewport** only (``full_page=False``). Debugging / GPU issues."""
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_blank_fallback_viewport() -> bool:
+    """
+    If the PNGs look **uniformly blank** (near-black, no contrast), retry once with viewport-only
+    capture. On by default; set ``P0_GRAPH_SCREENSHOT_BLANK_FALLBACK_VIEWPORT=0`` to disable.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_BLANK_FALLBACK_VIEWPORT") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 def slack_automation_enabled() -> bool:
