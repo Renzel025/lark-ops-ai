@@ -53,6 +53,12 @@ _QUESTION_PRIORITY_PHRASE_RE = re.compile(
     r"is\s+that\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"is\s+it\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"are\s+we\s+(?:in\s+)?(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"is\s+this\s+possible\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"is\s+that\s+possible\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"can\s+we\s+refer\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"could\s+we\s+refer\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"can\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"could\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"can\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"could\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"should\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
@@ -245,6 +251,10 @@ P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"|can\s+this\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|can\s+that\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|can\s+we\s+tag\s+this\s+issue\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+we\s+refer\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|could\s+we\s+refer\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+this\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|is\s+that\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
 # Reply must read like **P0 approval** — phrase-prefix match (not full NLP).
