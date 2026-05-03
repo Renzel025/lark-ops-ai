@@ -810,6 +810,19 @@ def get_p0_graph_screenshot_full_page() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_full_document() -> bool:
+    """
+    When ``1``: capture the **entire scrollable browser document** with ``page.screenshot(full_page=True)``
+    **without** any ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR`` box.
+
+    Use this for **full multi-panel** dashboards (e.g. Core Metrics): the default clip chain often matches an
+    **inner** ``.scrollbar-view`` (one panel’s table scroller), which produces a narrow or single-graph crop.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_FULL_DOCUMENT") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_graph_screenshot_split_vertical_halves() -> bool:
     """
     When True: capture the dashboard (or full page if no clip matches) and post **two** PNGs —

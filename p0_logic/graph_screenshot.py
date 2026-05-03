@@ -7,7 +7,10 @@ image — see ``P0_GRAPH_SCREENSHOT_CAPTION``, ``{captured_at}``, and ``P0_GRAPH
 
 **Clean “panels-only” grabs (default):** ``P0_GRAPH_SCREENSHOT_KIOSK=1`` appends Grafana **kiosk** mode to
 the URL (hides left navigation). ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR`` (or the built-in fallback chain)
-picks the **dashboard body** so the PNG is not one huge browser window — only the scrollable chart area.
+picks the **dashboard body** — but on wide **multi-panel** boards (e.g. Core Metrics) that chain often
+matches an **inner** ``.scrollbar-view`` (one panel’s scroller), so you only get a slice of the UI.
+Set ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` to capture the **entire scrollable page** (full kiosk
+dashboard). ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` then splits that tall PNG with Pillow.
 
 For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
 raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. **12000–20000**). Enable
@@ -453,6 +456,21 @@ def post_p0_graph_screenshots_to_chat(
     if st_t != 200:
         log.warning("p0 graph screenshot: caption post HTTP=%s", st_t)
 
+    pngs_eff = [p for p in pngs if not _png_bytes_uniformly_blank(p)]
+    if len(pngs_eff) < len(pngs):
+        log.warning(
+            "p0 graph screenshot: dropping %s uniformly blank part(s) before Lark post (common when "
+            "part 1 is an unpainted virtualized band and part 2 has the table)",
+            len(pngs) - len(pngs_eff),
+        )
+    if not pngs_eff:
+        log.warning(
+            "p0 graph screenshot: all image parts look blank — skipping image upload "
+            "(try P0_GRAPH_SCREENSHOT_SWIFTSHADER=1, HEADED=1 on VNC, or VIEWPORT_ONLY / FULL_PAGE+no split)"
+        )
+        return
+    pngs = pngs_eff
+
     for idx, png in enumerate(pngs):
         fname = "p0-dashboard.png" if len(pngs) == 1 else f"p0-dashboard-part{idx + 1}.png"
         key = _lark.upload_image_bytes_for_im_message(tok, png, fname)
@@ -527,6 +545,23 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                     return parts, cap_time
                 if not parts:
                     return [raw], cap_time
+            return [raw], cap_time
+        if _config.get_p0_graph_screenshot_full_document():
+            log.info(
+                "p0 graph screenshot: FULL_DOCUMENT=1 — full scrollable page (no CSS clip); "
+                "entire kiosk UI, not one panel’s internal scrollbar"
+            )
+            raw = page.screenshot(full_page=True, type="png")
+            if split_halves:
+                parts = _split_png_vertical_halves(raw)
+                if len(parts) == 2:
+                    return parts, cap_time
+                if not parts:
+                    log.warning(
+                        "p0 graph screenshot: Pillow split failed — posting single full-document PNG "
+                        "(install Pillow for two-part vertical split)"
+                    )
+                return [raw], cap_time
             return [raw], cap_time
         clip: Optional[Dict[str, int]] = None
         clip_sel: Optional[str] = None
@@ -699,12 +734,15 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
 
     def _wait_for_grafana_chart_content_if_configured(page) -> None:
         """
-        Grid can exist while every panel is still an empty dark box — wait for canvas/SVG or text.
+        Grid can exist while time-series cells are still empty (black). Wait until a **large** chart
+        canvas exists, enough SVG widgets, an error string, or a very full **table** (table-only boards).
         """
         tmax = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
         if tmax <= 0:
             return
         # Runs in browser; panels may use canvas (Time series) or SVG (Stat, bar gauge); tables have text.
+        # Do **not** treat ``panels >= 2 && long text`` alone as ready — dashboards like Core Metrics render
+        # the left table first while the main time-series grid is still empty (black); that caused early screenshots.
         js = r"""
             () => {
               const root = document.querySelector('main') || document.body;
@@ -714,21 +752,22 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 + '[data-testid*="panel"], [data-testid*="Panel"]'
               );
               if (panels.length < 1) return false;
-              let canv = 0;
+              let chartCanv = 0;
               root.querySelectorAll('canvas').forEach((c) => {
                 const r = c.getBoundingClientRect();
-                if (r.width > 4 && r.height > 4) canv++;
+                if (r.width > 96 && r.height > 56) chartCanv++;
               });
               let bigSvg = 0;
               root.querySelectorAll('svg').forEach((s) => {
                 const r = s.getBoundingClientRect();
                 if (r.width > 20 && r.height > 12) bigSvg++;
               });
-              if (canv >= 1) return true;
+              if (chartCanv >= 1) return true;
               if (bigSvg >= 4) return true;
               const t = (root.innerText || '').trim();
               if (t.length > 400 && /error|no data|query|failed|exception/i.test(t)) return true;
-              if (panels.length >= 2 && t.length > 1200) return true;
+              const rows = root.querySelectorAll('table tbody tr, [role="rowgroup"] [role="row"]').length;
+              if (rows >= 12 && t.length > 2000) return true;
               return false;
             }
         """
@@ -747,10 +786,15 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 diag = page.evaluate(
                     """() => {
                       const r = document.querySelector('main') || document.body;
-                      if (!r) return { panels: 0, canv: 0, textLen: 0 };
+                      if (!r) return { panels: 0, chartCanv: 0, textLen: 0 };
+                      let chartCanv = 0;
+                      r.querySelectorAll('canvas').forEach((c) => {
+                        const b = c.getBoundingClientRect();
+                        if (b.width > 96 && b.height > 56) chartCanv++;
+                      });
                       return {
                         panels: r.querySelectorAll('[data-panel-id], .react-grid-item').length,
-                        canv: r.querySelectorAll('canvas').length,
+                        chartCanv: chartCanv,
                         textLen: (r.innerText || '').length
                       };
                     }"""
