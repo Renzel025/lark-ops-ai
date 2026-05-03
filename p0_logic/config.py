@@ -676,6 +676,39 @@ def get_p0_graph_screenshot_url() -> str:
     return (os.getenv("P0_GRAPH_SCREENSHOT_URL") or "").strip()
 
 
+def get_p0_graph_screenshot_append_kiosk() -> bool:
+    """
+    When True (default), append Grafana ``kiosk`` / ``kiosk=tv`` to the dashboard URL if not already
+    present — hides the left nav and yields a cleaner capture (ops-style “panels only”).
+    Set ``P0_GRAPH_SCREENSHOT_KIOSK=0`` to disable.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_KIOSK") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def get_p0_graph_screenshot_clip_selectors() -> List[str]:
+    """
+    Comma-separated CSS selectors (first match wins) for the **dashboard body** to screenshot.
+    Playwright uses the element’s box + ``scrollHeight`` as the ``full_page`` clip — excluding
+    most browser chrome; pair with ``P0_GRAPH_SCREENSHOT_KIOSK=1`` (default).
+
+    Override with ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR=main`` (or several, comma-separated).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_CLIP_SELECTOR") or "").strip()
+    if raw.lower() in ("-", "none", "off", "0"):
+        return []
+    if raw:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    return [
+        '[data-testid="canvas-body"] .scrollbar-view',
+        "main .scrollbar-view",
+        "main",
+        ".react-grid-layout",
+    ]
+
+
 def get_p0_graph_screenshot_target_chat_id() -> str:
     """Lark group ``oc_...`` to receive the screenshot (can differ from incident group)."""
     reload_env_runtime()
@@ -777,12 +810,11 @@ def get_p0_graph_screenshot_full_page() -> bool:
 
 def get_p0_graph_screenshot_split_vertical_halves() -> bool:
     """
-    When True: take one **full-page** Playwright screenshot, split the PNG at mid-height into
-    **upper** and **lower** halves (two images posted to Lark). Matches an ops workflow where
-    Grafana is taller than one viewport and you want "2× half" instead of one ultra-tall or
-    one clipped viewport shot. Requires Pillow; if Pillow is missing, falls back to a single
-    undivided full-page PNG. When this is on, the capture step always uses ``full_page=True``
-    regardless of ``P0_GRAPH_SCREENSHOT_FULL_PAGE``.
+    When True: capture the dashboard (or full page if no clip matches) and post **two** PNGs —
+    upper and lower vertical halves. Uses **Playwright clip** (no Pillow). If the clip path fails,
+    falls back to Pillow on a single full-page buffer, then to one undivided PNG.
+
+    When on, the capture step always uses ``full_page=True`` for clips (and for the Pillow fallback).
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES") or "0").strip().lower()

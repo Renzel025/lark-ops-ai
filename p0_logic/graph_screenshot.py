@@ -5,24 +5,22 @@ the PNG to a Lark group.
 A text line with the **capture date/time** (when ``page.screenshot`` completed) is posted before the
 image — see ``P0_GRAPH_SCREENSHOT_CAPTION``, ``{captured_at}``, and ``P0_GRAPH_SCREENSHOT_TIMEZONE``.
 
-For **multi-panel Grafana** dashboards (full grid like your ops view): set ``P0_GRAPH_SCREENSHOT_FULL_PAGE=1``,
-a **wide** viewport (e.g. 1920×1080), ``P0_GRAPH_SCREENSHOT_GOTO_WAIT_UNTIL=load``, and raise
-``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. 8000–15000) so panels can load. For an **earlier** grab (layout /
-loading state), use ``domcontentloaded`` and a **lower** ``P0_GRAPH_SCREENSHOT_WAIT_MS``.
+**Clean “panels-only” grabs (default):** ``P0_GRAPH_SCREENSHOT_KIOSK=1`` appends Grafana **kiosk** mode to
+the URL (hides left navigation). ``P0_GRAPH_SCREENSHOT_CLIP_SELECTOR`` (or the built-in fallback chain)
+picks the **dashboard body** so the PNG is not one huge browser window — only the scrollable chart area.
 
-For **two images (upper / lower half)** of the full scrollable Grafana page (instead of one ultra-tall
-PNG or one viewport-only crop): set ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``. That forces a
-full-page capture, splits at mid-height with Pillow, and posts **two** PNGs to Lark (same caption
-once, then both images). Requires ``Pillow`` in the runtime environment.
+For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
+raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. **12000–20000**). Enable
+``P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS`` (e.g. **25000–35000**) so React mounts before panels;
+content wait can follow from config.
 
-If screenshots show a **black / empty** main area: Grafana often fires ``load`` before panels mount.
-Set ``P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS=25000`` (or higher), widen the viewport (e.g.
-1920×1080), raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. 12000–20000). Append ``&kiosk`` to the URL
-for a cleaner full-width layout (hides left nav).
+**Two images (upper / lower half):** ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` uses **two**
+``full_page`` screenshots with vertical **clips** (no Pillow required). If clips cannot be computed,
+falls back to Pillow split, then a single full-page PNG.
 
 Without ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR``, each run uses a **fresh** Chromium — fine for
-anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile
-directory** where you completed login once (headed), similar to Slack ``SESSION_DIR``.
+anonymous/public dashboards only. For logged-in Grafana, point that env at a **persistent profile**
+where you completed login once (headed), similar to Slack ``SESSION_DIR``.
 """
 from __future__ import annotations
 
@@ -30,7 +28,8 @@ import logging
 import threading
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 try:
     from zoneinfo import ZoneInfo
@@ -38,6 +37,83 @@ except ImportError:  # Python < 3.9 (see p0_logic/requirements.txt backports.zon
     from backports.zoneinfo import ZoneInfo
 
 log = logging.getLogger("lark-ops-ai")
+
+
+def _apply_kiosk_to_grafana_url(url: str, enable: bool) -> str:
+    """Append ``kiosk`` / ``k kiosk=tv`` when missing — Grafana hides side menu & yields denser panel view."""
+    u = (url or "").strip()
+    if not u or not enable:
+        return u
+    low = u.lower()
+    if "kiosk" in low:
+        return u
+    parsed = urlparse(u)
+    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "kiosk"]
+    q.append(("kiosk", "tv"))
+    new_query = urlencode(q)
+    return urlunparse(parsed._replace(query=new_query))
+
+
+def _measure_clip_rect(page, selector: str) -> Optional[Dict[str, int]]:
+    """
+    Rectangle in **document / layout** pixels for ``page.screenshot(full_page=True, clip=…)``.
+    """
+    try:
+        raw = page.evaluate(
+            """(sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              const sx = window.scrollX || 0;
+              const sy = window.scrollY || 0;
+              const x = Math.max(0, Math.floor(sx + r.left));
+              const y = Math.max(0, Math.floor(sy + r.top));
+              const rW = Math.ceil(r.width);
+              const rH = Math.ceil(r.height);
+              let w = Math.max(rW, Math.ceil(el.scrollWidth || 0));
+              let h = Math.max(rH, Math.ceil(el.scrollHeight || 0));
+              if (h < 120) h = rH;
+              if (w < 80 || h < 80) return null;
+              return { x, y, width: w, height: h };
+            }""",
+            selector,
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: clip measure failed for %r: %s", selector, e)
+        return None
+    if not raw or not isinstance(raw, dict):
+        return None
+    try:
+        return {
+            "x": int(raw["x"]),
+            "y": int(raw["y"]),
+            "width": int(raw["width"]),
+            "height": int(raw["height"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _pick_dashboard_clip(page, selectors: List[str]) -> Optional[Dict[str, int]]:
+    for sel in selectors:
+        clip = _measure_clip_rect(page, sel)
+        if clip:
+            log.info("p0 graph screenshot: using clip selector %r box=%s", sel, clip)
+            return clip
+    log.info("p0 graph screenshot: no clip selector matched — full viewport/page capture")
+    return None
+
+
+def _split_clip_vertical_halves(clip: Dict[str, int]) -> Tuple[Dict[str, int], Dict[str, int]]:
+    h = max(int(clip.get("height") or 0), 2)
+    mid = max(h // 2, 1)
+    c1 = {**clip, "height": mid}
+    c2 = {
+        **clip,
+        "y": int(clip["y"]) + mid,
+        "height": h - mid,
+    }
+    return c1, c2
 
 
 def _resolve_capture_tz():
@@ -180,7 +256,12 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         log.warning("p0 graph screenshot: playwright not installed (pip install playwright; playwright install chromium)")
         return [], ""
 
-    url = _config.get_p0_graph_screenshot_url()
+    raw_url = _config.get_p0_graph_screenshot_url()
+    kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
+    url = _apply_kiosk_to_grafana_url(raw_url, kiosk_on)
+    if kiosk_on and url != raw_url:
+        log.info("p0 graph screenshot: appended kiosk=tv to URL (hide Grafana side menu)")
+    clip_selectors = _config.get_p0_graph_screenshot_clip_selectors()
     w = _config.get_p0_graph_screenshot_viewport_width()
     h = _config.get_p0_graph_screenshot_viewport_height()
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
@@ -192,26 +273,44 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
     tz = _resolve_capture_tz()
 
     def _snap(page) -> Tuple[List[bytes], str]:
+        at = datetime.now(tz)
+        cap_time = _format_captured_at(at)
+        clip: Optional[Dict[str, int]] = None
+        if clip_selectors:
+            clip = _pick_dashboard_clip(page, clip_selectors)
         if split_halves:
             log.info(
-                "p0 graph screenshot: split vertical halves — forcing full_page capture viewport=%sx%s",
+                "p0 graph screenshot: split vertical halves viewport=%sx%s effective_clip=%s",
                 w,
                 h,
+                clip if clip else "full document (no selector match)",
             )
+            if clip:
+                c1, c2 = _split_clip_vertical_halves(clip)
+                try:
+                    p1 = page.screenshot(full_page=True, type="png", clip=c1)
+                    p2 = page.screenshot(full_page=True, type="png", clip=c2)
+                    if p1 and p2:
+                        return [p1, p2], cap_time
+                except Exception as e:
+                    log.warning("p0 graph screenshot: dual clip screenshot failed: %s", e)
             raw = page.screenshot(full_page=True, type="png")
             parts = _split_png_vertical_halves(raw)
             if len(parts) == 2:
-                at = datetime.now(tz)
-                return parts, _format_captured_at(at)
+                return parts, cap_time
             if not parts:
                 log.warning("p0 graph screenshot: split failed — posting single full_page PNG")
             else:
                 log.warning("p0 graph screenshot: unexpected split part count=%s — single PNG", len(parts))
-            at = datetime.now(tz)
-            return [raw], _format_captured_at(at)
+            return [raw], cap_time
+        if clip:
+            try:
+                raw = page.screenshot(full_page=True, type="png", clip=clip)
+                return [raw], cap_time
+            except Exception as e:
+                log.warning("p0 graph screenshot: clipped screenshot failed, falling back: %s", e)
         raw = page.screenshot(full_page=full_page, type="png")
-        at = datetime.now(tz)
-        return [raw], _format_captured_at(at)
+        return [raw], cap_time
 
     def _wait_for_grafana_panels_if_configured(page) -> None:
         panel_timeout = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
@@ -313,7 +412,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
             page.wait_for_timeout(wait_ms)
 
     launch_args = _config.get_p0_graph_screenshot_chromium_args()
-    snap_full = split_halves or full_page
+    snap_full = split_halves or full_page or bool(clip_selectors)
     with sync_playwright() as p:
         if user_data:
             log.info("p0 graph screenshot: using persistent profile (Grafana session) at %s", user_data)
