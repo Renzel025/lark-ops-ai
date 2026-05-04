@@ -261,9 +261,13 @@ def _is_explicit_p0_negation(text: str) -> bool:
     return False
 
 
-# RCA / postmortem wording: "...resulting in a **P0 issue**" matches ``\\bp0\\b`` but is not a VC declaration.
+# RCA / postmortem wording: "P0 issue(s)", "recently … p0 issues …" match ``\\bp0\\b`` but are not a VC declaration.
 _P0_ISSUE_PROSE_PHRASE_RE = re.compile(
-    r"(?is)\b(?:a|an|the)\s+p0\s+issue\b|\bp0\s+issue\b"
+    r"(?is)"
+    r"\b(?:a|an|the)\s+p0\s+issues?\b|"
+    r"\bp0\s+issues?\b|"
+    r"\b(?:a|an|the)\s+priority\s*0\s+issues?\b|"
+    r"\bpriority\s*0\s+issues?\b"
 )
 
 # If any of these appear, treat message as possible real escalation even when it also says "P0 issue".
