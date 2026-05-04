@@ -244,6 +244,19 @@ def _is_explicit_p0_negation(text: str) -> bool:
         return True
     if re.search(r"(?is)\b(?:not|without)\s+(?:a\s+)?p0\b", t):
         return True
+    # "will not be consider(ed) as p0" — ``not`` and ``p0`` are not adjacent (old pattern missed this).
+    if re.search(
+        r"(?is)\b(?:will|would)\s+not\s+(?:be\s+)?consider\w*\s+as\s+(?:a\s+)?p0\b",
+        t,
+    ):
+        return True
+    if re.search(r"(?is)\bnot\s+consider\w*\s+as\s+(?:a\s+)?p0\b", t):
+        return True
+    if re.search(
+        r"(?is)\b(?:does|do|did)\s+not\s+(?:qualify|count)\s+(?:as\s+)?(?:a\s+)?p0\b",
+        t,
+    ):
+        return True
     return False
 
 
