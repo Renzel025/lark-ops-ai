@@ -10,6 +10,8 @@ from p0_logic.config import (
     get_incident_group_chat_ids,
     get_overview_target_chat_id_for_source_incident,
     get_p0_keyword_groq_gate,
+    get_p0_keyword_supplemental_skip_regex,
+    get_p0_keyword_use_builtin_context_filters,
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_allow_asker_self_yes,
     get_p0_thread_confirm_asker_open_ids,
@@ -145,6 +147,47 @@ def _is_question_about_priority(text: str) -> bool:
     if _IF_OR_WHETHER_PRIORITY_CLAUSE_RE.search(t):
         return True
     return bool(_QUESTION_PRIORITY_PHRASE_RE.search(t))
+
+
+# Polite asks often omit ``?`` on Lark (e.g. "may we know what are the findings of p0 last tuesday").
+_P0_POLITE_INFO_ASK_RE = re.compile(
+    r"(?is)\b(?:may|could)\s+we\s+(?:know|ask|see|confirm|clarify|understand)(?:\s+more)?\b"
+    r"|\bcan\s+we\s+(?:know|ask|see|confirm|clarify|understand)(?:\s+more)?\b"
+)
+
+# ``p0`` / ``priority 0`` with a **past** calendar anchor (RCA / "last week's bridge"), not a fresh declaration.
+_P0_RELATIVE_DAY = (
+    r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b"
+)
+_P0_WITH_PAST_TIME_ANCHOR_RE = re.compile(
+    r"(?is)(?:\b(?:p0|priority\s*0)\b.{0,120}?\b(?:last|past)\s+(?:"
+    + _P0_RELATIVE_DAY
+    + r"|week|month)\b"
+    r"|\b(?:last|past)\s+(?:"
+    + _P0_RELATIVE_DAY
+    + r"|week|month)\b.{0,120}?\b(?:p0|priority\s*0)\b"
+    r"|\b(?:p0|priority\s*0)\b.{0,120}?\byesterday\b"
+    r"|\byesterday\b.{0,120}?\b(?:p0|priority\s*0)\b)"
+)
+
+
+def _is_p0_informational_ask_or_past_reference(text: str) -> bool:
+    """
+    True when ``p0`` / ``priority 0`` appears in an **informational** question (no trailing ``?``)
+    or next to a **past** date/week/month anchor — not a request to open a new bridge.
+
+    Skipped when ``_P0_MEETING_OR_DECLARE_HINT_RE`` matches (escalate / declare / meeting intent).
+    """
+    t = (text or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return False
+    if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
+        return False
+    if _P0_POLITE_INFO_ASK_RE.search(t):
+        return True
+    if _P0_WITH_PAST_TIME_ANCHOR_RE.search(t):
+        return True
+    return False
 
 
 def _is_pasted_meeting_invite_footer(text: str) -> bool:
@@ -983,17 +1026,32 @@ def process_message(
                     text_raw[:200],
                 )
                 return
-            if _is_p0_issue_prose_without_meeting_intent(text_raw):
+            if get_p0_keyword_use_builtin_context_filters():
+                if _is_p0_informational_ask_or_past_reference(text_raw):
+                    log.info(
+                        "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
+                        "text_head=%r",
+                        text_raw[:200],
+                    )
+                    return
+                if _is_p0_issue_prose_without_meeting_intent(text_raw):
+                    log.info(
+                        "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
+                        "no declare/meeting intent) text_head=%r",
+                        text_raw[:200],
+                    )
+                    return
+                if _is_p0_inside_existing_meeting_context(text_raw):
+                    log.info(
+                        "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
+                        "text_head=%r",
+                        text_raw[:200],
+                    )
+                    return
+            sup_re = get_p0_keyword_supplemental_skip_regex()
+            if sup_re is not None and sup_re.search(text_raw):
                 log.info(
-                    "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
-                    "no declare/meeting intent) text_head=%r",
-                    text_raw[:200],
-                )
-                return
-            if _is_p0_inside_existing_meeting_context(text_raw):
-                log.info(
-                    "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
-                    "text_head=%r",
+                    "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
                     text_raw[:200],
                 )
                 return

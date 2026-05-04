@@ -571,10 +571,45 @@ def get_p0_keyword_groq_gate() -> bool:
     ``P0_KEYWORD_GROQ_GATE`` — if ``1``, after regex filters pass, call Groq once to decide whether
     the message is a **new** P0 bridge declaration vs a passing mention (e.g. status inside an
     existing P0 meeting). Default ``0``.
+
+    This is the **semantic** alternative to growing a long list of hard-coded heuristics in code;
+    enable it when informal chat phrasing keeps bypassing rule-based filters.
     """
     reload_env_runtime()
     v = (os.getenv("P0_KEYWORD_GROQ_GATE") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_keyword_use_builtin_context_filters() -> bool:
+    """
+    ``P0_KEYWORD_USE_BUILTIN_CONTEXT_FILTERS`` — if ``1`` (default), apply built-in heuristics
+    (issue prose / in-meeting / informational or past-date phrasing) before opening a VC.
+
+    Set ``0`` to **disable** those code-based checks and rely on ``P0_KEYWORD_GROQ_GATE``
+    and/or ``P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX`` instead (recommended: enable Groq if you turn this off).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_USE_BUILTIN_CONTEXT_FILTERS") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def get_p0_keyword_supplemental_skip_regex() -> Optional[re.Pattern[str]]:
+    """
+    ``P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX`` — optional Python regex (``re.IGNORECASE | re.DOTALL``).
+    If it matches the message **anywhere** (after ``p0`` is already present), the keyword VC trigger
+    is skipped. Lets you tune false positives via **config**, without a code deploy.
+
+    Invalid patterns log a warning and are ignored.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX") or "").strip()
+    if not raw:
+        return None
+    try:
+        return re.compile(raw, re.IGNORECASE | re.DOTALL)
+    except re.error as e:
+        log.warning("P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX invalid (ignored): %s", e)
+        return None
 
 
 def get_p0_thread_confirm_toplevel_grace_sec() -> float:
