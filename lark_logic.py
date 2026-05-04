@@ -40,6 +40,43 @@ log = logging.getLogger("lark-ops-ai")
 
 WIKI_GROUP_CHAT_ID = os.getenv("WIKI_GROUP_CHAT_ID", "").strip()
 
+# Lark may deliver ``im.message.receive_v1`` twice for one user send (e.g. main feed + thread copy)
+# with different ``message_id`` but the same ``create_time`` and text — dedupe keyword VC triggers.
+_KEYWORD_TRIGGER_DEDUPE: Dict[str, float] = {}
+_KEYWORD_TRIGGER_DEDUPE_LOCK = threading.Lock()
+_KEYWORD_TRIGGER_DEDUPE_TTL_SEC = 25.0
+
+
+def _keyword_trigger_dedupe_key(
+    chat_id: str,
+    user_open_id: str,
+    message_id: str,
+    message_create_time: str,
+    text_raw: str,
+) -> str:
+    norm = " ".join((text_raw or "").split())
+    ct = (message_create_time or "").strip()
+    if ct:
+        return f"kw:{chat_id}:{user_open_id}:{ct}:{norm}"
+    mid = (message_id or "").strip()
+    return f"kw:{chat_id}:{user_open_id}:mid:{mid}:{norm}"
+
+
+def _try_consume_keyword_trigger_dedupe(key: str) -> bool:
+    """
+    True = first delivery for this key within TTL (proceed with P0/P1 keyword action).
+    False = duplicate webhook (skip — avoids double ``start_p0`` / double P1 card).
+    """
+    now = time.monotonic()
+    with _KEYWORD_TRIGGER_DEDUPE_LOCK:
+        for k, t in list(_KEYWORD_TRIGGER_DEDUPE.items()):
+            if now - t > _KEYWORD_TRIGGER_DEDUPE_TTL_SEC:
+                del _KEYWORD_TRIGGER_DEDUPE[k]
+        if key in _KEYWORD_TRIGGER_DEDUPE:
+            return False
+        _KEYWORD_TRIGGER_DEDUPE[key] = now
+        return True
+
 # Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0") — case-insensitive.
 # Questions ("is this p0?", "can this be a p1?") are ignored via _is_question_about_priority().
 P0_KEYWORD_RE = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
@@ -208,6 +245,45 @@ def _is_explicit_p0_negation(text: str) -> bool:
     if re.search(r"(?is)\b(?:not|without)\s+(?:a\s+)?p0\b", t):
         return True
     return False
+
+
+# RCA / postmortem wording: "...resulting in a **P0 issue**" matches ``\\bp0\\b`` but is not a VC declaration.
+_P0_ISSUE_PROSE_PHRASE_RE = re.compile(
+    r"(?is)\b(?:a|an|the)\s+p0\s+issue\b|\bp0\s+issue\b"
+)
+
+# If any of these appear, treat message as possible real escalation even when it also says "P0 issue".
+_P0_MEETING_OR_DECLARE_HINT_RE = re.compile(
+    r"(?is)\b(?:"
+    r"declar\w*|"
+    r"escalat\w*|"
+    r"start(?:ing)?\s+(?:a\s+)?(?:the\s+)?(?:p0\s+)?(?:bridge\s+)?meeting\b|"
+    r"create\s+(?:a\s+)?(?:p0\s+)?meeting\b|"
+    r"open(?:ing)?\s+(?:a\s+)?p0(?:\s+meeting|\s+bridge)?\b|"
+    r"need\s+(?:a\s+)?p0\s+meeting\b|"
+    r"p0\s+meeting\b|"
+    r"p0\s+bridge\b|"
+    r"(?:we(?:'re|\s+are)|i(?:'m|s))\s+(?:on|in)\s+p0\b|"
+    r"going\s+(?:to\s+)?p0\b|"
+    r"treat(?:ed|ing)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?p0\b|"
+    r"tag(?:ged|ging)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?p0\b"
+    r")\b"
+)
+
+
+def _is_p0_issue_prose_without_meeting_intent(text: str) -> bool:
+    """
+    True when ``p0`` appears mainly as a **severity label** ("P0 issue") in explanatory text, not as
+    instruction to open the emergency bridge.
+    """
+    t = (text or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return False
+    if not _P0_ISSUE_PROSE_PHRASE_RE.search(t):
+        return False
+    if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
+        return False
+    return True
 
 
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
@@ -714,6 +790,7 @@ def process_message(
 
     message_type = str(kwargs.get("message_type") or "").strip().lower()
     message_id = str(kwargs.get("message_id") or "").strip()
+    message_create_time = str(kwargs.get("message_create_time") or "").strip()
     parent_id = str(kwargs.get("parent_id") or "").strip()
     root_id = str(kwargs.get("root_id") or "").strip()
     image_key = str(kwargs.get("image_key") or kwargs.get("file_key") or "").strip()
@@ -858,11 +935,28 @@ def process_message(
                     text_raw[:200],
                 )
                 return
+            if _is_p0_issue_prose_without_meeting_intent(text_raw):
+                log.info(
+                    "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
+                    "no declare/meeting intent) text_head=%r",
+                    text_raw[:200],
+                )
+                return
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
             if chat_has_active_session(chat_id):
                 log.info("Incident group: session already active chat_id=%s", chat_id)
+                return
+
+            kw_dedupe = _keyword_trigger_dedupe_key(
+                chat_id, user_id, message_id, message_create_time, text_raw
+            )
+            if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
+                log.info(
+                    "Incident group: P0 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
+                    chat_id,
+                )
                 return
 
             log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
@@ -898,6 +992,16 @@ def process_message(
                 return
             if get_p1_prompt_pending(chat_id):
                 log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
+                return
+
+            kw_dedupe = _keyword_trigger_dedupe_key(
+                chat_id, user_id, message_id, message_create_time, text_raw
+            )
+            if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
+                log.info(
+                    "Incident group: P1 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
+                    chat_id,
+                )
                 return
 
             log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)

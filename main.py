@@ -665,6 +665,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
         chat_id = (msg.get("chat_id") or "").strip()
         chat_type = (msg.get("chat_type") or "").strip().lower()
         message_id = (msg.get("message_id") or "").strip()
+        message_create_time = (msg.get("create_time") or "").strip()
         parent_id = (msg.get("parent_id") or "").strip()
         root_id = (msg.get("root_id") or "").strip()
 
@@ -735,6 +736,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             GROQ_API_KEY,
             message_type=msg_type,
             message_id=message_id,
+            message_create_time=message_create_time,
             parent_id=parent_id,
             root_id=root_id,
             image_key=image_keys[0] if image_keys else "",

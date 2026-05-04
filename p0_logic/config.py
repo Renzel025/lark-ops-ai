@@ -844,18 +844,35 @@ def get_p0_graph_screenshot_full_document() -> bool:
 
 def get_p0_graph_screenshot_split_vertical_halves() -> bool:
     """
-    When True: post **two** PNGs — upper area of the dashboard, then content **after scrolling down**.
-
-    - With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1``: prefer **two viewport** captures (scroll the wide
-      dashboard body ~one screen, then shoot again); if the page does not scroll, falls back to **Pillow**
-      cutting one viewport in half (install ``pillow``).
-    - With ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1``: one full-document screenshot, split with Pillow.
-    - Otherwise: prefer **Playwright** vertical clips on a ``full_page`` capture; if that fails, Pillow split
-      or a single PNG.
+    When True: post **multiple** PNGs along the dashboard scroll (see
+    ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT``) or legacy Pillow / clip splits.
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_viewport_scroll_count() -> int:
+    """
+    With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1``: number of **full-viewport** screenshots taken in a row,
+    scrolling the main dashboard down ~one screen between each (less clutter per image for long boards).
+
+    If ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT`` is **unset**: ``2`` when split-halves is on, else ``1``.
+    Clamped to **1–8**.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT") or "").strip()
+    if raw:
+        try:
+            return max(1, min(int(raw), 8))
+        except ValueError:
+            log.warning(
+                "P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT=%r invalid — using split default",
+                raw,
+            )
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES") or "0").strip().lower()
+    split = v in ("1", "true", "yes", "on")
+    return 2 if split else 1
 
 
 def get_p0_graph_screenshot_goto_wait_until() -> str:

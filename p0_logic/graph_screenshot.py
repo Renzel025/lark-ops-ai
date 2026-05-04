@@ -12,10 +12,7 @@ matches an **inner** ``.scrollbar-view`` (one panel’s scroller), so you only g
 
 **Two Lark-style images (top / bottom of *what’s on screen* — like your refs):** set
 ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` + ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` and leave
-``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=0``. That captures the **viewport at scroll top**, then **scrolls the
-main dashboard down by ~one viewport** and captures again (two different “pages” of panels — not a
-50/50 pixel crop of one frame). If the page does not scroll, falls back to Pillow split of a single
-viewport. ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` is **full document** height (``full_page=True``) — often
+``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=0``. That captures the **viewport at scroll top**, then scrolls the main dashboard and takes **N** full-viewport shots (``N`` = ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT``, default **2** when split-halves is on — use **3** or **4** for less clutter per image). If the page does not scroll, falls back to Pillow halving one viewport. ``P0_GRAPH_SCREENSHOT_FULL_DOCUMENT=1`` is **full document** height (``full_page=True``) — often
 an enormous, half-empty strip when Grafana’s layout is tall; use only when you really want entire scroll.
 
 For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
@@ -373,36 +370,43 @@ def _scroll_pair_reset_top(page, scroll_sel: Optional[str]) -> None:
         pass
 
 
-def _compute_viewport_pair_scroll_delta(
+def _compute_next_viewport_scroll_delta(
     page, scroll_sel: Optional[str], viewport_h: int
 ) -> int:
-    if scroll_sel:
-        m = _scrollbar_virtualized_metrics(page, scroll_sel)
-        if m:
-            sh, ch = m
-            max_scroll = max(0, sh - ch)
-            if max_scroll <= 0:
-                return 0
-            delta = min(max_scroll, max(int(ch * 0.92), 1))
-            return delta
+    """How many px to scroll **from current** position (element or window), capped ~0.92× viewport height."""
     try:
         raw = page.evaluate(
-            """() => {
+            """({ sel }) => {
+              if (sel) {
+                const e = document.querySelector(sel);
+                if (!e) return 0;
+                const st = Math.ceil(e.scrollTop || 0);
+                const ch = Math.ceil(e.clientHeight || 0);
+                const sh = Math.ceil(e.scrollHeight || 0);
+                const maxS = Math.max(0, sh - ch);
+                const room = maxS - st;
+                if (room <= 4) return 0;
+                const step = Math.max(Math.floor(ch * 0.92), 1);
+                return Math.min(room, step);
+              }
               const se = document.scrollingElement || document.documentElement;
-              const sh = Math.max(se ? se.scrollHeight : 0, document.body ? document.body.scrollHeight : 0);
-              const ch = window.innerHeight || se.clientHeight || 720;
-              return { sh: Math.ceil(sh), ch: Math.ceil(ch) };
-            }"""
+              const st = Math.ceil(window.scrollY || se.scrollTop || 0);
+              const ih = Math.ceil(window.innerHeight || 720);
+              const sh = Math.max(
+                Math.ceil(se.scrollHeight || 0),
+                document.body ? Math.ceil(document.body.scrollHeight || 0) : 0
+              );
+              const maxS = Math.max(0, sh - ih);
+              const room = maxS - st;
+              if (room <= 4) return 0;
+              const step = Math.max(Math.floor(ih * 0.92), 1);
+              return Math.min(room, step);
+            }""",
+            {"sel": scroll_sel},
         )
-        sh = int(raw["sh"])
-        ch = int(raw["ch"])
-        max_scroll = max(0, sh - ch)
-        if max_scroll <= 0:
-            return 0
-        vh = max(int(viewport_h or ch), 240)
-        return min(max_scroll, max(int(vh * 0.92), 1))
+        return max(0, int(raw))
     except Exception:
-        return max(1, int(max(viewport_h, 720) * 0.92))
+        return 0
 
 
 def _apply_viewport_pair_scroll(page, scroll_sel: Optional[str], delta: int) -> None:
@@ -422,42 +426,61 @@ def _apply_viewport_pair_scroll(page, scroll_sel: Optional[str], delta: int) -> 
         page.evaluate("(d) => window.scrollBy(0, d)", delta)
 
 
-def _viewport_scroll_pair_screenshots(
+def _viewport_scroll_chain_screenshots(
     page,
     viewport_h: int,
+    num_pages: int,
 ) -> List[bytes]:
     """
-    Two viewport-sized PNGs: first at scroll top, second after scrolling the main dashboard down by
-    ~one viewport (shows below-the-fold panels). Returns [] if the page does not scroll enough.
+    ``num_pages`` full-viewport PNGs: scroll top first, then ~one viewport steps. Stops early if no
+    more scroll room. Fixes **incremental** scroll (each step from current ``scrollTop``).
     """
+    n = max(1, min(int(num_pages), 8))
     scroll_sel: Optional[str] = None
+    pngs: List[bytes] = []
     try:
         _clear_p0_dash_page_scroll_marks(page)
         if _mark_wide_dashboard_scroll_container(page):
             scroll_sel = "[data-p0-dash-page-scroll='1']"
         _scroll_pair_reset_top(page, scroll_sel)
         page.wait_for_timeout(420)
-        p1 = page.screenshot(full_page=False, type="png")
-        delta = _compute_viewport_pair_scroll_delta(page, scroll_sel, viewport_h)
-        if delta <= 0:
+        for i in range(n):
+            shot = page.screenshot(full_page=False, type="png")
+            if shot:
+                pngs.append(shot)
+            if i >= n - 1:
+                break
+            delta = _compute_next_viewport_scroll_delta(page, scroll_sel, viewport_h)
+            if delta <= 0:
+                log.info(
+                    "p0 graph screenshot: viewport scroll chain stops after %s page(s) — no more overflow",
+                    len(pngs),
+                )
+                break
             log.info(
-                "p0 graph screenshot: viewport scroll pair skipped — no vertical overflow (delta=0)"
+                "p0 graph screenshot: viewport scroll chain step %s/%s delta=%s sel=%s",
+                i + 1,
+                n,
+                delta,
+                scroll_sel or "window",
             )
-            return []
-        log.info(
-            "p0 graph screenshot: viewport scroll pair delta=%s scroll_sel=%s",
-            delta,
-            scroll_sel or "window",
-        )
-        _apply_viewport_pair_scroll(page, scroll_sel, delta)
-        page.wait_for_timeout(680)
-        p2 = page.screenshot(full_page=False, type="png")
-        if p1 and p2:
-            return [p1, p2]
-        return []
+            _apply_viewport_pair_scroll(page, scroll_sel, delta)
+            page.wait_for_timeout(680)
+        if len(pngs) >= 2:
+            log.info(
+                "p0 graph screenshot: viewport scroll chain captured %s page(s) (requested %s)",
+                len(pngs),
+                n,
+            )
+        elif n >= 2 and len(pngs) < 2:
+            log.info(
+                "p0 graph screenshot: viewport scroll chain got %s page(s) — may fallback to Pillow",
+                len(pngs),
+            )
+        return pngs
     except Exception as e:
-        log.warning("p0 graph screenshot: viewport scroll pair failed: %s", e)
-        return []
+        log.warning("p0 graph screenshot: viewport scroll chain failed: %s", e)
+        return pngs
     finally:
         _scroll_pair_reset_top(page, scroll_sel)
         _clear_p0_dash_page_scroll_marks(page)
@@ -688,7 +711,8 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
 def _capture_png_payloads() -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
-    With ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1``, returns two blobs (viewport scroll pair or Pillow halves).
+    With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` and ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT`` > 1 (or split
+    on with default 2), returns one PNG per scroll step (up to 8).
     """
     from . import config as _config
 
@@ -721,13 +745,20 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
             log.info(
                 "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip/body clip chain"
             )
-            if split_halves:
-                scroll_parts = _viewport_scroll_pair_screenshots(page, h)
-                if len(scroll_parts) == 2:
+            scroll_n = _config.get_p0_graph_screenshot_viewport_scroll_count()
+            if scroll_n >= 2:
+                scroll_parts = _viewport_scroll_chain_screenshots(page, h, scroll_n)
+                if len(scroll_parts) >= 2:
+                    return scroll_parts, cap_time
+                if len(scroll_parts) == 1:
+                    if split_halves:
+                        halved = _split_png_vertical_halves(scroll_parts[0])
+                        if len(halved) == 2:
+                            return halved, cap_time
                     return scroll_parts, cap_time
                 log.info(
-                    "p0 graph screenshot: viewport scroll pair missing or no overflow — "
-                    "fallback Pillow split on single viewport (install pillow for two PNGs)"
+                    "p0 graph screenshot: viewport scroll chain empty — "
+                    "fallback single viewport (Pillow split if split_halves)"
                 )
             raw = page.screenshot(full_page=False, type="png")
             if split_halves:
@@ -889,9 +920,18 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         at2 = datetime.now(tz)
         cap2 = _format_captured_at(at2)
         if split_halves and _config.get_p0_graph_screenshot_viewport_only():
-            pair = _viewport_scroll_pair_screenshots(page, h)
-            if len(pair) == 2:
-                pngs2 = pair
+            n_pages = _config.get_p0_graph_screenshot_viewport_scroll_count()
+            if n_pages >= 2:
+                chain = _viewport_scroll_chain_screenshots(page, h, n_pages)
+                if len(chain) >= 2:
+                    pngs2 = chain
+                elif len(chain) == 1:
+                    halved = _split_png_vertical_halves(chain[0])
+                    pngs2 = halved if len(halved) == 2 else chain
+                else:
+                    raw = page.screenshot(full_page=False, type="png")
+                    parts = _split_png_vertical_halves(raw)
+                    pngs2 = parts if len(parts) == 2 else [raw]
             else:
                 raw = page.screenshot(full_page=False, type="png")
                 parts = _split_png_vertical_halves(raw)
