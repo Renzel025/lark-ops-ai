@@ -9,6 +9,7 @@ from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
     get_incident_group_chat_ids,
     get_overview_target_chat_id_for_source_incident,
+    get_p0_keyword_groq_gate,
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_allow_asker_self_yes,
     get_p0_thread_confirm_asker_open_ids,
@@ -19,7 +20,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_use_groq,
     get_p0_trigger_ignore_open_ids,
 )
-from p0_logic.groq_client import groq_thread_confirm_affirms_p0
+from p0_logic.groq_client import groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
@@ -295,6 +296,36 @@ def _is_p0_issue_prose_without_meeting_intent(text: str) -> bool:
     if not _P0_ISSUE_PROSE_PHRASE_RE.search(t):
         return False
     if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
+        return False
+    return True
+
+
+# Status line: "... in / during the P0 meeting" refers to activity inside an **existing** bridge — not a new VC request.
+_P0_IN_EXISTING_MEETING_PHRASE_RE = re.compile(
+    r"(?is)\b(?:into|in|during|at|on|within|for|inside)\s+(?:the\s+|a\s+|our\s+)?(?:p0|priority\s*0)\s+meeting\b"
+    r"|(?:in|during|at|on|within)\s+(?:the\s+|a\s+|our\s+)?(?:p0|priority\s*0)\s+(?:call|bridge|huddle)\b"
+)
+# Do not skip when the same line clearly requests opening a **new** P0 meeting.
+_P0_IN_MEETING_CONTEXT_OVERRIDE_RE = re.compile(
+    r"(?is)\b(?:"
+    r"start(?:ing)?\s+(?:a\s+|the\s+|our\s+)?(?:new\s+)?p0\s+meeting\b|"
+    r"open(?:ing)?\s+(?:a\s+|the\s+)?p0\s+meeting\b|"
+    r"create\s+(?:a\s+|the\s+)?p0\s+meeting\b|"
+    r"need\s+(?:a\s+|the\s+)?(?:new\s+)?p0\s+meeting\b|"
+    r"declar\w*\s+(?:a\s+|the\s+)?p0\b|"
+    r"escalat\w*\s+(?:to\s+)?(?:a\s+|the\s+)?p0\b"
+    r")\b"
+)
+
+
+def _is_p0_inside_existing_meeting_context(text: str) -> bool:
+    """True when P0 appears only as *where* work happens (existing meeting/call), not a new bridge request."""
+    t = (text or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return False
+    if not _P0_IN_EXISTING_MEETING_PHRASE_RE.search(t):
+        return False
+    if _P0_IN_MEETING_CONTEXT_OVERRIDE_RE.search(t):
         return False
     return True
 
@@ -955,12 +986,34 @@ def process_message(
                     text_raw[:200],
                 )
                 return
+            if _is_p0_inside_existing_meeting_context(text_raw):
+                log.info(
+                    "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
+                    "text_head=%r",
+                    text_raw[:200],
+                )
+                return
             if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                 log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                 return
             if chat_has_active_session(chat_id):
                 log.info("Incident group: session already active chat_id=%s", chat_id)
                 return
+
+            if get_p0_keyword_groq_gate():
+                gv = groq_p0_keyword_declares_new_bridge(text_raw)
+                if gv is False:
+                    log.info(
+                        "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: not a new bridge declaration) "
+                        "text_head=%r",
+                        text_raw[:200],
+                    )
+                    return
+                if gv is None:
+                    log.warning(
+                        "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
+                        text_raw[:200],
+                    )
 
             kw_dedupe = _keyword_trigger_dedupe_key(
                 chat_id, user_id, message_id, message_create_time, text_raw

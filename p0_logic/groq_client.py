@@ -222,6 +222,46 @@ def groq_thread_confirm_affirms_p0(question_text: str, reply_text: str) -> Optio
     return None
 
 
+def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
+    """
+    Classify whether **message_text** is asking to **start/open** a **new** emergency P0 video bridge,
+    vs mentioning P0 in passing (status inside an existing P0 meeting, RCA wording, etc.).
+
+    Returns:
+        ``True`` / ``False`` when JSON is parsed; ``None`` on missing key/API/parse failure
+        — callers should **fail-open** (preserve keyword trigger) so an outage does not block real incidents.
+    """
+    if not GROQ_API_KEY:
+        return None
+    t = (message_text or "").strip()
+    if not t:
+        return None
+    t = t[:4500]
+    system_prompt = (
+        "You triage Lark chat lines for an on-call bot.\n"
+        "A **new P0 bridge** is when someone asks to open/start/create/escalate to an emergency P0 meeting "
+        "or bridge for a new incident (e.g. declare P0, start P0, need P0 meeting now, escalated to P0).\n\n"
+        "Set declares_new_p0=false when the message is only:\n"
+        "- a status update **inside** an already-running P0 meeting or bridge "
+        '(e.g. "checking the issue in the P0 meeting", "discussing in P0 call");\n'
+        "- narrative or RCA describing severity (\"this was a P0 issue\");\n"
+        "- questions or negations without a clear request to open a **new** bridge.\n\n"
+        "Output ONLY valid JSON: {\"declares_new_p0\": true} or {\"declares_new_p0\": false}"
+    )
+    user_prompt = f"MESSAGE:\n{t}"
+    raw = groq_chat_once(system_prompt, user_prompt, max_tokens=120)
+    obj = _parse_json_object(raw or "")
+    if not obj:
+        log.warning("groq_p0_keyword: JSON parse failed head=%s", (raw or "")[:200])
+        return None
+    v = obj.get("declares_new_p0")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return None
+
+
 def _scrub_issue_source_for_model(issue_source: str) -> str:
     src = (issue_source or "").strip()
     if not src:

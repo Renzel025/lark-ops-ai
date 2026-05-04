@@ -566,6 +566,17 @@ def get_p0_thread_confirm_use_groq() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_keyword_groq_gate() -> bool:
+    """
+    ``P0_KEYWORD_GROQ_GATE`` — if ``1``, after regex filters pass, call Groq once to decide whether
+    the message is a **new** P0 bridge declaration vs a passing mention (e.g. status inside an
+    existing P0 meeting). Default ``0``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_GROQ_GATE") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_thread_confirm_toplevel_grace_sec() -> float:
     """
     ``P0_THREAD_CONFIRM_TOPLEVEL_GRACE_SEC`` — after the duty user arms **\"is this P0?\"**,
