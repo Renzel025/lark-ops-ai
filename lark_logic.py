@@ -382,7 +382,7 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
     """
     Short, unmistakable **declarations** (not questions). Groq gate often false-negatives these.
 
-    Examples: "this is p0", "it's p0", whole-line "p0".
+    Examples: "this is p0", "it's p0", whole-line "p0", "we tag this issue as p0".
     """
     t = (text or "").strip()
     if not t or not P0_KEYWORD_RE.search(t):
@@ -395,8 +395,26 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
         return True
     if re.search(r"(?is)\bit(?:'s|\s+is)\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
         return True
+    # "yes team this issue is p0" — Groq often misses; not "is this issue p0?" (question path).
+    if re.search(
+        r"(?is)\b(?:this|that|the)\s+issue\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+        t,
+    ):
+        return True
     if re.match(r"(?is)^(?:p0|priority\s*0)\s*[!?.…]*\s*$", t):
         return True
+    # "we tag … as p0" — modal + we + tag stays with Groq / thread-confirm ("can we tag…").
+    if not re.search(r"(?is)\b(?:can|could|should|may|would)\s+we\s+(?:tag|treat)", t):
+        if re.search(
+            r"(?is)\b(?:i|we)\s+treat(?:ed|ing)?\s+(?:this|that|it|the\s+issue|this\s+issue)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
+        if re.search(
+            r"(?is)\b(?:i|we)\s+tag(?:ged|ging)?\s+(?:this|that|it|the\s+issue|this\s+issue)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
     return False
 
 
@@ -1091,7 +1109,7 @@ def process_message(
                     gv = groq_p0_keyword_declares_new_bridge(text_raw)
                     if gv is False:
                         log.info(
-                            "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: not a new bridge declaration) "
+                            "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
                             "text_head=%r",
                             text_raw[:200],
                         )

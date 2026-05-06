@@ -224,8 +224,11 @@ def groq_thread_confirm_affirms_p0(question_text: str, reply_text: str) -> Optio
 
 def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
     """
-    Classify whether **message_text** is asking to **start/open** a **new** emergency P0 video bridge,
-    vs mentioning P0 in passing (status inside an existing P0 meeting, RCA wording, etc.).
+    Classify whether **message_text** is a **real P0 declaration** for the *current* incident/workflow
+    (someone asserts severity is P0 / declares escalation / asks to start P0 handling),
+    vs. merely mentioning \"p0\" in passing (chat about an existing bridge, RCA story, generic plural \"p0 issues\", etc.).
+
+    Note: JSON field name is historical (``declares_new_p0``); semantics are **P0 declaration / escalation**, not only \"open VC\".
 
     Returns:
         ``True`` / ``False`` when JSON is parsed; ``None`` on missing key/API/parse failure
@@ -238,14 +241,22 @@ def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
         return None
     t = t[:4500]
     system_prompt = (
-        "You triage Lark chat lines for an on-call bot.\n"
-        "A **new P0 bridge** is when someone asks to open/start/create/escalate to an emergency P0 meeting "
-        "or bridge for a new incident (e.g. declare P0, start P0, need P0 meeting now, escalated to P0).\n\n"
-        "Set declares_new_p0=false when the message is only:\n"
-        "- a status update **inside** an already-running P0 meeting or bridge "
-        '(e.g. "checking the issue in the P0 meeting", "discussing in P0 call");\n'
-        "- narrative or RCA describing severity (\"this was a P0 issue\");\n"
-        "- questions or negations without a clear request to open a **new** bridge.\n\n"
+        "You triage Lark chat lines for an on-call bot. The bot starts a P0 incident flow when someone "
+        "**clearly declares or assigns P0** to the situation they are talking about (right now), not when "
+        "they only mention the letters \"P0\" casually.\n\n"
+        "declares_new_p0=true when the speaker **asserts** the current issue/situation **is** P0 / **should be "
+        "handled as** P0 / **we treat this as** P0 / **escalat** to P0 / **declare** P0 / needs P0 **now**. "
+        "Short confirmations count, e.g. \"this is p0\", \"this issue is p0\", \"yes team this issue is p0\", "
+        "\"declaring p0\", \"escalated to p0\".\n\n"
+        "declares_new_p0=false when:\n"
+        "- the line is mainly a **question** or **asking permission** (\"is this p0?\", \"can we tag as p0?\", "
+        "\"may we…\") without a firm declaration;\n"
+        "- **negation** or \"not p0\" / only P1;\n"
+        "- **status inside** an already-running P0 meeting/call with **no new** declaration "
+        '(e.g. \"checking in the p0 meeting\", \"discussing on the p0 bridge\");\n'
+        "- **generic or plural** talk (\"p0 issues\", \"the p0 process\") with **no** specific incident declared P0;\n"
+        "- **past/historical** narrative only (\"last week was p0\", \"this was a p0 in 2024\") with no present declaration.\n\n"
+        "When unsure, prefer **true** if the speaker sounds like they are **assigning P0 to the current issue**.\n\n"
         "Output ONLY valid JSON: {\"declares_new_p0\": true} or {\"declares_new_p0\": false}"
     )
     user_prompt = f"MESSAGE:\n{t}"
