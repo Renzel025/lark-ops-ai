@@ -825,7 +825,7 @@ def consume_p1_prompt_for_confirm(chat_id: str, nonce_from_button: str = "") -> 
 
 
 def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: str) -> bool:
-    """Post Yes/No card in the prompt group (``get_overview_target_chat_id_for_source_incident``); caller must set pending first."""
+    """Post Yes/No card in the same chat as meeting cards (``get_session_meeting_card_post_chat_id``)."""
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
     if not chat_id or not token:
@@ -835,7 +835,7 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     if not nonce:
         log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
         return False
-    prompt_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id)
+    prompt_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
     st, body, _ = _lark.post_card_to_chat(prompt_chat, token, _cards.build_p1_meeting_confirm_card(nonce))
     if st != 200:
         log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
@@ -1012,10 +1012,8 @@ def start_p0(
         return
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
-    # All bot-side warnings / errors should land in the prompt/target chat (e.g. emergency-test
-    # group), not in the production source incident chat. Resolves via INCIDENT_OVERVIEW_TARGET_MAP
-    # / OVERVIEW_TARGET_GROUP_CHAT_ID; falls back to source if no target is configured.
-    notify_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id) or chat_id
+    # Bot warnings during start: same chat as meeting cards (incident vs mirror — see config).
+    notify_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
     with _session_disk.exclusive_lock(chat_id):
         if P0_SESSIONS.get(chat_id):
             if silent_when_blocked:
@@ -1056,7 +1054,7 @@ def start_p0(
         if not link:
             _lark.post_text_to_chat(notify_chat, token, "❌ Failed to create Lark VC meeting (reserve/apply).")
             return
-        target_chat = _config.get_overview_target_chat_id_for_source_incident(chat_id)
+        target_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
         chat_label = (source_chat_name or "").strip()
         if not chat_label:
             chat_label = _lark.get_group_chat_name(chat_id, token)

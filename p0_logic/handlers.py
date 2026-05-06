@@ -945,8 +945,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
-            # Post to group first: if this fails, operator still has preview + edit cards in the DM.
-            st, body, _ = _lark.post_card_to_chat(target_chat, tenant_token, card)
+            lark_overview_dest = (
+                _config.get_incident_overview_send_chat_id(src_inc) or target_chat
+            ).strip()
+            if not lark_overview_dest.startswith("oc_"):
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No valid overview destination chat.")
+                return
+            # Post to overview group (may differ from session target_chat when cards stay in incident chat).
+            st, body, _ = _lark.post_card_to_chat(lark_overview_dest, tenant_token, card)
             if st != 200:
                 log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")

@@ -12,6 +12,7 @@ from p0_logic.config import (
     get_p0_keyword_groq_gate,
     get_p0_keyword_supplemental_skip_regex,
     get_p0_keyword_use_builtin_context_filters,
+    get_session_meeting_card_post_chat_id,
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_allow_asker_self_yes,
     get_p0_thread_confirm_asker_open_ids,
@@ -912,13 +913,9 @@ def process_message(
         if not text_raw:
             return
 
-        # All bot prompts/warnings/replies in the incident-group flow should land in the prompt
-        # / target chat (e.g. emergency-test group), not in the production source chat. Resolves
-        # via INCIDENT_OVERVIEW_TARGET_MAP / OVERVIEW_TARGET_GROUP_CHAT_ID; falls back to source
-        # if no target is configured.
-        notify_chat = (
-            get_overview_target_chat_id_for_source_incident(chat_id) or chat_id
-        )
+        # Bot replies from typed incident-group commands: same destination as meeting cards
+        # (incident chat when ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT=1``, else mirror target).
+        notify_chat = get_session_meeting_card_post_chat_id(chat_id) or chat_id
 
         # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
         pend = get_p1_prompt_pending(chat_id)

@@ -124,20 +124,72 @@ def _parse_incident_overview_target_map(raw: str) -> Dict[str, str]:
 
 
 def get_incident_overview_target_map() -> Dict[str, str]:
-    """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> prompt/overview ``oc_``)."""
+    """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> mirror ``oc_`` for meeting cards when split)."""
     reload_env_runtime()
     return _parse_incident_overview_target_map(os.getenv("INCIDENT_OVERVIEW_TARGET_MAP") or "")
 
 
+def get_incident_overview_send_map() -> Dict[str, str]:
+    """
+    Parsed ``INCIDENT_OVERVIEW_SEND_MAP``: ``source_incident_oc=overview_destination_oc``.
+
+    Used **only** for the final **Send overview** Lark post (see ``handlers.send_preview``).
+    Meeting invite / P1 cards follow ``get_session_meeting_card_post_chat_id`` instead.
+    """
+    reload_env_runtime()
+    return _parse_incident_overview_target_map(os.getenv("INCIDENT_OVERVIEW_SEND_MAP") or "")
+
+
+def get_incident_overview_send_chat_id(source_incident_chat_id: str) -> str:
+    """Resolved overview **post** group for ``source_incident`` from ``INCIDENT_OVERVIEW_SEND_MAP``; empty if unmapped."""
+    sid = (source_incident_chat_id or "").strip()
+    if not sid:
+        return ""
+    m = get_incident_overview_send_map()
+    if sid in m:
+        return m[sid]
+    return ""
+
+
+def get_p0_meeting_cards_in_source_incident_chat() -> bool:
+    """
+    ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT`` — if ``1``, meeting invite / P1 confirm / end summaries
+    post in the **incident** group (where P0 was declared), not the mirror ``INCIDENT_OVERVIEW_TARGET_MAP`` room.
+
+    Use with ``INCIDENT_OVERVIEW_SEND_MAP`` so **Send overview** still lands in emergency / game rooms.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_session_meeting_card_post_chat_id(source_incident_chat_id: str) -> str:
+    """
+    Lark group for **meeting** UX: invite card, P1 yes/no, ended/cancel notices, session ``target_chat``.
+
+    Default: legacy mirror via ``get_overview_target_chat_id_for_source_incident`` (same as before).
+    With ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT=1``: always ``source_incident_chat_id``.
+    """
+    sid = (source_incident_chat_id or "").strip()
+    if not sid:
+        return ""
+    if get_p0_meeting_cards_in_source_incident_chat():
+        return sid
+    return get_overview_target_chat_id_for_source_incident(sid) or sid
+
+
 def get_overview_target_chat_id_for_source_incident(source_incident_chat_id: str) -> str:
     """
-    Where **in-group** meeting / P1 cards and session ``target_chat`` (DM + Send overview) should point.
+    Legacy **mirror** target for meeting cards + DM ``target_chat`` when
+    ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT`` is off (default).
 
     Resolution order:
 
     1. ``INCIDENT_OVERVIEW_TARGET_MAP[source_incident_chat_id]`` if that detection ``oc_`` is listed.
     2. Else ``OVERVIEW_TARGET_GROUP_CHAT_ID`` / ``P0_OVERVIEW_POST_CHAT_ID`` if set (single global prompt group).
     3. Else ``source_incident_chat_id`` (cards and overview stay in the detection group).
+
+    For **Send overview** only, see ``get_incident_overview_send_chat_id`` / ``INCIDENT_OVERVIEW_SEND_MAP``.
     """
     sid = (source_incident_chat_id or "").strip()
     if not sid:
@@ -161,7 +213,8 @@ def get_dm_overview_target_chat_id() -> str:
     Where DM drafts / \"Send overview\" attach when **no** active P0 session.
 
     Order: ``OVERVIEW_TARGET_GROUP_CHAT_ID`` / ``P0_OVERVIEW_POST_CHAT_ID`` if set;
-    else if ``INCIDENT_OVERVIEW_TARGET_MAP`` has exactly one ``oc_=oc_`` pair, use the prompt-side ``oc_``;
+    else if ``INCIDENT_OVERVIEW_TARGET_MAP`` has exactly one ``oc_=oc_`` pair, use the mirror-side ``oc_``;
+    else if ``INCIDENT_OVERVIEW_SEND_MAP`` has exactly one pair, use the **send** destination ``oc_``;
     else if exactly **one** incident group is configured, use that ``oc_`` id (common single-group deploys);
     else empty (multiple groups — need env or a live session).
     """
@@ -172,6 +225,9 @@ def get_dm_overview_target_chat_id() -> str:
     m = get_incident_overview_target_map()
     if len(m) == 1:
         return next(iter(m.values()))
+    m_send = get_incident_overview_send_map()
+    if len(m_send) == 1:
+        return next(iter(m_send.values()))
     ids = list(get_incident_group_chat_ids())
     if len(ids) == 1:
         return ids[0]
