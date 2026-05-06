@@ -378,6 +378,28 @@ def _is_p0_inside_existing_meeting_context(text: str) -> bool:
     return True
 
 
+def _is_explicit_direct_p0_declaration(text: str) -> bool:
+    """
+    Short, unmistakable **declarations** (not questions). Groq gate often false-negatives these.
+
+    Examples: "this is p0", "it's p0", whole-line "p0".
+    """
+    t = (text or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return False
+    if _is_explicit_p0_negation(t):
+        return False
+    if re.search(r"(?is)\bthis\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
+        return True
+    if re.search(r"(?is)\bthat\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
+        return True
+    if re.search(r"(?is)\bit(?:'s|\s+is)\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
+        return True
+    if re.match(r"(?is)^(?:p0|priority\s*0)\s*[!?.…]*\s*$", t):
+        return True
+    return False
+
+
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
@@ -1060,19 +1082,25 @@ def process_message(
                 return
 
             if get_p0_keyword_groq_gate():
-                gv = groq_p0_keyword_declares_new_bridge(text_raw)
-                if gv is False:
+                if _is_explicit_direct_p0_declaration(text_raw):
                     log.info(
-                        "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: not a new bridge declaration) "
-                        "text_head=%r",
+                        "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
                         text_raw[:200],
                     )
-                    return
-                if gv is None:
-                    log.warning(
-                        "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
-                        text_raw[:200],
-                    )
+                else:
+                    gv = groq_p0_keyword_declares_new_bridge(text_raw)
+                    if gv is False:
+                        log.info(
+                            "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: not a new bridge declaration) "
+                            "text_head=%r",
+                            text_raw[:200],
+                        )
+                        return
+                    if gv is None:
+                        log.warning(
+                            "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
+                            text_raw[:200],
+                        )
 
             kw_dedupe = _keyword_trigger_dedupe_key(
                 chat_id, user_id, message_id, message_create_time, text_raw

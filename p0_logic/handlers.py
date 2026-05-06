@@ -945,9 +945,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
-            lark_overview_dest = (
-                _config.get_incident_overview_send_chat_id(src_inc) or target_chat
-            ).strip()
+            lark_overview_dest = _config.get_lark_overview_post_chat_id_for_send(src_inc, target_chat).strip()
             if not lark_overview_dest.startswith("oc_"):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No valid overview destination chat.")
                 return

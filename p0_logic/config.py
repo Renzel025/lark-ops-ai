@@ -151,6 +151,39 @@ def get_incident_overview_send_chat_id(source_incident_chat_id: str) -> str:
     return ""
 
 
+def get_p0_overview_post_to_source_incident_chat() -> bool:
+    """
+    ``P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT`` — if ``1``, **Send overview** posts to the **detection**
+    group (where P0 was declared: ``source_incident_chat_id``), not the prompt / mirror session ``target_chat``.
+
+    Use with ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT=0`` and ``INCIDENT_OVERVIEW_TARGET_MAP`` so meeting
+    cards, ended/cancelled, and cooldown bot text stay in the **prompt** group.
+
+    If ``INCIDENT_OVERVIEW_SEND_MAP`` has an entry for this incident ``oc_``, that map still **wins** (broadcast override).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
+    """
+    Lark chat_id for the final **Send overview** card.
+
+    1. ``INCIDENT_OVERVIEW_SEND_MAP[source]`` if set (explicit broadcast destination).
+    2. Else **detection** ``source`` if ``P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT=1``.
+    3. Else ``session_target_chat`` (prompt / mirror from session).
+    """
+    sid = (source_incident_chat_id or "").strip()
+    tc = (session_target_chat or "").strip()
+    mapped = get_incident_overview_send_chat_id(sid)
+    if mapped:
+        return mapped
+    if get_p0_overview_post_to_source_incident_chat() and sid.startswith("oc_"):
+        return sid
+    return tc
+
+
 def get_p0_meeting_cards_in_source_incident_chat() -> bool:
     """
     ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT`` — if ``1``, meeting invite / P1 confirm / end summaries
