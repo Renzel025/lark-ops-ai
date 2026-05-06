@@ -103,6 +103,7 @@ get_overview_target_chat_id_for_source_incident = config.get_overview_target_cha
 get_incident_overview_target_map = config.get_incident_overview_target_map
 get_incident_overview_send_map = config.get_incident_overview_send_map
 get_incident_overview_send_chat_id = config.get_incident_overview_send_chat_id
+get_source_incident_chat_id_for_mirror_target = config.get_source_incident_chat_id_for_mirror_target
 get_p0_overview_post_to_source_incident_chat = config.get_p0_overview_post_to_source_incident_chat
 get_lark_overview_post_chat_id_for_send = config.get_lark_overview_post_chat_id_for_send
 get_p0_meeting_cards_in_source_incident_chat = config.get_p0_meeting_cards_in_source_incident_chat
@@ -216,6 +217,7 @@ __all__ = [
     "get_incident_overview_target_map",
     "get_incident_overview_send_map",
     "get_incident_overview_send_chat_id",
+    "get_source_incident_chat_id_for_mirror_target",
     "get_p0_overview_post_to_source_incident_chat",
     "get_lark_overview_post_chat_id_for_send",
     "get_p0_meeting_cards_in_source_incident_chat",

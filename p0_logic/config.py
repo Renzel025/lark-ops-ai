@@ -151,6 +151,29 @@ def get_incident_overview_send_chat_id(source_incident_chat_id: str) -> str:
     return ""
 
 
+def get_source_incident_chat_id_for_mirror_target(mirror_chat_id: str) -> str:
+    """
+    Reverse of ``INCIDENT_OVERVIEW_TARGET_MAP``: given prompt / mirror ``oc_``, return the detection ``oc_``
+    key when that mapping is **unique**. Used when DM preview lost ``source_incident_chat_id`` but
+    ``target_chat`` (session prompt) is known — so **Send overview** can still post to detection when
+    ``P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT=1``.
+    """
+    mc = (mirror_chat_id or "").strip()
+    if not mc.startswith("oc_"):
+        return ""
+    m = get_incident_overview_target_map()
+    hits = [det for det, pr in m.items() if pr == mc]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        log.warning(
+            "INCIDENT_OVERVIEW_TARGET_MAP: multiple detection chats map to the same prompt %s — "
+            "cannot infer unique overview source",
+            mc[:28],
+        )
+    return ""
+
+
 def get_p0_overview_post_to_source_incident_chat() -> bool:
     """
     ``P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT`` — if ``1``, **Send overview** posts to the **detection**
@@ -173,10 +196,16 @@ def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, sessio
     1. ``INCIDENT_OVERVIEW_SEND_MAP[source]`` if set (explicit broadcast destination).
     2. Else **detection** ``source`` if ``P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT=1``.
     3. Else ``session_target_chat`` (prompt / mirror from session).
+
+    If ``source_incident_chat_id`` is empty but ``session_target_chat`` is the prompt side of
+    ``INCIDENT_OVERVIEW_TARGET_MAP``, reverse-resolve detection so overview can still land in the
+    incident group.
     """
     sid = (source_incident_chat_id or "").strip()
     tc = (session_target_chat or "").strip()
-    mapped = get_incident_overview_send_chat_id(sid)
+    if not sid.startswith("oc_") and tc.startswith("oc_"):
+        sid = get_source_incident_chat_id_for_mirror_target(tc) or sid
+    mapped = get_incident_overview_send_chat_id(sid) if sid.startswith("oc_") else ""
     if mapped:
         return mapped
     if get_p0_overview_post_to_source_incident_chat() and sid.startswith("oc_"):
