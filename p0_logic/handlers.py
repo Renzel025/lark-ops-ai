@@ -949,12 +949,44 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not lark_overview_dest.startswith("oc_"):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No valid overview destination chat.")
                 return
+            log.info(
+                "send_preview: Lark overview destination chat_id=%s (source_incident=%s session_target_chat=%s)",
+                lark_overview_dest,
+                src_inc or "(empty)",
+                target_chat or "(empty)",
+            )
             # Post to overview group (may differ from session target_chat when cards stay in incident chat).
-            st, body, _ = _lark.post_card_to_chat(lark_overview_dest, tenant_token, card)
-            if st != 200:
-                log.error("send_preview failed HTTP=%s body=%s", st, (body or "")[:300])
-                _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send overview to group.")
+            st, body, post_mid = _lark.post_card_to_chat(lark_overview_dest, tenant_token, card)
+            api_ok, lark_code, lark_msg = _lark.lark_im_message_create_ok(body)
+            if st != 200 or not api_ok:
+                log.error(
+                    "send_preview failed HTTP=%s lark_code=%s lark_msg=%r dest=%s body_head=%s",
+                    st,
+                    lark_code,
+                    lark_msg,
+                    lark_overview_dest,
+                    (body or "")[:400],
+                )
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "❌ Lark refused the overview post (see server log: lark_code / bot in group?).",
+                )
                 return
+            post_mid = (post_mid or "").strip()
+            if not post_mid:
+                log.warning(
+                    "send_preview: Lark code=0 but empty message_id — verify group feed dest=%s body_head=%s",
+                    lark_overview_dest,
+                    (body or "")[:350],
+                )
+            else:
+                log.info(
+                    "send_preview: posted overview message_id=%s dest_chat_id=%s (session_target_chat=%s)",
+                    post_mid,
+                    lark_overview_dest,
+                    target_chat,
+                )
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
             if md:
                 if not src_inc:
@@ -1026,6 +1058,21 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                                 st_pv,
                                 sender_open_id,
                                 (body_pv or "")[:400],
+                            )
+                    elif kind == "ok":
+                        st_ok, body_ok = r
+                        if st_ok == 200 and _lark.lark_im_message_create_ok(body_ok)[0]:
+                            log.info(
+                                "send_preview: DM ack posted (\"Overview sent to group\") open_id_tail=%s dest=%s",
+                                sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
+                                lark_overview_dest,
+                            )
+                        else:
+                            log.warning(
+                                "send_preview: DM ack failed HTTP=%s open_id_tail=%s body_head=%s",
+                                st_ok,
+                                sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
+                                (body_ok or "")[:350],
                             )
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)

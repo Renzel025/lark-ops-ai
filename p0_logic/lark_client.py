@@ -179,6 +179,22 @@ def parse_im_message_id_from_response(body: str) -> str:
         return ""
 
 
+def lark_im_message_create_ok(body: str) -> Tuple[bool, int, str]:
+    """
+    Lark ``im/v1/messages`` often returns **HTTP 200** with ``code != 0`` in JSON (e.g. bot not in group).
+    Returns (ok, code, msg). ``ok`` is True only when ``code == 0``.
+    """
+    try:
+        j = json.loads(body or "{}")
+        c = j.get("code")
+        ci = int(c) if c is not None else -1
+        if ci == 0:
+            return True, 0, ""
+        return False, ci, str(j.get("msg") or "")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False, -1, "invalid response json"
+
+
 def post_card_to_chat(chat_id: str, token: str, card: Dict[str, Any]) -> Tuple[int, str, str]:
     t0 = time.perf_counter()
     try:
