@@ -987,6 +987,30 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     lark_overview_dest,
                     target_chat,
                 )
+            fanout_ids = _config.get_overview_detection_fanout_chat_ids()
+            if (
+                fanout_ids
+                and _config.is_overview_post_destination_detection(lark_overview_dest, src_inc, target_chat)
+            ):
+                for oc_extra in fanout_ids:
+                    if oc_extra == lark_overview_dest:
+                        continue
+                    st_f, body_f, mid_f = _lark.post_card_to_chat(oc_extra, tenant_token, card)
+                    ok_f, code_f, msg_f = _lark.lark_im_message_create_ok(body_f)
+                    if st_f == 200 and ok_f:
+                        log.info(
+                            "send_preview: detection fan-out overview message_id=%s dest=%s",
+                            (mid_f or "").strip() or "(none)",
+                            oc_extra,
+                        )
+                    else:
+                        log.warning(
+                            "send_preview: detection fan-out failed HTTP=%s lark_code=%s lark_msg=%r dest=%s",
+                            st_f,
+                            code_f,
+                            msg_f,
+                            oc_extra,
+                        )
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
             if md:
                 if not src_inc:

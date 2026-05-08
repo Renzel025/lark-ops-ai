@@ -189,6 +189,65 @@ def get_p0_overview_post_to_source_incident_chat() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_overview_detection_fanout_chat_ids() -> List[str]:
+    """
+    Extra Lark group chat ids (``oc_...``) that receive a **duplicate** overview card when the primary
+    post lands in a **detection** group (see ``is_overview_post_destination_detection``).
+
+    Comma-separated ``OVERVIEW_DETECTION_FANOUT_CHAT_IDS`` (alias ``P0_OVERVIEW_DETECTION_FANOUT_CHAT_IDS``).
+    Bot must be a member of each group. Empty = disabled.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("OVERVIEW_DETECTION_FANOUT_CHAT_IDS") or os.getenv("P0_OVERVIEW_DETECTION_FANOUT_CHAT_IDS") or ""
+    ).strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        p = part.strip()
+        if not p.startswith("oc_") or len(p) < 12:
+            continue
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def is_overview_post_destination_detection(
+    dest_chat_id: str, source_incident_chat_id: str, session_target_chat: str
+) -> bool:
+    """
+    True when ``dest_chat_id`` is a **detection** room (source-side incident group), i.e. the same
+    overview routing users would call “post to detection”.
+
+    - If ``INCIDENT_OVERVIEW_TARGET_MAP`` is set: ``dest`` is a **key** (detection ``oc_``).
+    - Else: ``dest`` equals the resolved source incident ``oc_`` and that id is in ``INCIDENT_GROUP_IDS``.
+    """
+    d = (dest_chat_id or "").strip()
+    if not d.startswith("oc_"):
+        return False
+    sid = (source_incident_chat_id or "").strip()
+    tc = (session_target_chat or "").strip()
+    if not sid.startswith("oc_") and tc.startswith("oc_"):
+        sid = get_source_incident_chat_id_for_mirror_target(tc) or sid
+    m = get_incident_overview_target_map()
+    if m:
+        return d in m
+    if sid.startswith("oc_") and d == sid and sid in get_incident_group_chat_ids():
+        return True
+    # DM ``create overview …`` uses a non-oc_ placeholder source; final dest equals ``target_chat``.
+    if (
+        (not sid.startswith("oc_"))
+        and d == tc
+        and tc.startswith("oc_")
+        and tc in get_incident_group_chat_ids()
+    ):
+        return True
+    return False
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.
