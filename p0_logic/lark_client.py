@@ -402,6 +402,40 @@ def end_vc_meeting(token: str, meeting_id: str) -> bool:
     return False
 
 
+def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
+    """
+    ``GET /vc/v1/meetings/{meeting_id}/recording`` — use after **recording_ready** if the event has no ``url``.
+
+    Requires scope such as ``vc:record:readonly`` (see Feishu VC docs).
+    """
+    meeting_id = (meeting_id or "").strip()
+    if not meeting_id:
+        return ""
+    headers = {"Authorization": f"Bearer {token}"}
+    last_err = ""
+    for base in VC_BASES:
+        url = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording"
+        try:
+            r = _lark_http().get(url, headers=headers, **_timeout_kw())
+            log.info("VC get recording try: %s -> HTTP=%s", url, r.status_code)
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={(r.text or '')[:200]}"
+                continue
+            j = r.json() if r.text else {}
+            if not isinstance(j, dict) or j.get("code") != 0:
+                last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
+                continue
+            rec = (j.get("data") or {}).get("recording") or {}
+            u = str(rec.get("url") or "").strip()
+            if u:
+                return u
+            last_err = "code=0 but empty recording.url"
+        except Exception as e:
+            last_err = str(e)
+    log.warning("fetch_vc_meeting_recording_url failed meeting_id=%s err=%s", meeting_id[:24], last_err)
+    return ""
+
+
 def get_primary_owner_id() -> str:
     from . import config as _config
     ids = _config.get_owner_ids()

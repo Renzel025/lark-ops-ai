@@ -658,6 +658,12 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             )
             return
 
+        if event_type == "vc.meeting.recording_ready_v1":
+            from p0_logic.vc_recording_fanout import handle_vc_recording_ready_fanout
+
+            handle_vc_recording_ready_fanout(evt, tenant_token)
+            return
+
         msg = evt.get("message", {}) or {}
         if not msg.get("content"):
             return

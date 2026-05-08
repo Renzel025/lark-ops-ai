@@ -248,6 +248,41 @@ def is_overview_post_destination_detection(
     return False
 
 
+def get_vc_recording_fanout_chat_ids() -> List[str]:
+    """
+    When Lark emits **vc.meeting.recording_ready_v1** (Open API reserves only), post the recording link
+    to these ``oc_`` group chats. Comma-separated ``VC_RECORDING_FANOUT_CHAT_IDS`` (alias
+    ``P0_VC_RECORDING_FANOUT_CHAT_IDS``). Bot must be in each group. Empty = disabled.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("VC_RECORDING_FANOUT_CHAT_IDS") or os.getenv("P0_VC_RECORDING_FANOUT_CHAT_IDS") or ""
+    ).strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        p = part.strip()
+        if not p.startswith("oc_") or len(p) < 12:
+            continue
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def get_vc_recording_fanout_topic_substring_filter() -> str:
+    """
+    If non-empty, only forward **recording_ready** when the meeting topic contains this substring
+    (case-insensitive). Reduces noise if the same app creates other API meetings.
+
+    Env: ``VC_RECORDING_FANOUT_TOPIC_SUBSTRING`` (e.g. ``Video meeting`` matching ``VIDEO_MEETING_TOPIC_PREFIX``).
+    """
+    reload_env_runtime()
+    return (os.getenv("VC_RECORDING_FANOUT_TOPIC_SUBSTRING") or "").strip()
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.
