@@ -656,6 +656,9 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             end_p0_session_by_meeting_ref(
                 meeting_ref, tenant_token, meeting_no_fallback=meeting_no_fb
             )
+            from p0_logic.vc_recording_fanout import schedule_recording_fanout_poll_after_meeting_end
+
+            schedule_recording_fanout_poll_after_meeting_end(tenant_token, evt)
             return
 
         if event_type == "vc.meeting.recording_ready_v1":
