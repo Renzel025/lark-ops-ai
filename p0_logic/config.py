@@ -283,6 +283,20 @@ def get_vc_recording_fanout_topic_substring_filter() -> str:
     return (os.getenv("VC_RECORDING_FANOUT_TOPIC_SUBSTRING") or "").strip()
 
 
+def get_vc_recording_fanout_set_permission_enabled() -> bool:
+    """
+    When true (default), after a recording URL exists, call **set_permission** so each fan-out **group**
+    gets **view** on the file (Feishu type=2 group). Fixes \"bot posted the link but members cannot play\".
+
+    Set ``VC_RECORDING_FANOUT_SET_PERMISSION=0`` to skip if your token cannot call that API.
+
+    Requires **vc:record** (authorize/update recording), not only ``vc:record:readonly``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("VC_RECORDING_FANOUT_SET_PERMISSION") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.

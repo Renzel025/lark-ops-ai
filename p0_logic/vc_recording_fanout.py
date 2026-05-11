@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
 from . import config as _config
 from . import lark_client as _lark
@@ -26,6 +26,20 @@ _POLL_ACTIVE: Set[str] = set()
 
 # Seconds to wait after meeting_ended before each poll attempt (total ~3.75 min spread).
 _DEFAULT_POLL_GAPS_SEC = (15, 30, 60, 120)
+
+
+def _usable_recording_url(u: str) -> bool:
+    """
+    Lark sometimes puts a placeholder in event ``url`` (e.g. \"Access restricted\") when the app
+    cannot expose the real Minutes link yet. Only accept real HTTP(S) URLs.
+    """
+    s = (u or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if "access restricted" in low:
+        return False
+    return s.startswith("http://") or s.startswith("https://")
 
 
 def _fmt_duration_ms(raw: str) -> str:
@@ -99,10 +113,43 @@ def fanout_recording_to_chats(
             return True
 
     url = (url_hint or "").strip()
+    if not _usable_recording_url(url):
+        if url:
+            log.info(
+                "vc recording: ignoring non-playable event url head=%r source=%s mid=%s — will try GET",
+                url[:80],
+                source,
+                mid[:20],
+            )
+        url = ""
     if not url:
         url = _lark.fetch_vc_meeting_recording_url(token, mid)
-    if not url:
+    url_resolve_grant_ok: Optional[bool] = None
+    if not _usable_recording_url(url) and _config.get_vc_recording_fanout_set_permission_enabled():
+        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(token, mid, targets)
+        url = _lark.fetch_vc_meeting_recording_url(token, mid)
+    if not _usable_recording_url(url):
+        log.warning(
+            "vc recording fan-out: no playable URL after event/GET%s mid=%s topic_head=%r",
+            " (+set_permission retry)" if _config.get_vc_recording_fanout_set_permission_enabled() else "",
+            mid[:24],
+            topic[:80],
+        )
         return False
+
+    with _FANOUT_LOCK:
+        if mid in _FANOUT_DONE:
+            log.info("vc recording fan-out skip duplicate after fetch meeting_id=%s source=%s", mid[:24], source)
+            return True
+
+    grant_ok = True
+    grant_attempted = False
+    if _config.get_vc_recording_fanout_set_permission_enabled():
+        grant_attempted = True
+        if url_resolve_grant_ok is not None:
+            grant_ok = bool(url_resolve_grant_ok)
+        else:
+            grant_ok = _lark.grant_vc_recording_view_to_chat_groups(token, mid, targets)
 
     dur = _fmt_duration_ms(duration_ms_raw)
     lines = [
@@ -115,6 +162,11 @@ def fanout_recording_to_chats(
     if dur:
         lines.append(f"**Duration / 时长:** {dur}")
     lines.append(f"**Link / 链接:** {url}")
+    if grant_attempted and not grant_ok:
+        lines.append(
+            "ℹ️ **Access / 权限:** If the link fails to open, the host should **Share** 妙记/录制 to this group "
+            "in Lark, or enable API scope **vc:record** for set_permission. / 若链接无权限，请主持人在客户端将录制共享给本群，或为应用开通 **vc:record**。"
+        )
     body = "\n".join(lines)
 
     ok_any = False

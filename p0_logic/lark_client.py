@@ -436,6 +436,55 @@ def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
     return ""
 
 
+def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids: List[str]) -> bool:
+    """
+    ``PATCH /vc/v1/meetings/{meeting_id}/recording/set_permission`` — grant **view** to Lark groups
+    (``type`` 2; ``id`` = group **open_chat_id**, often same ``oc_...`` as IM ``chat_id``).
+
+    Lets notification-group members open the Minutes URL even if they did not join the VC.
+    Requires **vc:record** (update recording) per Feishu docs; tenant token works for many Custom Apps.
+    """
+    meeting_id = (meeting_id or "").strip()
+    tok = (token or "").strip()
+    if not meeting_id or not tok:
+        return False
+    objs: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in chat_ids:
+        cid = (raw or "").strip()
+        if not cid.startswith("oc_") or len(cid) < 12 or cid in seen:
+            continue
+        seen.add(cid)
+        objs.append({"id": cid, "type": 2, "permission": 1})
+    if not objs:
+        return False
+    payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
+    last_err = ""
+    for base in VC_BASES:
+        url = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording/set_permission"
+        try:
+            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
+            log.info("VC recording set_permission try: %s -> HTTP=%s", url, r.status_code)
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={(r.text or '')[:240]}"
+                continue
+            j = r.json() if r.text else {}
+            if isinstance(j, dict) and j.get("code") == 0:
+                log.info("VC recording set_permission ok meeting_id=%s groups=%s", meeting_id[:24], len(objs))
+                return True
+            last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
+        except Exception as e:
+            last_err = str(e)
+    log.warning(
+        "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s — "
+        "members may need manual Share on Minutes / check vc:record scope",
+        meeting_id[:24],
+        last_err,
+    )
+    return False
+
+
 def get_primary_owner_id() -> str:
     from . import config as _config
     ids = _config.get_owner_ids()
