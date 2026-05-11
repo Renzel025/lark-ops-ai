@@ -297,6 +297,19 @@ def get_vc_recording_fanout_set_permission_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def get_vc_recording_fanout_tenant_wide_view_enabled() -> bool:
+    """
+    If true, **set_permission** also adds Feishu **type=3** (tenant-wide view): anyone in the **same tenant**
+    can open the Minutes/recording link — useful when **vc:record** exists only for **user** token and tenant
+    token still succeeds for broad authorize, or when group-level type=2 is rejected.
+
+    **Security:** whole org gets view access to that file. Env: ``VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("VC_RECORDING_FANOUT_TENANT_WIDE_VIEW") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.

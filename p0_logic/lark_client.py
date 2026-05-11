@@ -441,8 +441,11 @@ def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids
     ``PATCH /vc/v1/meetings/{meeting_id}/recording/set_permission`` — grant **view** to Lark groups
     (``type`` 2; ``id`` = group **open_chat_id**, often same ``oc_...`` as IM ``chat_id``).
 
+    Optionally adds **type=3** (tenant-wide view) when ``VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1``.
+
     Lets notification-group members open the Minutes URL even if they did not join the VC.
-    Requires **vc:record** (update recording) per Feishu docs; tenant token works for many Custom Apps.
+    Requires **vc:record** (update recording) per Feishu docs — often **user** token only; **tenant**
+    may still work for type 3 on some tenants.
     """
     meeting_id = (meeting_id or "").strip()
     tok = (token or "").strip()
@@ -456,6 +459,8 @@ def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids
             continue
         seen.add(cid)
         objs.append({"id": cid, "type": 2, "permission": 1})
+    if _config.get_vc_recording_fanout_tenant_wide_view_enabled():
+        objs.append({"type": 3, "permission": 1})
     if not objs:
         return False
     payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
@@ -471,14 +476,19 @@ def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids
                 continue
             j = r.json() if r.text else {}
             if isinstance(j, dict) and j.get("code") == 0:
-                log.info("VC recording set_permission ok meeting_id=%s groups=%s", meeting_id[:24], len(objs))
+                log.info(
+                    "VC recording set_permission ok meeting_id=%s objects=%s tenant_wide=%s",
+                    meeting_id[:24],
+                    len(objs),
+                    _config.get_vc_recording_fanout_tenant_wide_view_enabled(),
+                )
                 return True
             last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
         except Exception as e:
             last_err = str(e)
     log.warning(
         "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s — "
-        "members may need manual Share on Minutes / check vc:record scope",
+        "members may need manual Share on Minutes / user OAuth for vc:record",
         meeting_id[:24],
         last_err,
     )
