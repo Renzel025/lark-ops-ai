@@ -103,7 +103,20 @@ _DM_OVERVIEW_MEETING_ENDED_MSG = (
 def _ensure_dm_preview_incident_session(
     sender_open_id: str, tenant_token: str, source_incident_chat_id: str, target_chat: str
 ) -> bool:
-    if _session.dm_preview_allowed_for_incident(source_incident_chat_id, target_chat):
+    oid = (sender_open_id or "").strip()
+    if oid:
+        _drafts.orphan_incident_draft_if_session_ended(oid)
+        _drafts.orphan_preview_incident_if_session_ended(oid)
+    src = (source_incident_chat_id or "").strip()
+    tc = (target_chat or "").strip()
+    if oid:
+        d = _drafts.get_draft(oid) or {}
+        pv = _drafts.get_preview(oid) or {}
+        if not src:
+            src = str(d.get("source_incident_chat_id") or pv.get("source_incident_chat_id") or "").strip()
+        if not tc:
+            tc = str(d.get("target_chat") or pv.get("target_chat") or "").strip()
+    if _session.dm_preview_allowed_for_incident(src, tc):
         return True
     _lark.post_text_to_open_id(sender_open_id, tenant_token, _DM_OVERVIEW_MEETING_ENDED_MSG)
     return False
@@ -695,7 +708,7 @@ def handle_dm_generate_overview(
         cmd = _text.clean_pasted_text(text).strip()
         m_co = _config.STANDALONE_OVERVIEW_DM_RE.match(cmd)
         if m_co:
-            blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id)
+            blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id, tenant_token)
             if blocked:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, blocked)
                 return

@@ -290,6 +290,60 @@ def clear_preview(sender_open_id: str) -> None:
         tx.delete()
 
 
+def orphan_incident_draft_if_session_ended(sender_open_id: str) -> bool:
+    """
+    If the draft is tied to a real incident ``oc_`` but that P0/P1 row is gone, retarget as standalone.
+
+    Avoids: \"use Build overview on the DM card\" while **Build overview** also says the meeting session ended.
+    """
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return False
+    with _store.draft_transaction(oid) as tx:
+        d = tx.get()
+        if not d:
+            return False
+        src = str(d.get("source_incident_chat_id") or "").strip()
+        if not src or src == _session.STANDALONE_DM_SOURCE_CHAT_ID:
+            return False
+        if _session.chat_has_active_session(src):
+            return False
+        row = dict(d)
+        row["source_incident_chat_id"] = _session.STANDALONE_DM_SOURCE_CHAT_ID
+        row["updated_at"] = int(time.time())
+        tx.set(row)
+        log.info(
+            "Draft retargeted to standalone (incident session ended) open_id_tail=%s",
+            oid[-8:] if len(oid) > 8 else oid,
+        )
+        return True
+
+
+def orphan_preview_incident_if_session_ended(sender_open_id: str) -> bool:
+    """Same as ``orphan_incident_draft_if_session_ended`` for the persisted preview row (card actions)."""
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return False
+    with _store.preview_transaction(oid) as tx:
+        p = tx.get()
+        if not p:
+            return False
+        src = str(p.get("source_incident_chat_id") or "").strip()
+        if not src or src == _session.STANDALONE_DM_SOURCE_CHAT_ID:
+            return False
+        if _session.chat_has_active_session(src):
+            return False
+        row = dict(p)
+        row["source_incident_chat_id"] = _session.STANDALONE_DM_SOURCE_CHAT_ID
+        row["updated_at"] = int(time.time())
+        tx.set(row)
+        log.info(
+            "Preview retargeted to standalone (incident session ended) open_id_tail=%s",
+            oid[-8:] if len(oid) > 8 else oid,
+        )
+        return True
+
+
 def set_preview_edit_waiting(sender_open_id: str, waiting: bool) -> None:
     with _store.preview_transaction(sender_open_id) as tx:
         p = tx.get()

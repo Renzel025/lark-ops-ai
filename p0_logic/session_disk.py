@@ -10,7 +10,7 @@ import glob
 import json
 import logging
 import os
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import draft_store as _ds
 
@@ -120,4 +120,39 @@ def find_session_by_meeting_no_disk(meeting_no: str) -> Tuple[str, Dict[str, Any
             cid = str(data.get("source_chat") or "").strip()
             if cid:
                 return cid, data
+    return out
+
+
+def find_session_source_by_target_chat_disk(target_chat: str) -> Tuple[str, Dict[str, Any]]:
+    """Scan persisted rows where ``target_chat`` matches the prompt / mirror ``oc_`` (cross-worker)."""
+    target_chat = (target_chat or "").strip()
+    out: Tuple[str, Dict[str, Any]] = ("", {})
+    if not enabled() or not target_chat:
+        return out
+    base = os.path.join(_ds.shared_state_dir(), "sessions")
+    if not os.path.isdir(base):
+        return out
+    matches: List[Tuple[str, Dict[str, Any]]] = []
+    for fp in glob.glob(os.path.join(base, "*.json")):
+        if fp.endswith(".json.tmp"):
+            continue
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        tt = str(data.get("target_chat") or "").strip()
+        if tt == target_chat:
+            cid = str(data.get("source_chat") or "").strip()
+            if cid:
+                matches.append((cid, data))
+    if len(matches) > 1:
+        log.warning(
+            "session_disk: multiple active session files share target_chat=%s — using first source",
+            target_chat[:28],
+        )
+    if matches:
+        return matches[0]
     return out

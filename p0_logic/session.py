@@ -65,14 +65,41 @@ def _post_dm_concurrent_meetings_notice(operator_open_id: str, token: str) -> No
         log.warning("concurrent meetings notice exception open_id_tail=%s err=%s", oid[-8:] if len(oid) > 8 else oid, e)
 
 
-def note_if_standalone_create_overview_blocked(operator_open_id: str) -> str:
+def note_if_standalone_create_overview_blocked(operator_open_id: str, tenant_token: str = "") -> str:
     """
     If non-empty, DM this text instead of enqueueing another standalone ``create overview``.
     Covers: active incident slot, duplicate standalone, draft tied to a live incident.
+
+    When the incident meeting already ended but DM state was not released (or draft still
+    points at the old ``oc_``), we heal that first so the operator is not told both
+    \"use Build overview\" and \"no meeting — type create overview emergency\".
     """
     oid = (operator_open_id or "").strip()
+    tok = (tenant_token or "").strip()
     if not oid:
         return ""
+
+    stale_cid = ""
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if active:
+            cid = str(active.get("chat_id") or "").strip()
+            if cid and cid != STANDALONE_DM_SOURCE_CHAT_ID and not chat_has_active_session(cid):
+                stale_cid = cid
+
+    if stale_cid:
+        if tok:
+            release_dm_slots_for_incident_chat(stale_cid, tok)
+        else:
+            log.warning(
+                "note_if_standalone: stale DM slot for ended incident, no token — dropping slot only open_id_tail=%s",
+                oid[-8:] if len(oid) > 8 else oid,
+            )
+            with _DM_INSTR_LOCK:
+                cur = _DM_ACTIVE_ITEM.get(oid)
+                if cur and str(cur.get("chat_id") or "").strip() == stale_cid:
+                    del _DM_ACTIVE_ITEM[oid]
+
     with _DM_INSTR_LOCK:
         active = _DM_ACTIVE_ITEM.get(oid)
         if active:
@@ -83,8 +110,10 @@ def note_if_standalone_create_overview_blocked(operator_open_id: str) -> str:
                     "trigger again create overview."
                 )
             return "ℹ️ For this incident use the Build overview button on the DM card."
+
     from . import drafts as _drafts
 
+    _drafts.orphan_incident_draft_if_session_ended(oid)
     d = _drafts.get_draft(oid) or {}
     src = str(d.get("source_incident_chat_id") or "").strip()
     if src and src != STANDALONE_DM_SOURCE_CHAT_ID:
@@ -331,6 +360,33 @@ def find_session_by_target_chat(target_chat: str) -> Tuple[str, Dict[str, Any]]:
         if cur_target == target_chat:
             return chat_id, (sess or {})
     return "", {}
+
+
+def resolve_source_incident_chat_for_session_command(message_chat_id: str) -> str:
+    """
+    Map a **message** ``oc_`` (detection or prompt / mirror) to the session **source** incident ``oc_``.
+
+    Used so **cancel** / **end** typed in the prompt group still find the row in ``P0_SESSIONS`` and
+    release DM slots (``release_dm_slots_for_incident_chat``).
+    """
+    cid = (message_chat_id or "").strip()
+    if not cid.startswith("oc_"):
+        return ""
+    if chat_has_active_session(cid):
+        return cid
+    det = _config.get_source_incident_chat_id_for_mirror_target(cid)
+    if det and chat_has_active_session(det):
+        return det
+    src, _sess = find_session_by_target_chat(cid)
+    if src:
+        return src
+    if _session_disk.enabled():
+        src2, data = _session_disk.find_session_source_by_target_chat_disk(cid)
+        if src2 and isinstance(data, dict):
+            if src2 not in P0_SESSIONS:
+                P0_SESSIONS[src2] = data
+            return src2
+    return ""
 
 
 def get_active_session_key() -> str:

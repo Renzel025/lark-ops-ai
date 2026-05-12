@@ -30,6 +30,7 @@ from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic import (
     start_p0,
     cancel_p0_session,
+    end_p0_session,
     clear_p0_cooldown,
     P0_SESSIONS,
     chat_has_active_session,
@@ -38,6 +39,7 @@ from p0_logic import (
     set_p1_prompt_pending,
     pop_p1_prompt_pending,
     request_p1_meeting_confirmation,
+    resolve_source_incident_chat_for_session_command,
 )
 
 log = logging.getLogger("lark-ops-ai")
@@ -424,6 +426,25 @@ CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
     r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel)\s*(.*)$",
     re.IGNORECASE,
 )
+
+
+def _matches_typed_end_meeting_command(text_raw: str) -> bool:
+    """Operator guide: whole-line **end meeting**; **p0 end** / **end p0** / … may appear in prose."""
+    t = (text_raw or "").strip()
+    if not t:
+        return False
+    if re.match(r"(?is)^\s*(?:end\s+meeting|close\s+meeting)\s*$", t):
+        return True
+    if re.search(r"(?is)\b(?:p0|p1)\s+end\b", t):
+        return True
+    if re.search(r"(?is)\bend\s+(?:p0|p1)\b", t):
+        return True
+    if re.search(r"(?is)\bclose\s+p0\b", t):
+        return True
+    if re.search(r"(?is)\bp0\s+resolved\b", t):
+        return True
+    return False
+
 
 # Clear cooldown only (no new VC). Whole line only. / 仅清除冷却，不新建会议
 COOLDOWN_RESET_RE = re.compile(
@@ -947,22 +968,39 @@ def process_message(
     )
 
     # ---------------------------------------------------------
-    # INCIDENT GROUP
+    # INCIDENT GROUP + prompt/mirror session commands
     # ---------------------------------------------------------
-    if chat_id in get_incident_group_chat_ids():
+    is_detection = chat_id in get_incident_group_chat_ids()
+    mirror_session_source = (
+        "" if is_detection else resolve_source_incident_chat_for_session_command(chat_id)
+    )
+    thread_pending_here = False
+    with _P0_THREAD_LOCK:
+        thread_pending_here = chat_id in _P0_THREAD_PENDING
+
+    if is_detection or mirror_session_source or thread_pending_here:
         if not text_raw:
             return
 
-        # Bot replies from typed incident-group commands: same destination as meeting cards
-        # (incident chat when ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT=1``, else mirror target).
-        notify_chat = get_session_meeting_card_post_chat_id(chat_id) or chat_id
+        if is_detection:
+            session_source = chat_id
+        elif mirror_session_source:
+            session_source = mirror_session_source
+        else:
+            pend0: Dict[str, Any] = {}
+            with _P0_THREAD_LOCK:
+                pend0 = dict(_P0_THREAD_PENDING.get(chat_id) or {})
+            session_source = str(pend0.get("source_incident_chat_id") or "").strip() or chat_id
+
+        # Bot replies from typed commands: same destination as meeting cards for this incident row.
+        notify_chat = get_session_meeting_card_post_chat_id(session_source) or chat_id
 
         # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
-        pend = get_p1_prompt_pending(chat_id)
+        pend = get_p1_prompt_pending(session_source)
         if pend:
             nonce = str(pend.get("nonce") or "").strip()
             if _matches_p1_pending_create_reply(text_raw, mention_names):
-                err = handle_p1_meeting_confirm_yes(chat_id, token, user_id, nonce)
+                err = handle_p1_meeting_confirm_yes(session_source, token, user_id, nonce)
                 if err == "session_active":
                     post_text_to_chat(
                         notify_chat,
@@ -977,7 +1015,7 @@ def process_message(
                     )
                 return
             if P1_PENDING_DECLINE_RE.match(text_raw.strip()):
-                err = handle_p1_meeting_confirm_no(chat_id, token, nonce)
+                err = handle_p1_meeting_confirm_no(session_source, token, nonce)
                 if err == "session_active":
                     post_text_to_chat(
                         notify_chat,
@@ -1007,23 +1045,53 @@ def process_message(
         ):
             return
 
+        if _matches_typed_end_meeting_command(text_raw):
+            if chat_has_active_session(session_source):
+                sess = P0_SESSIONS.get(session_source) or {}
+                priority = str(sess.get("priority") or "P0").strip().upper()
+                log.info(
+                    "Incident UX: end meeting requested message_chat=%s session_source=%s priority=%s",
+                    chat_id,
+                    session_source,
+                    priority,
+                )
+                end_p0_session(session_source, token)
+            else:
+                log.info(
+                    "Incident UX: end requested but no active session message_chat=%s session_source=%s",
+                    chat_id,
+                    session_source,
+                )
+                if token:
+                    st, body, _ = post_card_to_chat(
+                        notify_chat, token, build_no_active_p0_session_card("end")
+                    )
+                    if st != 200:
+                        log.warning("no-session end prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
+            return
+
         # Cancel command (optional reason after the keyword phrase)
         cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
         if cancel_m:
             tail = (cancel_m.group(2) or "").strip()
             cancel_reason = tail if tail else "Unspecified"
-            if chat_has_active_session(chat_id):
-                sess = P0_SESSIONS.get(chat_id) or {}
+            if chat_has_active_session(session_source):
+                sess = P0_SESSIONS.get(session_source) or {}
                 priority = str(sess.get("priority") or "P0").strip().upper()
                 log.info(
-                    "Incident group: cancel requested chat_id=%s priority=%s reason=%r",
+                    "Incident UX: cancel requested message_chat=%s session_source=%s priority=%s reason=%r",
                     chat_id,
+                    session_source,
                     priority,
                     cancel_reason,
                 )
-                cancel_p0_session(chat_id, token, reason=cancel_reason)
+                cancel_p0_session(session_source, token, reason=cancel_reason)
             else:
-                log.info("Incident group: cancel requested but no active session chat_id=%s", chat_id)
+                log.info(
+                    "Incident UX: cancel requested but no active session message_chat=%s session_source=%s",
+                    chat_id,
+                    session_source,
+                )
                 if token:
                     st, body, _ = post_card_to_chat(
                         notify_chat, token, build_no_active_p0_session_card("cancel")
@@ -1034,7 +1102,7 @@ def process_message(
 
         # Cooldown reset only — no new VC. / 只清冷却，不创建会议
         if COOLDOWN_RESET_RE.match(text_raw.strip()):
-            clear_p0_cooldown(chat_id)
+            clear_p0_cooldown(session_source)
             if token:
                 post_text_to_chat(
                     notify_chat,
@@ -1043,147 +1111,154 @@ def process_message(
                 )
             return
 
-        # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
-        if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
-            if _is_manual_p0_incident_overview_template(text_raw):
-                log.info(
-                    "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
-                    text_raw[:200],
-                )
-                return
-            if _is_explicit_p0_negation(text_raw):
-                log.info(
-                    "Incident group: P0 trigger ignored (explicit not/no p0 or no escalation) text_head=%r",
-                    text_raw[:200],
-                )
-                return
-            if _is_question_about_priority(text_raw):
-                log.info(
-                    "Incident group: P0 trigger ignored (question about priority) text=%r",
-                    text_raw[:200],
-                )
-                return
-            if get_p0_keyword_use_builtin_context_filters():
-                if _is_p0_informational_ask_or_past_reference(text_raw):
+        if is_detection:
+            # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
+            if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
+                if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(
-                        "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
-                        "text_head=%r",
+                        "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
                         text_raw[:200],
                     )
                     return
-                if _is_p0_issue_prose_without_meeting_intent(text_raw):
+                if _is_explicit_p0_negation(text_raw):
                     log.info(
-                        "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
-                        "no declare/meeting intent) text_head=%r",
+                        "Incident group: P0 trigger ignored (explicit not/no p0 or no escalation) text_head=%r",
                         text_raw[:200],
                     )
                     return
-                if _is_p0_inside_existing_meeting_context(text_raw):
+                if _is_question_about_priority(text_raw):
                     log.info(
-                        "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
-                        "text_head=%r",
+                        "Incident group: P0 trigger ignored (question about priority) text=%r",
                         text_raw[:200],
                     )
                     return
-            sup_re = get_p0_keyword_supplemental_skip_regex()
-            if sup_re is not None and sup_re.search(text_raw):
-                log.info(
-                    "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
-                    text_raw[:200],
-                )
-                return
-            if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
-                log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
-                return
-            if chat_has_active_session(chat_id):
-                log.info("Incident group: session already active chat_id=%s", chat_id)
-                return
-
-            if get_p0_keyword_groq_gate():
-                if _is_explicit_direct_p0_declaration(text_raw):
-                    log.info(
-                        "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
-                        text_raw[:200],
-                    )
-                else:
-                    gv = groq_p0_keyword_declares_new_bridge(text_raw)
-                    if gv is False:
+                if get_p0_keyword_use_builtin_context_filters():
+                    if _is_p0_informational_ask_or_past_reference(text_raw):
                         log.info(
-                            "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
+                            "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
                             "text_head=%r",
                             text_raw[:200],
                         )
                         return
-                    if gv is None:
-                        log.warning(
-                            "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
+                    if _is_p0_issue_prose_without_meeting_intent(text_raw):
+                        log.info(
+                            "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
+                            "no declare/meeting intent) text_head=%r",
                             text_raw[:200],
                         )
+                        return
+                    if _is_p0_inside_existing_meeting_context(text_raw):
+                        log.info(
+                            "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
+                            "text_head=%r",
+                            text_raw[:200],
+                        )
+                        return
+                sup_re = get_p0_keyword_supplemental_skip_regex()
+                if sup_re is not None and sup_re.search(text_raw):
+                    log.info(
+                        "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
+                        text_raw[:200],
+                    )
+                    return
+                if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
+                    log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
+                    return
+                if chat_has_active_session(chat_id):
+                    log.info("Incident group: session already active chat_id=%s", chat_id)
+                    return
 
-            kw_dedupe = _keyword_trigger_dedupe_key(
-                chat_id, user_id, message_id, message_create_time, text_raw
-            )
-            if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
-                log.info(
-                    "Incident group: P0 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
+                if get_p0_keyword_groq_gate():
+                    if _is_explicit_direct_p0_declaration(text_raw):
+                        log.info(
+                            "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
+                            text_raw[:200],
+                        )
+                    else:
+                        gv = groq_p0_keyword_declares_new_bridge(text_raw)
+                        if gv is False:
+                            log.info(
+                                "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
+                                "text_head=%r",
+                                text_raw[:200],
+                            )
+                            return
+                        if gv is None:
+                            log.warning(
+                                "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
+                                text_raw[:200],
+                            )
+
+                kw_dedupe = _keyword_trigger_dedupe_key(
+                    chat_id, user_id, message_id, message_create_time, text_raw
+                )
+                if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
+                    log.info(
+                        "Incident group: P0 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
+                        chat_id,
+                    )
+                    return
+
+                log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
+                # Do NOT pass silent_when_blocked=True here. The template detector
+                # (_is_manual_p0_incident_overview_template, layers 1 + 2 above) already
+                # filters out manual overview re-pastes BEFORE we get here, so any keyword
+                # match that survives is a legitimate trigger attempt — the user expects to
+                # see a cooldown / "session active" warning in the prompt/target chat when
+                # blocked, not a silent no-op.
+                start_p0(
                     chat_id,
+                    token,
+                    user_id,
+                    priority="P0",
+                    source_chat_name=source_chat_name,
+                    trigger_lark_user_id=sender_lark_user_id,
                 )
                 return
 
-            log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
-            # Do NOT pass silent_when_blocked=True here. The template detector
-            # (_is_manual_p0_incident_overview_template, layers 1 + 2 above) already
-            # filters out manual overview re-pastes BEFORE we get here, so any keyword
-            # match that survives is a legitimate trigger attempt — the user expects to
-            # see a cooldown / "session active" warning in the prompt/target chat when
-            # blocked, not a silent no-op.
-            start_p0(
-                chat_id,
-                token,
-                user_id,
-                priority="P0",
-                source_chat_name=source_chat_name,
-                trigger_lark_user_id=sender_lark_user_id,
-            )
+            # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
+            if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
+                if _is_question_about_priority(text_raw):
+                    log.info(
+                        "Incident group: P1 trigger ignored (question about priority) text=%r",
+                        text_raw[:200],
+                    )
+                    return
+                if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
+                    log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
+                    return
+                if chat_has_active_session(chat_id):
+                    log.info("Incident group: session already active chat_id=%s", chat_id)
+                    return
+                if get_p1_prompt_pending(chat_id):
+                    log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
+                    return
+
+                kw_dedupe = _keyword_trigger_dedupe_key(
+                    chat_id, user_id, message_id, message_create_time, text_raw
+                )
+                if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
+                    log.info(
+                        "Incident group: P1 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
+                        chat_id,
+                    )
+                    return
+
+                log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
+                set_p1_prompt_pending(chat_id, user_id)
+                if not request_p1_meeting_confirmation(chat_id, token, user_id):
+                    pop_p1_prompt_pending(chat_id)
+                    log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
+                return
+
+            # Ignore non P0/P1 chatter in the incident group to avoid noisy auto replies.
+            log.info("Incident group: ignoring non P0/P1 message")
             return
 
-        # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
-        if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
-            if _is_question_about_priority(text_raw):
-                log.info(
-                    "Incident group: P1 trigger ignored (question about priority) text=%r",
-                    text_raw[:200],
-                )
-                return
-            if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
-                log.info("Incident group: P1 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
-                return
-            if chat_has_active_session(chat_id):
-                log.info("Incident group: session already active chat_id=%s", chat_id)
-                return
-            if get_p1_prompt_pending(chat_id):
-                log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
-                return
-
-            kw_dedupe = _keyword_trigger_dedupe_key(
-                chat_id, user_id, message_id, message_create_time, text_raw
-            )
-            if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
-                log.info(
-                    "Incident group: P1 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
-                    chat_id,
-                )
-                return
-
-            log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
-            set_p1_prompt_pending(chat_id, user_id)
-            if not request_p1_meeting_confirmation(chat_id, token, user_id):
-                pop_p1_prompt_pending(chat_id)
-                log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
-            return
-
-        # Ignore non P0/P1 chatter in the incident group to avoid noisy auto replies.
-        log.info("Incident group: ignoring non P0/P1 message")
+        log.info(
+            "Prompt/mirror session UX: ignoring message (use detection group to type p0/p1) message_chat=%s",
+            chat_id,
+        )
         return
 
     # ---------------------------------------------------------

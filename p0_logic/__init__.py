@@ -31,6 +31,7 @@ clear_p0_cooldown = session.clear_p0_cooldown
 find_session_by_meeting_ref = session.find_session_by_meeting_ref
 find_session_by_meeting_no = session.find_session_by_meeting_no
 find_session_by_target_chat = session.find_session_by_target_chat
+resolve_source_incident_chat_for_session_command = session.resolve_source_incident_chat_for_session_command
 get_active_session = session.get_active_session
 get_active_target_chat = session.get_active_target_chat
 get_p1_prompt_pending = session.get_p1_prompt_pending
@@ -157,6 +158,7 @@ __all__ = [
     "find_session_by_meeting_ref",
     "find_session_by_meeting_no",
     "find_session_by_target_chat",
+    "resolve_source_incident_chat_for_session_command",
     "get_active_session",
     "get_active_target_chat",
     "get_p1_prompt_pending",
