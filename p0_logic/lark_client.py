@@ -427,6 +427,13 @@ def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
                 continue
             rec = (j.get("data") or {}).get("recording") or {}
             u = str(rec.get("url") or "").strip()
+            lowu = u.lower()
+            if u and any(x in lowu for x in ("access restricted", "restricted access", "no permission")):
+                log.info("VC get recording: dropped placeholder url head=%r", u[:80])
+                u = ""
+            if u and not (u.startswith("http://") or u.startswith("https://")):
+                log.info("VC get recording: dropped non-http url head=%r", u[:80])
+                u = ""
             if u:
                 return u
             last_err = "code=0 but empty recording.url"
