@@ -272,6 +272,34 @@ def get_vc_recording_fanout_chat_ids() -> List[str]:
     return out
 
 
+def get_vc_recording_fanout_user_open_ids() -> List[str]:
+    """
+    Users (``ou_...``) who get **view** on the cloud recording via
+    ``PATCH .../recording/set_permission`` (**Feishu type = 1**, user authorization).
+
+    Comma-separated ``VC_RECORDING_FANOUT_USER_OPEN_IDS`` (alias ``P0_VC_RECORDING_FANOUT_USER_OPEN_IDS``).
+    Same **vc:record** / token caveats as group fan-out. Bot also DMs them the recording message when
+    configured (including **users-only** fan-out with no ``VC_RECORDING_FANOUT_CHAT_IDS``).
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("VC_RECORDING_FANOUT_USER_OPEN_IDS")
+        or os.getenv("P0_VC_RECORDING_FANOUT_USER_OPEN_IDS")
+        or ""
+    ).strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        p = part.strip()
+        if not is_open_id(p) or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
 def get_vc_recording_fanout_topic_substring_filter() -> str:
     """
     If non-empty, only forward **recording_ready** when the meeting topic contains this substring
@@ -286,7 +314,7 @@ def get_vc_recording_fanout_topic_substring_filter() -> str:
 def get_vc_recording_fanout_set_permission_enabled() -> bool:
     """
     When true (default), after a recording URL exists, call **set_permission** so each fan-out **group**
-    gets **view** on the file (Feishu type=2 group). Fixes \"bot posted the link but members cannot play\".
+    (Feishu type=2) and each ``VC_RECORDING_FANOUT_USER_OPEN_IDS`` user (type=1) gets **view** on the file.
 
     Set ``VC_RECORDING_FANOUT_SET_PERMISSION=0`` to skip if your token cannot call that API.
 

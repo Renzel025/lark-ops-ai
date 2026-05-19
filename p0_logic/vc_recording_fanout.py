@@ -107,7 +107,8 @@ def fanout_recording_to_chats(
     if not token or not mid:
         return False
     targets = _config.get_vc_recording_fanout_chat_ids()
-    if not targets:
+    user_targets = _config.get_vc_recording_fanout_user_open_ids()
+    if not targets and not user_targets:
         return False
 
     topic = (topic or "").strip()
@@ -139,11 +140,15 @@ def fanout_recording_to_chats(
         url = ""
     url_resolve_grant_ok: Optional[bool] = None
     if _config.get_vc_recording_fanout_set_permission_enabled():
-        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(token, mid, targets)
+        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+            token, mid, targets, user_open_ids=user_targets
+        )
     if not url:
         url = _lark.fetch_vc_meeting_recording_url(token, mid)
     if not _usable_recording_url(url) and _config.get_vc_recording_fanout_set_permission_enabled():
-        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(token, mid, targets)
+        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+            token, mid, targets, user_open_ids=user_targets
+        )
         url = _lark.fetch_vc_meeting_recording_url(token, mid)
     if not _usable_recording_url(url):
         log.warning(
@@ -170,7 +175,9 @@ def fanout_recording_to_chats(
         if url_resolve_grant_ok is not None:
             grant_ok = bool(url_resolve_grant_ok)
         else:
-            grant_ok = _lark.grant_vc_recording_view_to_chat_groups(token, mid, targets)
+            grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+                token, mid, targets, user_open_ids=user_targets
+            )
 
     dur = _fmt_duration_ms(duration_ms_raw)
     lines = [
@@ -188,8 +195,11 @@ def fanout_recording_to_chats(
             "ℹ️ **Access / 权限:** If the link fails to open: (1) set `.env` "
             "`VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1` (org-wide view, broad) and redeploy; "
             "(2) or host **Share** 妙记 to this group; "
-            "(3) or `vc:record` via **user** OAuth. / 若仍无权限：可在 .env 开启 "
-            "`VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1`（全租户可看，请确认合规）或由主持人分享妙记本群。"
+            "(3) or `vc:record` via **user** OAuth; "
+            "(4) or list **users** in `.env` `VC_RECORDING_FANOUT_USER_OPEN_IDS=ou_...` for **per-user** view. "
+            "/ 若仍无权限：可在 .env 开启 "
+            "`VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1`（全租户可看，请确认合规）或由主持人分享妙记本群；"
+            "亦可配置 `VC_RECORDING_FANOUT_USER_OPEN_IDS` 单独授权用户。"
         )
     body = "\n".join(lines)
 
@@ -215,6 +225,28 @@ def fanout_recording_to_chats(
                 )
         except Exception as e:
             log.warning("vc recording fan-out exception source=%s chat=%s err=%s", source, oc[:24], e)
+
+    for ou in user_targets:
+        try:
+            st, resp = _lark.post_text_to_open_id(ou, token, body)
+            if st == 200:
+                ok_any = True
+                log.info(
+                    "vc recording fan-out ok (DM) source=%s open_id_tail=%s mid=%s",
+                    source,
+                    ou[-12:] if len(ou) > 12 else ou,
+                    mid[:20],
+                )
+            else:
+                log.warning(
+                    "vc recording fan-out DM HTTP=%s source=%s open_id=%s body_head=%s",
+                    st,
+                    source,
+                    ou[:24],
+                    (resp or "")[:200],
+                )
+        except Exception as e:
+            log.warning("vc recording fan-out DM exception source=%s open_id=%s err=%s", source, ou[:24], e)
 
     if ok_any:
         with _FANOUT_LOCK:
@@ -249,7 +281,9 @@ def schedule_recording_fanout_poll_after_meeting_end(
     Skips if fan-out targets unset or meeting already fan-out done.
     """
     token = (tenant_token or "").strip()
-    if not token or not _config.get_vc_recording_fanout_chat_ids():
+    if not token:
+        return
+    if not _config.get_vc_recording_fanout_chat_ids() and not _config.get_vc_recording_fanout_user_open_ids():
         return
 
     meeting = evt.get("meeting") if isinstance(evt.get("meeting"), dict) else {}

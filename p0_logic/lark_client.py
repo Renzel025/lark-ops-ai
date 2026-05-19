@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -443,29 +443,46 @@ def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
     return ""
 
 
-def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids: List[str]) -> bool:
+def grant_vc_recording_view_to_chat_groups(
+    token: str,
+    meeting_id: str,
+    chat_ids: List[str],
+    *,
+    user_open_ids: Optional[List[str]] = None,
+) -> bool:
     """
     ``PATCH /vc/v1/meetings/{meeting_id}/recording/set_permission`` — grant **view** to Lark groups
-    (``type`` 2; ``id`` = group **open_chat_id**, often same ``oc_...`` as IM ``chat_id``).
+    (``type`` 2; ``id`` = group **open_chat_id**, often same ``oc_...`` as IM ``chat_id``),
+    and optionally **specific users** (``type`` 1; ``id`` = user **open_id** ``ou_...``).
 
     Optionally adds **type=3** (tenant-wide view) when ``VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1``.
 
-    Lets notification-group members open the Minutes URL even if they did not join the VC.
-    Requires **vc:record** (update recording) per Feishu docs — often **user** token only; **tenant**
-    may still work for type 3 on some tenants.
+    Lets notification-group members (and listed users) open the Minutes URL even if they did not join the VC.
+    Requires **vc:record** (update recording) per Feishu docs — Lark docs show **user_access_token** for this
+    API; **tenant** may still work on some tenants.
     """
     meeting_id = (meeting_id or "").strip()
     tok = (token or "").strip()
     if not meeting_id or not tok:
         return False
+    users_src = user_open_ids
+    if users_src is None:
+        users_src = _config.get_vc_recording_fanout_user_open_ids()
     objs: List[Dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_chat: set[str] = set()
     for raw in chat_ids:
         cid = (raw or "").strip()
-        if not cid.startswith("oc_") or len(cid) < 12 or cid in seen:
+        if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
             continue
-        seen.add(cid)
+        seen_chat.add(cid)
         objs.append({"id": cid, "type": 2, "permission": 1})
+    seen_user: set[str] = set()
+    for raw in users_src or []:
+        uid = (raw or "").strip()
+        if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
+            continue
+        seen_user.add(uid)
+        objs.append({"id": uid, "type": 1, "permission": 1})
     if _config.get_vc_recording_fanout_tenant_wide_view_enabled():
         objs.append({"type": 3, "permission": 1})
     if not objs:
@@ -473,8 +490,10 @@ def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids
     payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
     headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
     last_err = ""
+    has_user_perm = bool(seen_user)
     for base in VC_BASES:
-        url = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording/set_permission"
+        path = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording/set_permission"
+        url = f"{path}?user_id_type=open_id" if has_user_perm else path
         try:
             r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
             log.info("VC recording set_permission try: %s -> HTTP=%s", url, r.status_code)
@@ -484,9 +503,10 @@ def grant_vc_recording_view_to_chat_groups(token: str, meeting_id: str, chat_ids
             j = r.json() if r.text else {}
             if isinstance(j, dict) and j.get("code") == 0:
                 log.info(
-                    "VC recording set_permission ok meeting_id=%s objects=%s tenant_wide=%s",
+                    "VC recording set_permission ok meeting_id=%s groups=%s users=%s tenant_wide=%s",
                     meeting_id[:24],
-                    len(objs),
+                    len(seen_chat),
+                    len(seen_user),
                     _config.get_vc_recording_fanout_tenant_wide_view_enabled(),
                 )
                 return True
