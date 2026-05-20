@@ -24,6 +24,7 @@ from p0_logic import (
     remove_meeting_participant,
     end_p0_session_by_meeting_ref,
     bind_live_meeting_id,
+    record_vc_external_join_for_meeting_ref,
 )
 
 from p0_logic.perf_log import perf_log
@@ -614,6 +615,8 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 bind_live_meeting_id(meeting_ref)
 
             oid = (refs.get("open_id") or "").strip()
+            if meeting_ref:
+                record_vc_external_join_for_meeting_ref(meeting_ref, oid)
             if oid:
                 strip_seeded_host_placeholder_for_open_id(oid)
 

@@ -682,6 +682,141 @@ def get_vc_reserve_end_offset_sec() -> int:
     return max(_VC_RESERVE_MIN_OFFSET_SEC, min(v, _VC_RESERVE_MAX_OFFSET_SEC))
 
 
+_VC_AUTO_CANCEL_NO_JOIN_MAX_SEC = 7 * 24 * 60 * 60
+
+
+def get_p0_vc_auto_cancel_if_no_joins_sec() -> int:
+    """
+    After ``start_p0``, if no *external* VC join is recorded within this many seconds, call
+    ``cancel_p0_session`` (ends VC + cancelled card). **0** = disabled.
+
+    "External" = join event ``open_id`` differs from the session ``trigger_open_id``, or ``open_id``
+    is missing (treated as a real join so we do not auto-cancel while identity is unknown).
+
+    ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC`` (see also ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS``
+    for an allowlist-only mode).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC") or "").strip()
+    if not raw:
+        return 0
+    try:
+        v = int(raw)
+    except ValueError:
+        log.warning("Invalid P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC=%r — using 0 (disabled)", raw)
+        return 0
+    if v < 0:
+        return 0
+    if v > _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC:
+        log.warning(
+            "P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC=%s clamped to max %s",
+            v,
+            _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC,
+        )
+        return _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC
+    return v
+
+
+def _parse_oc_chat_id_list(
+    raw_env: str,
+    *,
+    warn_prefix: str,
+) -> FrozenSet[str]:
+    if not raw_env.strip():
+        return frozenset()
+    out: List[str] = []
+    for seg in raw_env.split(","):
+        x = seg.strip()
+        if not x:
+            continue
+        if x.startswith("oc_"):
+            out.append(x)
+        else:
+            log.warning("%s: skip invalid %r — expected oc_...", warn_prefix, x)
+    return frozenset(out)
+
+
+def get_p0_vc_auto_cancel_if_no_joins_chat_ids() -> FrozenSet[str]:
+    """
+    Optional **allowlist** of incident ``oc_`` chats that get VC auto-cancel when no external joins.
+
+    If **empty**: ``get_p0_vc_auto_cancel_if_no_joins_sec()`` applies to **all** incident-source sessions
+    (same as a global timeout).
+
+    If **non-empty**: only listed chats are scheduled; delay is
+    ``get_p0_vc_auto_cancel_scoped_delay_sec()`` (default **1800** = 30 minutes).
+
+    Env (preferred): ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS`` (comma-separated ``oc_``).
+
+    Legacy aliases: ``P0_EMERGENCY_TEST_GROUP_CHAT_IDS``, ``P0_EMERGENCY_TEST_GROUP_CHAT_ID``.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS")
+        or os.getenv("P0_EMERGENCY_TEST_GROUP_CHAT_IDS")
+        or os.getenv("P0_EMERGENCY_TEST_GROUP_CHAT_ID")
+        or ""
+    ).strip()
+    return _parse_oc_chat_id_list(raw, warn_prefix="P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS")
+
+
+def get_p0_vc_auto_cancel_scoped_delay_sec() -> int:
+    """
+    Auto-cancel delay for chats listed in ``get_p0_vc_auto_cancel_if_no_joins_chat_ids()``.
+
+    Default **1800** (30 minutes) when unset.
+
+    Env (preferred): ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC``.
+
+    Legacy alias: ``P0_VC_AUTO_CANCEL_EMERGENCY_TEST_GROUP_SEC``.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC")
+        or os.getenv("P0_VC_AUTO_CANCEL_EMERGENCY_TEST_GROUP_SEC")
+        or ""
+    ).strip()
+    if not raw:
+        v = 1800
+    else:
+        try:
+            v = int(raw)
+        except ValueError:
+            log.warning(
+                "Invalid P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC=%r — using 1800",
+                raw,
+            )
+            v = 1800
+    if v < 0:
+        return 0
+    if v > _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC:
+        log.warning(
+            "P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC=%s clamped to max %s",
+            v,
+            _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC,
+        )
+        return _VC_AUTO_CANCEL_NO_JOIN_MAX_SEC
+    return v
+
+
+def get_p0_vc_auto_cancel_sec_for_source_chat(source_chat_id: str) -> int:
+    """
+    Auto-cancel delay (seconds) for a VC session whose **source** incident chat is ``source_chat_id``.
+
+    - If ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS`` (or legacy emergency-test aliases) is **non-empty**:
+      listed chats use ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC`` (default **1800**); unlisted chats get **0**.
+    - If that allowlist is **empty**: use ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC`` for every chat (**0** = off).
+    """
+    reload_env_runtime()
+    cid = (source_chat_id or "").strip()
+    scoped = get_p0_vc_auto_cancel_if_no_joins_chat_ids()
+    if scoped:
+        if cid and cid in scoped:
+            return get_p0_vc_auto_cancel_scoped_delay_sec()
+        return 0
+    return get_p0_vc_auto_cancel_if_no_joins_sec()
+
+
 def is_open_id(x: str) -> bool:
     return bool(OPEN_ID_RE.match((x or "").strip()))
 

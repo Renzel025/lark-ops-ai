@@ -25,6 +25,7 @@ end_p0_session_by_meeting_ref = session.end_p0_session_by_meeting_ref
 cancel_p0_session = session.cancel_p0_session
 cancel_p0_session_by_meeting_no = session.cancel_p0_session_by_meeting_no
 bind_live_meeting_id = session.bind_live_meeting_id
+record_vc_external_join_for_meeting_ref = session.record_vc_external_join_for_meeting_ref
 p0_cooldown = session.p0_cooldown
 p0_cooldown_remaining_sec = session.p0_cooldown_remaining_sec
 clear_p0_cooldown = session.clear_p0_cooldown
@@ -152,6 +153,7 @@ __all__ = [
     "cancel_p0_session",
     "cancel_p0_session_by_meeting_no",
     "bind_live_meeting_id",
+    "record_vc_external_join_for_meeting_ref",
     "p0_cooldown",
     "p0_cooldown_remaining_sec",
     "clear_p0_cooldown",

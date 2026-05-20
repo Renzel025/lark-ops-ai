@@ -508,8 +508,50 @@ def get_last_ended_snapshot(chat_id: str) -> Optional[Dict[str, str]]:
 
 
 def bind_live_meeting_id(meeting_ref: str) -> None:
+    """
+    Store the live VC ``meeting.id`` from webhook ``vc.meeting.join_meeting_v1`` on the correct session.
+
+    Prefer resolution by ``meeting_no`` / existing ``meeting_id``; if still unknown, bind to the only
+    session that has no ``meeting_id`` yet, else the newest such session, else legacy fallback to the
+    last in-memory key.
+    """
     meeting_ref = (meeting_ref or "").strip()
     if not meeting_ref or not P0_SESSIONS:
+        return
+    cid, _ = find_session_by_meeting_ref(meeting_ref)
+    if cid:
+        sess = P0_SESSIONS.get(cid) or {}
+        cur = str(sess.get("meeting_id") or "").strip()
+        if cur != meeting_ref:
+            sess["meeting_id"] = meeting_ref
+            P0_SESSIONS[cid] = sess
+            if _session_disk.enabled():
+                _session_disk.save_session(cid, sess)
+            log.info("Bound live meeting_id=%s to chat_id=%s (matched ref)", meeting_ref, cid)
+        return
+    candidates: List[Tuple[str, Dict[str, Any]]] = []
+    for k, s in P0_SESSIONS.items():
+        mid = str((s or {}).get("meeting_id") or "").strip()
+        if not mid:
+            candidates.append((k, s or {}))
+    bind_key = ""
+    if len(candidates) == 1:
+        bind_key = candidates[0][0]
+    elif len(candidates) > 1:
+        candidates.sort(key=lambda t: int((t[1] or {}).get("start_epoch") or 0), reverse=True)
+        bind_key = candidates[0][0]
+        log.warning(
+            "bind_live_meeting_id: multiple sessions missing meeting_id; bound meeting_ref=%s to newest chat_id=%s",
+            meeting_ref,
+            bind_key,
+        )
+    if bind_key:
+        sess = P0_SESSIONS.get(bind_key) or {}
+        sess["meeting_id"] = meeting_ref
+        P0_SESSIONS[bind_key] = sess
+        if _session_disk.enabled():
+            _session_disk.save_session(bind_key, sess)
+        log.info("Bound live meeting_id=%s to chat_id=%s (unbound session)", meeting_ref, bind_key)
         return
     last_key = list(P0_SESSIONS.keys())[-1]
     sess = P0_SESSIONS.get(last_key) or {}
@@ -517,7 +559,97 @@ def bind_live_meeting_id(meeting_ref: str) -> None:
     P0_SESSIONS[last_key] = sess
     if _session_disk.enabled():
         _session_disk.save_session(last_key, sess)
-    log.info("Bound live meeting_id=%s to chat_id=%s", meeting_ref, last_key)
+    log.warning(
+        "bind_live_meeting_id: fallback last chat_id=%s for meeting_ref=%s (all sessions had meeting_id)",
+        last_key,
+        meeting_ref,
+    )
+
+
+def record_vc_external_join_for_meeting_ref(meeting_ref: str, joiner_open_id: str) -> None:
+    """
+    Count a VC join as "external" (not the incident trigger) for auto-cancel-if-empty semantics.
+    Persisted on the session row when disk is enabled.
+    """
+    meeting_ref = (meeting_ref or "").strip()
+    if not meeting_ref:
+        return
+    joiner_open_id = (joiner_open_id or "").strip()
+    cid, sess = find_session_by_meeting_ref(meeting_ref)
+    if not cid or not sess:
+        return
+    trigger = str((sess or {}).get("trigger_open_id") or "").strip()
+    if joiner_open_id and trigger and joiner_open_id == trigger:
+        return
+    # Missing open_id: treat as a real join so we do not auto-cancel while the joiner is unknown.
+    sess2 = P0_SESSIONS.get(cid) or {}
+    n = int(sess2.get("vc_external_join_count") or 0)
+    sess2["vc_external_join_count"] = n + 1
+    P0_SESSIONS[cid] = sess2
+    if _session_disk.enabled():
+        _session_disk.save_session(cid, sess2)
+    log.info(
+        "record_vc_external_join meeting_ref=%s chat_id=%s count=%s joiner_open_id=%s",
+        meeting_ref,
+        cid,
+        sess2["vc_external_join_count"],
+        joiner_open_id or "(empty)",
+    )
+
+
+def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
+    """Schedule auto-cancel when no external join was recorded (see config per-source chat)."""
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return
+    _config.reload_env_runtime()
+    delay = float(_config.get_p0_vc_auto_cancel_sec_for_source_chat(chat_id))
+    if delay <= 0:
+        return
+    sess0 = P0_SESSIONS.get(chat_id)
+    if not sess0:
+        return
+    run_id = secrets.token_hex(8)
+    sess0["vc_auto_cancel_run_id"] = run_id
+    P0_SESSIONS[chat_id] = sess0
+    if _session_disk.enabled():
+        _session_disk.save_session(chat_id, sess0)
+
+    def worker() -> None:
+        time.sleep(delay)
+        try:
+            _config.reload_env_runtime()
+            if _config.get_p0_vc_auto_cancel_sec_for_source_chat(chat_id) <= 0:
+                return
+            sess = P0_SESSIONS.get(chat_id)
+            if not sess:
+                return
+            if str(sess.get("vc_auto_cancel_run_id") or "") != run_id:
+                return
+            if int(sess.get("vc_external_join_count") or 0) > 0:
+                return
+            tok = _lark.get_tenant_token_primary()
+            if not tok:
+                log.warning("vc auto-cancel: no primary tenant token chat_id=%s", chat_id)
+                return
+            log.info(
+                "vc auto-cancel: no external joins after %s s — cancelling chat_id=%s",
+                int(delay),
+                chat_id,
+            )
+            cancel_p0_session(
+                chat_id,
+                tok,
+                reason="No participants joined (auto-cancel).",
+            )
+        except Exception as e:
+            log.warning("vc auto-cancel worker failed chat_id=%s err=%s", chat_id, e)
+
+    threading.Thread(
+        target=worker,
+        name=f"vc-auto-cancel-{chat_id[-12:]}",
+        daemon=True,
+    ).start()
 
 
 def end_p0_session(
@@ -1130,6 +1262,7 @@ def start_p0(
             "emergency_topic": emergency_topic,
             "participants": [],
             "affected_players": affected_players,
+            "vc_external_join_count": 0,
         }
         if trigger_open_id:
             try:
@@ -1269,6 +1402,10 @@ def start_p0(
         if oid == trigger_open_id and trigger_lark_user_id:
             dm_item["operator_lark_user_id"] = trigger_lark_user_id
         enqueue_dm_instruction_if_needed(oid, token, dm_item)
+    try:
+        schedule_vc_auto_cancel_if_no_external_joins(chat_id)
+    except Exception as e:
+        log.warning("start_p0: schedule vc auto-cancel failed: %s", e)
 
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
