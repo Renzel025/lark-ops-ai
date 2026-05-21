@@ -690,8 +690,8 @@ def get_p0_vc_auto_cancel_if_no_joins_sec() -> int:
     After ``start_p0``, if no *external* VC join is recorded within this many seconds, call
     ``cancel_p0_session`` (ends VC + cancelled card). **0** = disabled.
 
-    "External" = join event ``open_id`` differs from the session ``trigger_open_id``, or ``open_id``
-    is missing (treated as a real join so we do not auto-cancel while identity is unknown).
+    "External" = join event with a **non-empty** ``open_id`` that differs from the session
+    ``trigger_open_id``. Events without ``open_id`` do not count (avoids blocking auto-cancel on noise).
 
     ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC`` (see also ``P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS``
     for an allowlist-only mode).

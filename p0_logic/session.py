@@ -570,18 +570,27 @@ def record_vc_external_join_for_meeting_ref(meeting_ref: str, joiner_open_id: st
     """
     Count a VC join as "external" (not the incident trigger) for auto-cancel-if-empty semantics.
     Persisted on the session row when disk is enabled.
+
+    Only increments when ``joiner_open_id`` is **non-empty** and differs from the session
+    ``trigger_open_id``. Join events without ``open_id`` are ignored so Lark noise does not
+    block auto-cancel (empty room).
     """
     meeting_ref = (meeting_ref or "").strip()
     if not meeting_ref:
         return
     joiner_open_id = (joiner_open_id or "").strip()
+    if not joiner_open_id:
+        log.debug(
+            "record_vc_external_join skipped (no joiner open_id) meeting_ref=%s",
+            meeting_ref,
+        )
+        return
     cid, sess = find_session_by_meeting_ref(meeting_ref)
     if not cid or not sess:
         return
     trigger = str((sess or {}).get("trigger_open_id") or "").strip()
-    if joiner_open_id and trigger and joiner_open_id == trigger:
+    if trigger and joiner_open_id == trigger:
         return
-    # Missing open_id: treat as a real join so we do not auto-cancel while the joiner is unknown.
     sess2 = P0_SESSIONS.get(cid) or {}
     n = int(sess2.get("vc_external_join_count") or 0)
     sess2["vc_external_join_count"] = n + 1
@@ -593,7 +602,7 @@ def record_vc_external_join_for_meeting_ref(meeting_ref: str, joiner_open_id: st
         meeting_ref,
         cid,
         sess2["vc_external_join_count"],
-        joiner_open_id or "(empty)",
+        joiner_open_id,
     )
 
 
@@ -605,28 +614,66 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
     _config.reload_env_runtime()
     delay = float(_config.get_p0_vc_auto_cancel_sec_for_source_chat(chat_id))
     if delay <= 0:
+        scoped = _config.get_p0_vc_auto_cancel_if_no_joins_chat_ids()
+        if scoped and chat_id not in scoped:
+            log.info(
+                "vc auto-cancel: not scheduled chat_id=%s (not in P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_IDS)",
+                chat_id,
+            )
+        elif scoped:
+            log.info(
+                "vc auto-cancel: not scheduled chat_id=%s (P0_VC_AUTO_CANCEL_IF_NO_JOINS_CHAT_SEC is 0)",
+                chat_id,
+            )
+        else:
+            log.info(
+                "vc auto-cancel: not scheduled chat_id=%s (P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC unset or 0)",
+                chat_id,
+            )
         return
     sess0 = P0_SESSIONS.get(chat_id)
     if not sess0:
+        log.warning("vc auto-cancel: not scheduled chat_id=%s (no session in memory)", chat_id)
         return
     run_id = secrets.token_hex(8)
     sess0["vc_auto_cancel_run_id"] = run_id
     P0_SESSIONS[chat_id] = sess0
     if _session_disk.enabled():
         _session_disk.save_session(chat_id, sess0)
+    log.info(
+        "vc auto-cancel: scheduled chat_id=%s delay_sec=%s run_id=%s",
+        chat_id,
+        int(delay),
+        run_id,
+    )
 
     def worker() -> None:
         time.sleep(delay)
         try:
             _config.reload_env_runtime()
             if _config.get_p0_vc_auto_cancel_sec_for_source_chat(chat_id) <= 0:
+                log.info(
+                    "vc auto-cancel: worker exit (config now disabled or chat not eligible) chat_id=%s",
+                    chat_id,
+                )
                 return
             sess = P0_SESSIONS.get(chat_id)
             if not sess:
+                log.info("vc auto-cancel: worker exit (session gone) chat_id=%s", chat_id)
                 return
             if str(sess.get("vc_auto_cancel_run_id") or "") != run_id:
+                log.info(
+                    "vc auto-cancel: worker exit (stale run_id, new session?) chat_id=%s",
+                    chat_id,
+                )
                 return
-            if int(sess.get("vc_external_join_count") or 0) > 0:
+            ext = int(sess.get("vc_external_join_count") or 0)
+            if ext > 0:
+                log.info(
+                    "vc auto-cancel: skipped chat_id=%s external_join_count=%s (need ou_ on join events to count)",
+                    chat_id,
+                    ext,
+                )
                 return
             tok = _lark.get_tenant_token_primary()
             if not tok:
