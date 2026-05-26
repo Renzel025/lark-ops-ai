@@ -424,7 +424,7 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
-    r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel)\s*(.*)$",
+    r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel|cm)\s*(.*)$",
     re.IGNORECASE,
 )
 
@@ -434,7 +434,11 @@ def _matches_typed_end_meeting_command(text_raw: str) -> bool:
     t = (text_raw or "").strip()
     if not t:
         return False
-    if re.match(r"(?is)^\s*(?:end\s+meeting|close\s+meeting)\s*$", t):
+    if re.match(r"(?is)^\s*(?:em|end\s+meeting|close\s+meeting)\s*$", t):
+        return True
+    if re.match(r"(?is)^\s*(?:pe|p0e)\s*$", t):
+        return True
+    if re.match(r"(?is)^\s*(?:p1e|1e)\s*$", t):
         return True
     if re.search(r"(?is)\b(?:p0|p1)\s+end\b", t):
         return True
@@ -449,7 +453,7 @@ def _matches_typed_end_meeting_command(text_raw: str) -> bool:
 
 # Clear cooldown only (no new VC). Whole line only. / 仅清除冷却，不新建会议
 COOLDOWN_RESET_RE = re.compile(
-    r"^\s*(p0\s+cooldown\s+reset|cooldown\s+reset|reset\s+cooldown|clear\s+cooldown)\s*$",
+    r"^\s*(p0\s+cooldown\s+reset|cooldown\s+reset|reset\s+cooldown|clear\s+cooldown|cr)\s*$",
     re.IGNORECASE,
 )
 

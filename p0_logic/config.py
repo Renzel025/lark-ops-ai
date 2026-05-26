@@ -584,18 +584,36 @@ CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 ID_RE = re.compile(r"\b\d{6,}\b")
 NOT_SPECIFIED_RE = re.compile(r"^\s*(not specified|n/?a|none|unknown|-)?\s*$", re.IGNORECASE)
 
-CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel)\s*$", re.IGNORECASE)
-STATUS_RE = re.compile(r"^\s*(status|draft|check)\s*$", re.IGNORECASE)
-HELP_RE = re.compile(r"^\s*(help|commands|command\s+list)\s*$", re.IGNORECASE)
+CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel|cl)\s*$", re.IGNORECASE)
+STATUS_RE = re.compile(r"^\s*(status|draft|check|st)\s*$", re.IGNORECASE)
+HELP_RE = re.compile(r"^\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
 
-# DM whole line: ``create overview emergency|game`` — queue standalone overview (no meeting). Buttons-only for preview build.
-STANDALONE_OVERVIEW_DM_RE = re.compile(
+# DM whole line: ``create overview emergency|game`` or shortcuts ``coe`` / ``cog``.
+_STANDALONE_OVERVIEW_LONG_RE = re.compile(
     r"^\s*create\s+overview\s+(emergency|game)\s*$",
     re.IGNORECASE,
 )
+_STANDALONE_OVERVIEW_SHORT_RE = re.compile(r"^\s*(coe|cog)\s*$", re.IGNORECASE)
+# Back-compat alias for callers that still use ``.match()``.
+STANDALONE_OVERVIEW_DM_RE = _STANDALONE_OVERVIEW_LONG_RE
+
+
+def parse_standalone_overview_dm_command(cmd: str) -> Optional[str]:
+    """Return ``emergency`` or ``game`` from long or short standalone-overview DM command."""
+    s = (cmd or "").strip()
+    if not s:
+        return None
+    m = _STANDALONE_OVERVIEW_LONG_RE.match(s)
+    if m:
+        return (m.group(1) or "").strip().lower()
+    m = _STANDALONE_OVERVIEW_SHORT_RE.match(s)
+    if m:
+        return {"coe": "emergency", "cog": "game"}[(m.group(1) or "").strip().lower()]
+    return None
+
 
 WHO_IN_MEETING_RE = re.compile(
-    r"^\s*(who\s+(is|are)\s+in\s+the\s+meeting|who\s+is\s+in\s+meeting|participants|list\s+participants|sino\s+nasa\s+meeting)\s*$",
+    r"^\s*(who\s+(is|are)\s+in\s+the\s+meeting|who\s+is\s+in\s+meeting|participants|list\s+participants|sino\s+nasa\s+meeting|pt|parts)\s*$",
     re.IGNORECASE,
 )
 IS_IN_MEETING_RE = re.compile(

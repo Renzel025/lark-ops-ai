@@ -729,13 +729,13 @@ def handle_dm_generate_overview(
         if _config.HELP_RE.match(cmd):
             _send_help_commands_card(sender_open_id, tenant_token)
             return
-        m_co = _config.STANDALONE_OVERVIEW_DM_RE.match(cmd)
-        if m_co:
+        tag = _config.parse_standalone_overview_dm_command(cmd)
+        if tag:
+            tag = (tag or "").strip().lower()
             blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id, tenant_token)
             if blocked:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, blocked)
                 return
-            tag = (m_co.group(1) or "").strip().lower()
             tc = _config.get_standalone_overview_target_chat_id_for_tag(tag)
             if not tc:
                 _lark.post_text_to_open_id(
