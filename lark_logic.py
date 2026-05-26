@@ -22,10 +22,11 @@ from p0_logic.config import (
     get_p0_thread_confirm_ttl_sec,
     get_p0_thread_confirm_use_groq,
     get_p0_trigger_ignore_open_ids,
+    HELP_RE,
 )
 from p0_logic.groq_client import groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
-from p0_logic.cards import build_no_active_p0_session_card
+from p0_logic.cards import build_help_commands_card, build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic import (
     start_p0,
@@ -994,6 +995,13 @@ def process_message(
 
         # Bot replies from typed commands: same destination as meeting cards for this incident row.
         notify_chat = get_session_meeting_card_post_chat_id(session_source) or chat_id
+
+        if HELP_RE.match(text_raw.strip()):
+            if token:
+                st, body, _ = post_card_to_chat(notify_chat, token, build_help_commands_card())
+                if st != 200:
+                    log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
+            return
 
         # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
         pend = get_p1_prompt_pending(session_source)

@@ -766,6 +766,58 @@ def _dm_button_value(action: str, **scope: Any) -> Dict[str, Any]:
     return v
 
 
+def _help_commands_md() -> str:
+    """Bilingual command reference for DM Help button and typed ``help``."""
+    return (
+        "**Incident groups:** type commands as plain text (case-insensitive).\n"
+        "**私聊 DM:** use buttons on the green card, or type the phrases below.\n\n"
+        "**Tip:** Tap **Help** on the instruction card anytime for this list.\n\n"
+        "**🧭 Incident group — start / 开始**\n"
+        "• **p0** / **priority 0** — declare P0, create meeting + DM overview flow\n"
+        "• **p1** / **priority 1** — P1 prompt (create meeting?)\n\n"
+        "**⏹ Incident group — end / cancel / 结束**\n"
+        "• **end meeting** — end active P0 or P1 session (whole line)\n"
+        "• **p0 end**, **end p0**, **p0 resolved** — end P0\n"
+        "• **p1 end**, **end p1**, **p1 resolved** — end P1\n"
+        "• **cancel meeting** — optional reason after the phrase\n\n"
+        "**🔄 Incident group — other / 其他**\n"
+        "• **cooldown reset** — reset cooldown without new VC\n"
+        "• **create meeting** / **yes** — while P1 “create meeting?” is open\n"
+        "• **not needed** / **no** — decline P1 meeting prompt\n\n"
+        "**💬 DM — overview draft / 私聊概览**\n"
+        "• **status** / **draft** / **check** — show draft summary\n"
+        "• **clear** / **reset** — clear draft (use **Cancel** on preview card if preview is open)\n"
+        "• **create overview emergency** / **create overview game** — standalone overview (no meeting)\n"
+        "• **participants** / **who is in the meeting** — list attendees\n"
+        "• **is Alice in the meeting?** — check one person\n"
+        "• **help** / **commands** — show this card\n\n"
+        "**🎛 Card buttons / 卡片按钮**\n"
+        "• **Build overview** → preview → **Send to group**, **Generate**, **Edit**, **Cancel**\n"
+        "• **Edit** form: **Save** (update preview), **Back** (dismiss edit card)\n"
+        "• Group P1 cards: **Create meeting** / **Don't need**; **Declare as P0** / **Still P1**"
+    )
+
+
+def build_help_commands_card() -> Dict[str, Any]:
+    """Reference card listing P0/P1 bot commands (DM button or typed ``help``)."""
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "Incident Bot — Commands"},
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": _help_commands_md()},
+                },
+            ]
+        },
+    }
+
+
 def build_dm_instruction_card(
     priority: str = "P0",
     source_chat_label: str = "",
@@ -789,7 +841,7 @@ def build_dm_instruction_card(
                     "tag": "div",
                     "text": {
                         "tag": "plain_text",
-                        "content": "Tap Build overview when ready. Clear draft resets input. Tap Participants to list meeting attendees by name.",
+                        "content": "Tap Build overview when ready. Clear draft resets input. Participants lists attendees. Help shows all commands.",
                     },
                 },
                 {"tag": "hr"},
@@ -835,6 +887,19 @@ def build_dm_instruction_card(
                                     "text": {"tag": "plain_text", "content": "Participants"},
                                     "type": "default",
                                     "value": _dm_button_value("show_participants", **sc),
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "Help"},
+                                    "type": "default",
+                                    "value": _dm_button_value("show_help", **sc),
                                 },
                             ],
                         },

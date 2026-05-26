@@ -586,6 +586,7 @@ NOT_SPECIFIED_RE = re.compile(r"^\s*(not specified|n/?a|none|unknown|-)?\s*$", r
 
 CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel)\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check)\s*$", re.IGNORECASE)
+HELP_RE = re.compile(r"^\s*(help|commands|command\s+list)\s*$", re.IGNORECASE)
 
 # DM whole line: ``create overview emergency|game`` — queue standalone overview (no meeting). Buttons-only for preview build.
 STANDALONE_OVERVIEW_DM_RE = re.compile(

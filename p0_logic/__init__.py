@@ -85,6 +85,7 @@ build_meeting_ended_card = cards.build_meeting_ended_card
 build_meeting_cancelled_card = cards.build_meeting_cancelled_card
 build_no_active_p0_session_card = cards.build_no_active_p0_session_card
 build_dm_instruction_card = cards.build_dm_instruction_card
+build_help_commands_card = cards.build_help_commands_card
 build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
 build_overview_result_card = cards.build_overview_result_card
@@ -203,6 +204,7 @@ __all__ = [
     "build_meeting_cancelled_card",
     "build_no_active_p0_session_card",
     "build_dm_instruction_card",
+    "build_help_commands_card",
     "build_preview_card",
     "build_edit_overview_card",
     "build_overview_result_card",

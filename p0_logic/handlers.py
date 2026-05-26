@@ -326,6 +326,26 @@ def _show_participants_body_text() -> str:
     return empty_msg if not line.strip() else f"Participants\n{line}"
 
 
+def _send_help_commands_card(sender_open_id: str, tenant_token: str) -> None:
+    """Post the bilingual command reference card to the operator DM."""
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id or not tenant_token:
+        return
+    card = _cards.build_help_commands_card()
+    st, body, _ = _lark.post_card_to_open_id(sender_open_id, tenant_token, card)
+    ok, code, msg = _lark.lark_im_message_create_ok(body)
+    if st != 200 or not ok:
+        log.warning(
+            "show_help failed HTTP=%s lark_code=%s lark_msg=%r open_id=%s body=%s",
+            st,
+            code,
+            msg,
+            sender_open_id,
+            (body or "")[:400],
+        )
+        _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to send the help card.")
+
+
 def _handle_slack_minor_followup(payload: Dict[str, Any], tenant_token: str, action_name: str) -> None:
     """Minor severity sub-cards: SRE BACKEND/FE, team FPMS/CPMS/PMS, FE reach (duty stubs)."""
     sender_open_id = _extract_card_action_sender_open_id(payload)
@@ -706,6 +726,9 @@ def handle_dm_generate_overview(
     message_id = (message_id or "").strip()
     if text:
         cmd = _text.clean_pasted_text(text).strip()
+        if _config.HELP_RE.match(cmd):
+            _send_help_commands_card(sender_open_id, tenant_token)
+            return
         m_co = _config.STANDALONE_OVERVIEW_DM_RE.match(cmd)
         if m_co:
             blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id, tenant_token)
@@ -921,6 +944,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             # This branch only runs if handle_lark_card_action is invoked without that routing (e.g. tests or legacy callers).
             body = _show_participants_body_text()
             _lark.post_text_to_open_id(sender_open_id, tenant_token, body)
+            return
+        if action_name == "show_help":
+            _send_help_commands_card(sender_open_id, tenant_token)
             return
         if action_name not in _PREVIEW_WORKFLOW_ACTIONS:
             log.warning("Unknown card action: %s", action_name)
