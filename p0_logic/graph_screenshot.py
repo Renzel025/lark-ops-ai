@@ -486,6 +486,158 @@ def _viewport_scroll_chain_screenshots(
         _clear_p0_dash_page_scroll_marks(page)
 
 
+def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
+    try:
+        page.evaluate(
+            """(sel) => {
+              if (sel) {
+                const e = document.querySelector(sel);
+                if (e) {
+                  e.scrollTop = Math.max(0, (e.scrollHeight || 0) - (e.clientHeight || 0));
+                  return;
+                }
+              }
+              const se = document.scrollingElement || document.documentElement;
+              const sh = Math.max(
+                se ? se.scrollHeight : 0,
+                document.body ? document.body.scrollHeight : 0
+              );
+              const ih = window.innerHeight || 720;
+              window.scrollTo(0, Math.max(0, sh - ih));
+              if (se) se.scrollTop = Math.max(0, sh - ih);
+            }""",
+            scroll_sel,
+        )
+    except Exception:
+        pass
+
+
+def _viewport_top_and_bottom_screenshots(page, viewport_h: int) -> List[bytes]:
+    """Two full-viewport PNGs: scroll top, then scroll to bottom (dulo)."""
+    scroll_sel: Optional[str] = None
+    pngs: List[bytes] = []
+    try:
+        _clear_p0_dash_page_scroll_marks(page)
+        if _mark_wide_dashboard_scroll_container(page):
+            scroll_sel = "[data-p0-dash-page-scroll='1']"
+        _scroll_pair_reset_top(page, scroll_sel)
+        page.wait_for_timeout(500)
+        top = page.screenshot(full_page=False, type="png")
+        if top:
+            pngs.append(top)
+        _scroll_to_max(page, scroll_sel)
+        page.wait_for_timeout(900)
+        bottom = page.screenshot(full_page=False, type="png")
+        if bottom:
+            pngs.append(bottom)
+        log.info(
+            "p0 graph screenshot: top+bottom capture got %s page(s) sel=%s",
+            len(pngs),
+            scroll_sel or "window",
+        )
+        return pngs
+    except Exception as e:
+        log.warning("p0 graph screenshot: top+bottom capture failed: %s", e)
+        return pngs
+    finally:
+        _scroll_pair_reset_top(page, scroll_sel)
+        _clear_p0_dash_page_scroll_marks(page)
+
+
+def _grafana_login_form_visible(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                  if (document.querySelector(
+                    'input[name="user"], input[name="username"], #user-input, '
+                    + 'input[autocomplete="username"]'
+                  )) return true;
+                  return !!document.querySelector('input[type="password"]');
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto_wait: str) -> None:
+    from . import config as _config
+
+    user = _config.get_p0_graph_screenshot_username()
+    pwd = _config.get_p0_graph_screenshot_password()
+    if not user or not pwd:
+        return
+    if not _grafana_login_form_visible(page):
+        return
+    log.info("p0 graph screenshot: Grafana login page — auto-login user=%s", user)
+    user_filled = False
+    for sel in (
+        'input[name="user"]',
+        'input[name="username"]',
+        "#user-input",
+        'input[autocomplete="username"]',
+    ):
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.fill(user, timeout=8000)
+                user_filled = True
+                break
+        except Exception:
+            continue
+    if not user_filled:
+        log.warning("p0 graph screenshot: auto-login — username field not found")
+        return
+    pwd_filled = False
+    for sel in ('input[name="password"]', 'input[type="password"]'):
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.fill(pwd, timeout=8000)
+                pwd_filled = True
+                break
+        except Exception:
+            continue
+    if not pwd_filled:
+        log.warning("p0 graph screenshot: auto-login — password field not found")
+        return
+    clicked = False
+    for sel in (
+        'button[type="submit"]',
+        'button:has-text("Log in")',
+        'button:has-text("Login")',
+        'button:has-text("Sign in")',
+    ):
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.click(timeout=8000)
+                clicked = True
+                break
+        except Exception:
+            continue
+    if not clicked:
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+    try:
+        page.wait_for_load_state(goto_wait if goto_wait in ("load", "domcontentloaded") else "load", timeout=nav_ms)
+    except Exception as e:
+        log.warning("p0 graph screenshot: auto-login wait after submit: %s", e)
+    if _grafana_login_form_visible(page):
+        log.warning("p0 graph screenshot: auto-login failed — still on login form")
+        return
+    dash = (dashboard_url or "").strip()
+    if dash and "/d/" in dash and dash not in (page.url or ""):
+        try:
+            page.goto(dash, wait_until=goto_wait, timeout=nav_ms)
+        except Exception as e:
+            log.warning("p0 graph screenshot: auto-login redirect to dashboard failed: %s", e)
+    log.info("p0 graph screenshot: auto-login succeeded")
+
+
 def _clear_p0_scroll_target_marks(page) -> None:
     try:
         page.evaluate(
@@ -745,6 +897,13 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
             log.info(
                 "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip/body clip chain"
             )
+            if _config.get_p0_graph_screenshot_top_and_bottom():
+                top_bottom = _viewport_top_and_bottom_screenshots(page, h)
+                if len(top_bottom) >= 2:
+                    return top_bottom, cap_time
+                if len(top_bottom) == 1:
+                    return top_bottom, cap_time
+                log.info("p0 graph screenshot: top+bottom empty — fallback scroll chain")
             scroll_n = _config.get_p0_graph_screenshot_viewport_scroll_count()
             if scroll_n >= 2:
                 scroll_parts = _viewport_scroll_chain_screenshots(page, h, scroll_n)
@@ -1046,6 +1205,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
 
     def _goto_and_wait(page) -> None:
         page.goto(url, wait_until=goto_wait, timeout=nav_ms)
+        _grafana_auto_login_if_needed(page, url, nav_ms=nav_ms, goto_wait=goto_wait)
         try:
             page.evaluate("window.scrollTo(0, 0)")
         except Exception:

@@ -1426,6 +1426,29 @@ def get_p0_graph_screenshot_viewport_scroll_count() -> int:
     return 2 if split else 1
 
 
+def get_p0_graph_screenshot_top_and_bottom() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_TOP_AND_BOTTOM`` — when ``1`` (default) with ``VIEWPORT_ONLY=1``:
+    capture **two** PNGs — dashboard **top**, then scroll to **bottom** and capture again.
+    Set ``0`` to use incremental viewport scroll (``VIEWPORT_SCROLL_COUNT`` steps).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_TOP_AND_BOTTOM") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_username() -> str:
+    """Grafana login user for Playwright auto-login when the session is logged out."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_USERNAME") or os.getenv("GRAFANA_USERNAME") or "").strip()
+
+
+def get_p0_graph_screenshot_password() -> str:
+    """Grafana login password for Playwright auto-login (never log this value)."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_PASSWORD") or os.getenv("GRAFANA_PASSWORD") or "").strip()
+
+
 def get_p0_graph_screenshot_goto_wait_until() -> str:
     """
     Playwright ``page.goto(..., wait_until=...)``.
