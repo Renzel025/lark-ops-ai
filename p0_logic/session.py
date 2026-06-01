@@ -1322,20 +1322,28 @@ def start_p0(
                 log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
         log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
         meeting_no = str(vc.get("meeting_no", "")).strip()
-        st, body, invite_mid = _lark.post_card_to_chat(
-            target_chat,
-            token,
-            _cards.build_meeting_card(
-                link=link,
-                meeting_no=meeting_no,
-                priority=priority,
-                affected_players=affected_players,
-                emergency_topic=emergency_topic,
-            ),
-        )
+        invite_mid: Optional[str] = None
+        if priority == "P0":
+            st, body = _lark.post_text_to_chat(
+                target_chat,
+                token,
+                _cards.build_p0_meeting_created_text(link),
+            )
+        else:
+            st, body, invite_mid = _lark.post_card_to_chat(
+                target_chat,
+                token,
+                _cards.build_meeting_card(
+                    link=link,
+                    meeting_no=meeting_no,
+                    priority=priority,
+                    affected_players=affected_players,
+                    emergency_topic=emergency_topic,
+                ),
+            )
         if st != 200:
-            log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
-            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting card.")
+            log.error("start_p0: meeting notify failed HTTP=%s body=%s", st, (body or "")[:300])
+            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting notification.")
             P0_SESSIONS.pop(chat_id, None)
             return
         if invite_mid:

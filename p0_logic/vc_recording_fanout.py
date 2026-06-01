@@ -98,7 +98,8 @@ def fanout_recording_to_chats(
     source: str = "event",
 ) -> bool:
     """
-    If ``VC_RECORDING_FANOUT_CHAT_IDS`` is set and topic passes filter, post recording link to each chat.
+    If ``VC_RECORDING_FANOUT_CHAT_IDS`` is set and topic passes filter, notify each chat that a
+    recording is available (topic + meeting no only — no link or embed).
 
     Returns True when at least one Lark post succeeded. Uses ``meeting_id`` for deduplication.
     """
@@ -128,79 +129,33 @@ def fanout_recording_to_chats(
             log.info("vc recording fan-out skip duplicate meeting_id=%s source=%s", mid[:24], source)
             return True
 
-    url = (url_hint or "").strip()
-    if not _usable_recording_url(url):
-        if url:
-            log.info(
-                "vc recording: ignoring non-playable event url head=%r source=%s mid=%s — will try set_permission+GET",
-                url[:80],
-                source,
-                mid[:20],
-            )
-        url = ""
-    url_resolve_grant_ok: Optional[bool] = None
+    url_hint = (url_hint or "").strip()
+    if url_hint and not _usable_recording_url(url_hint):
+        log.info(
+            "vc recording: event url not posted (non-playable) head=%r source=%s mid=%s",
+            url_hint[:80],
+            source,
+            mid[:20],
+        )
+
     if _config.get_vc_recording_fanout_set_permission_enabled():
-        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+        grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
             token, mid, targets, user_open_ids=user_targets
         )
-    if not url:
-        url = _lark.fetch_vc_meeting_recording_url(token, mid)
-    if not _usable_recording_url(url) and _config.get_vc_recording_fanout_set_permission_enabled():
-        url_resolve_grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
-            token, mid, targets, user_open_ids=user_targets
-        )
-        url = _lark.fetch_vc_meeting_recording_url(token, mid)
-    if not _usable_recording_url(url):
-        log.warning(
-            "vc recording fan-out: no playable URL after event/GET%s mid=%s topic_head=%r",
-            " (+set_permission retry)" if _config.get_vc_recording_fanout_set_permission_enabled() else "",
-            mid[:24],
-            topic[:80],
-        )
-        return False
-
-    with _FANOUT_LOCK:
-        if mid in _FANOUT_DONE:
-            log.info("vc recording fan-out skip duplicate after fetch meeting_id=%s source=%s", mid[:24], source)
-            return True
-
-    if not _usable_recording_url(url):
-        log.error("vc recording fan-out: internal reject url mid=%s url_head=%r", mid[:24], url[:60])
-        return False
-
-    grant_ok = True
-    grant_attempted = False
-    if _config.get_vc_recording_fanout_set_permission_enabled():
-        grant_attempted = True
-        if url_resolve_grant_ok is not None:
-            grant_ok = bool(url_resolve_grant_ok)
-        else:
-            grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
-                token, mid, targets, user_open_ids=user_targets
+        if not grant_ok:
+            log.warning(
+                "vc recording fan-out: set_permission grant failed mid=%s topic_head=%r",
+                mid[:24],
+                topic[:80],
             )
 
-    dur = _fmt_duration_ms(duration_ms_raw)
     lines = [
-        "☁️ **Meeting recording ready** / **会议录制已就绪**",
+        "☁️ **Meeting recording is available** / **会议录制可用**",
     ]
     if topic:
         lines.append(f"**Topic / 主题:** {topic}")
     if meeting_no:
         lines.append(f"**Meeting no / 会议号:** {meeting_no}")
-    if dur:
-        lines.append(f"**Duration / 时长:** {dur}")
-    lines.append(f"**Link / 链接:** {url}")
-    if grant_attempted and not grant_ok:
-        lines.append(
-            "ℹ️ **Access / 权限:** If the link fails to open: (1) set `.env` "
-            "`VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1` (org-wide view, broad) and redeploy; "
-            "(2) or host **Share** 妙记 to this group; "
-            "(3) or `vc:record` via **user** OAuth; "
-            "(4) or list **users** in `.env` `VC_RECORDING_FANOUT_USER_OPEN_IDS=ou_...` for **per-user** view. "
-            "/ 若仍无权限：可在 .env 开启 "
-            "`VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1`（全租户可看，请确认合规）或由主持人分享妙记本群；"
-            "亦可配置 `VC_RECORDING_FANOUT_USER_OPEN_IDS` 单独授权用户。"
-        )
     body = "\n".join(lines)
 
     ok_any = False

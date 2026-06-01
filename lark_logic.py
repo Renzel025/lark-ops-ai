@@ -12,6 +12,8 @@ from p0_logic.config import (
     get_p0_keyword_groq_gate,
     get_p0_keyword_supplemental_skip_regex,
     get_p0_keyword_use_builtin_context_filters,
+    get_p0_keyword_ai_triage,
+    resolve_priority_keyword_ai_provider,
     get_session_meeting_card_post_chat_id,
     get_p0_thread_confirm_allow_toplevel_yes,
     get_p0_thread_confirm_allow_asker_self_yes,
@@ -24,7 +26,7 @@ from p0_logic.config import (
     get_p0_trigger_ignore_open_ids,
     HELP_RE,
 )
-from p0_logic.groq_client import groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
+from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card, build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
@@ -308,13 +310,20 @@ def _is_explicit_p0_negation(text: str) -> bool:
     return False
 
 
-# RCA / postmortem wording: "P0 issue(s)", "recently … p0 issues …" match ``\\bp0\\b`` but are not a VC declaration.
+# RCA / postmortem or ticket handoff: "P0 issue(s)", "this P0 case", meegle links — not a VC declaration.
 _P0_ISSUE_PROSE_PHRASE_RE = re.compile(
     r"(?is)"
-    r"\b(?:a|an|the)\s+p0\s+issues?\b|"
+    r"\b(?:a|an|the|this|that|on)\s+p0\s+issues?\b|"
     r"\bp0\s+issues?\b|"
+    r"\b(?:a|an|the|this|that|on)\s+p0\s+cases?\b|"
+    r"\bp0\s+cases?\b|"
     r"\b(?:a|an|the)\s+priority\s*0\s+issues?\b|"
     r"\bpriority\s*0\s+issues?\b"
+)
+
+# Ticket / meegle share to @Duty — informational handoff, not "start bridge now".
+_P0_TICKET_HANDOFF_RE = re.compile(
+    r"(?is)\bhere\s+(?:is|are)\s+(?:the\s+)?(?:meegle|ticket|story|link|detail)\b"
 )
 
 # If any of these appear, treat message as possible real escalation even when it also says "P0 issue".
@@ -349,6 +358,89 @@ def _is_p0_issue_prose_without_meeting_intent(text: str) -> bool:
     if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
         return False
     return True
+
+
+def _is_p0_ticket_handoff_not_declaration(text: str) -> bool:
+    """
+    True when the line shares a ticket/meegle and mentions P0 as **case context** — not a bridge request.
+    Example (skip): "Hi @Duty here is the meegle on this P0 case …"
+    """
+    t = (text or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return False
+    if _is_explicit_direct_p0_declaration(t):
+        return False
+    if _P0_TICKET_HANDOFF_RE.search(t):
+        return True
+    if _is_p0_issue_prose_without_meeting_intent(t):
+        return True
+    return False
+
+
+def _priority_keyword_ai_triage(text_raw: str, groq_key: str) -> Optional[Dict[str, str]]:
+    """Run Groq classifier when ``P0_KEYWORD_AI_TRIAGE`` is on. None = use legacy regex path."""
+    if not get_p0_keyword_ai_triage():
+        return None
+    provider = resolve_priority_keyword_ai_provider()
+    if not provider and not (groq_key or "").strip():
+        return None
+    try:
+        result = classify_priority_keyword(text_raw, provider=provider or None)
+        if result:
+            log.info(
+                "Priority keyword AI triage provider=%s intent=%s reason=%r text_head=%r",
+                result.get("provider") or provider,
+                result.get("intent"),
+                result.get("reason"),
+                (text_raw or "")[:200],
+            )
+        return result
+    except Exception as e:
+        log.warning("Priority keyword AI triage failed: %s", e)
+        return None
+
+
+def _legacy_p0_keyword_blocked(text_raw: str) -> bool:
+    """Regex/heuristic path when AI triage is off or unavailable."""
+    if _is_question_about_priority(text_raw):
+        log.info("Incident group: P0 trigger ignored (question about priority) text=%r", text_raw[:200])
+        return True
+    if _is_p0_ticket_handoff_not_declaration(text_raw):
+        log.info(
+            "Incident group: P0 trigger ignored (P0 case / ticket handoff, not a declaration) text_head=%r",
+            text_raw[:200],
+        )
+        return True
+    if get_p0_keyword_use_builtin_context_filters():
+        if _is_p0_informational_ask_or_past_reference(text_raw):
+            log.info(
+                "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
+                "text_head=%r",
+                text_raw[:200],
+            )
+            return True
+        if _is_p0_issue_prose_without_meeting_intent(text_raw):
+            log.info(
+                "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
+                "no declare/meeting intent) text_head=%r",
+                text_raw[:200],
+            )
+            return True
+        if _is_p0_inside_existing_meeting_context(text_raw):
+            log.info(
+                "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
+                "text_head=%r",
+                text_raw[:200],
+            )
+            return True
+    sup_re = get_p0_keyword_supplemental_skip_regex()
+    if sup_re is not None and sup_re.search(text_raw):
+        log.info(
+            "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
+            text_raw[:200],
+        )
+        return True
+    return False
 
 
 # Status line: "... in / during the P0 meeting" refers to activity inside an **existing** bridge — not a new VC request.
@@ -1144,35 +1236,6 @@ def process_message(
                         text_raw[:200],
                     )
                     return
-                if get_p0_keyword_use_builtin_context_filters():
-                    if _is_p0_informational_ask_or_past_reference(text_raw):
-                        log.info(
-                            "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
-                            "text_head=%r",
-                            text_raw[:200],
-                        )
-                        return
-                    if _is_p0_issue_prose_without_meeting_intent(text_raw):
-                        log.info(
-                            "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
-                            "no declare/meeting intent) text_head=%r",
-                            text_raw[:200],
-                        )
-                        return
-                    if _is_p0_inside_existing_meeting_context(text_raw):
-                        log.info(
-                            "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
-                            "text_head=%r",
-                            text_raw[:200],
-                        )
-                        return
-                sup_re = get_p0_keyword_supplemental_skip_regex()
-                if sup_re is not None and sup_re.search(text_raw):
-                    log.info(
-                        "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
-                        text_raw[:200],
-                    )
-                    return
                 if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
                     log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                     return
@@ -1180,7 +1243,18 @@ def process_message(
                     log.info("Incident group: session already active chat_id=%s", chat_id)
                     return
 
-                if get_p0_keyword_groq_gate():
+                ai = _priority_keyword_ai_triage(text_raw, groq_key)
+                if ai is not None:
+                    if ai.get("intent") != "declare_p0":
+                        log.info(
+                            "Incident group: P0 AI triage — no meeting (intent=%s) text_head=%r",
+                            ai.get("intent"),
+                            text_raw[:200],
+                        )
+                        return
+                elif _legacy_p0_keyword_blocked(text_raw):
+                    return
+                elif get_p0_keyword_groq_gate():
                     if _is_explicit_direct_p0_declaration(text_raw):
                         log.info(
                             "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
@@ -1212,12 +1286,6 @@ def process_message(
                     return
 
                 log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
-                # Do NOT pass silent_when_blocked=True here. The template detector
-                # (_is_manual_p0_incident_overview_template, layers 1 + 2 above) already
-                # filters out manual overview re-pastes BEFORE we get here, so any keyword
-                # match that survives is a legitimate trigger attempt — the user expects to
-                # see a cooldown / "session active" warning in the prompt/target chat when
-                # blocked, not a silent no-op.
                 start_p0(
                     chat_id,
                     token,
@@ -1230,9 +1298,9 @@ def process_message(
 
             # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
             if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
-                if _is_question_about_priority(text_raw):
+                if _is_explicit_p0_negation(text_raw):
                     log.info(
-                        "Incident group: P1 trigger ignored (question about priority) text=%r",
+                        "Incident group: P1 trigger ignored (explicit negation) text_head=%r",
                         text_raw[:200],
                     )
                     return
@@ -1244,6 +1312,22 @@ def process_message(
                     return
                 if get_p1_prompt_pending(chat_id):
                     log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
+                    return
+
+                ai = _priority_keyword_ai_triage(text_raw, groq_key)
+                if ai is not None:
+                    if ai.get("intent") != "declare_p1":
+                        log.info(
+                            "Incident group: P1 AI triage — no prompt (intent=%s) text_head=%r",
+                            ai.get("intent"),
+                            text_raw[:200],
+                        )
+                        return
+                elif _is_question_about_priority(text_raw):
+                    log.info(
+                        "Incident group: P1 trigger ignored (question about priority) text=%r",
+                        text_raw[:200],
+                    )
                     return
 
                 kw_dedupe = _keyword_trigger_dedupe_key(

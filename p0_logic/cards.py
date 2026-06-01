@@ -93,6 +93,12 @@ def format_duration(start_epoch: int, end_epoch: Optional[int] = None) -> str:
     return f"{seconds}s"
 
 
+def build_p0_meeting_created_text(link: str) -> str:
+    """Plain-text P0 group alert — join link only, no interactive card."""
+    url = (link or "").strip()
+    return f"🚨 **P0 meeting created.**\n\n**Join NOW:**\n{url}"
+
+
 def build_meeting_card(
     link: str,
     meeting_no: str = "",
@@ -828,6 +834,20 @@ def build_help_commands_card() -> Dict[str, Any]:
     }
 
 
+def _dm_escalation_reminder_md() -> str:
+    return (
+        "**Escalation category:**\n\n"
+        "**Major Issues:**\n"
+        "Login, games/events entering, withdrawal, deposit problems.\n"
+        "• Need to send the P0 overview to the WhatsApp group as well\n\n"
+        "**Minor Issues:**\n"
+        "All other issues, including cases where it's unclear whether the problem is on our side "
+        "or limited to a specific provider (especially if only one provider is affected).\n"
+        "• No need to send the P0 overview to the WhatsApp group\n\n"
+        "**Note:** Every time you call, please provide them with a brief update on what is happening."
+    )
+
+
 def build_dm_instruction_card(
     priority: str = "P0",
     source_chat_label: str = "",
@@ -840,83 +860,93 @@ def build_dm_instruction_card(
         prio = "P0"
     sc = dict(target_chat=target_chat, source_incident_chat_id=source_incident_chat_id, draft_priority=prio)
     title = f"🧾 Send {prio} incident details (DM){_title_group_suffix(source_chat_label)}"
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": "You may send screenshots and pasted text in any order."}},
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": "Tap Build overview when ready. Clear draft resets input. Participants lists attendees. Help shows all commands.",
+            },
+        },
+    ]
+    if prio == "P0":
+        elements.extend(
+            [
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": _dm_escalation_reminder_md()}},
+            ]
+        )
+    elements.extend(
+        [
+            {"tag": "hr"},
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Build overview"},
+                                "type": "primary",
+                                "value": _dm_button_value("generate_preview", **sc),
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Clear draft"},
+                                "type": "default",
+                                "value": _dm_button_value("clear_draft", **sc),
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Participants"},
+                                "type": "default",
+                                "value": _dm_button_value("show_participants", **sc),
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Help"},
+                                "type": "default",
+                                "value": _dm_button_value("show_help", **sc),
+                            },
+                        ],
+                    },
+                ],
+            },
+        ]
+    )
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
         "header": {"template": "green", "title": {"tag": "plain_text", "content": title}},
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "plain_text", "content": "You may send screenshots and pasted text in any order."}},
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": "Tap Build overview when ready. Clear draft resets input. Participants lists attendees. Help shows all commands.",
-                    },
-                },
-                {"tag": "hr"},
-                {
-                    "tag": "column_set",
-                    "flex_mode": "none",
-                    "background_style": "default",
-                    "horizontal_spacing": "8px",
-                    "columns": [
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Build overview"},
-                                    "type": "primary",
-                                    "value": _dm_button_value("generate_preview", **sc),
-                                },
-                            ],
-                        },
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Clear draft"},
-                                    "type": "default",
-                                    "value": _dm_button_value("clear_draft", **sc),
-                                },
-                            ],
-                        },
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Participants"},
-                                    "type": "default",
-                                    "value": _dm_button_value("show_participants", **sc),
-                                },
-                            ],
-                        },
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Help"},
-                                    "type": "default",
-                                    "value": _dm_button_value("show_help", **sc),
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ]
-        },
+        "body": {"elements": elements},
     }
 
 

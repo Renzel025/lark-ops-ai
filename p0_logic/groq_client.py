@@ -273,6 +273,69 @@ def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
     return None
 
 
+_PRIORITY_KEYWORD_CLASSIFY_SYSTEM = (
+    "You triage Lark **incident group** chat for an on-call bot.\n"
+    "The message contains **P0** and/or **P1**. Decide what the speaker wants **right now**.\n\n"
+    "Output ONLY valid JSON:\n"
+    '{"intent":"...", "reason":"one short sentence"}\n\n'
+    "intent values:\n"
+    "- **declare_p0** — speaker asserts the **current** situation **is / should be handled as P0 NOW** "
+    '(e.g. "p0", "this is p0", "declaring p0", "escalate to p0", "we treat this as p0").\n'
+    "- **declare_p1** — same for **P1** / priority 1 **now**.\n"
+    "- **handoff** — sharing **context** (meegle, ticket, story link, case ID) and P0/P1 is only a **label** "
+    'on the case, NOT asking to open a bridge (e.g. "here is the meegle on this P0 case").\n'
+    "- **mention_only** — casual/historical/generic mention (RCA, p0 issues last week, status inside "
+    "existing meeting, process talk) with **no new** declaration.\n"
+    "- **question** — asking if something is P0/P1 or asking permission, not declaring.\n"
+    "- **negation** — clearly **not** P0/P1 or no escalation needed.\n\n"
+    "If both P0 and P1 appear, pick the priority the speaker is **actually assigning** to the live incident.\n"
+    "When unsure between declare vs handoff, prefer **handoff** if they are mainly **sharing a link/ticket**.\n"
+    "When unsure between declare vs mention_only, prefer **declare_p0** only if they sound like they want **action now**."
+)
+
+
+def _parse_priority_keyword_classification(raw: str, provider: str) -> Optional[dict]:
+    obj = _parse_json_object(raw or "")
+    if not obj:
+        log.warning("classify_priority_keyword (%s): JSON parse failed head=%s", provider, (raw or "")[:200])
+        return None
+    intent = str(obj.get("intent") or "").strip().lower()
+    allowed = {
+        "declare_p0",
+        "declare_p1",
+        "handoff",
+        "mention_only",
+        "question",
+        "negation",
+    }
+    if intent not in allowed:
+        log.warning("classify_priority_keyword (%s): unknown intent=%r", provider, intent)
+        return None
+    reason = str(obj.get("reason") or "").strip()[:300]
+    return {"intent": intent, "reason": reason, "provider": provider}
+
+
+def classify_priority_keyword(message_text: str, provider: Optional[str] = None) -> Optional[dict]:
+    """
+    One Groq call: declaration vs mention/handoff/question for ``p0`` / ``p1`` keyword hits.
+    Requires ``GROQ_API_KEY``. ``provider`` is ignored (Groq-only).
+    """
+    t = (message_text or "").strip()
+    if not t:
+        return None
+    if not GROQ_API_KEY:
+        return None
+    t = t[:4500]
+    user_prompt = f"MESSAGE:\n{t}"
+    raw = groq_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
+    return _parse_priority_keyword_classification(raw, "groq")
+
+
+def groq_classify_priority_keyword(message_text: str) -> Optional[dict]:
+    """Classify priority keyword intent via Groq."""
+    return classify_priority_keyword(message_text)
+
+
 def _scrub_issue_source_for_model(issue_source: str) -> str:
     src = (issue_source or "").strip()
     if not src:

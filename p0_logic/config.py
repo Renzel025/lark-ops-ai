@@ -1001,6 +1001,25 @@ def get_p0_keyword_groq_gate() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_keyword_ai_triage() -> bool:
+    """
+    ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and ``GROQ_API_KEY`` is set, one Groq call classifies
+    each ``p0`` / ``p1`` keyword hit: **declaration** (start flow) vs **mention / handoff / question**
+    (ignore silently). Replaces ad-hoc handoff ack replies and overlaps with ``P0_KEYWORD_GROQ_GATE``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_AI_TRIAGE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def resolve_priority_keyword_ai_provider() -> str:
+    """Return ``groq`` when ``GROQ_API_KEY`` is set, else empty."""
+    reload_env_runtime()
+    if GROQ_API_KEY:
+        return "groq"
+    return ""
+
+
 def get_p0_keyword_use_builtin_context_filters() -> bool:
     """
     ``P0_KEYWORD_USE_BUILTIN_CONTEXT_FILTERS`` — if ``1`` (default), apply built-in heuristics
