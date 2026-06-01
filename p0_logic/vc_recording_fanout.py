@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, Optional, Set
 from urllib.parse import urlparse
 
+from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
 
@@ -149,14 +150,7 @@ def fanout_recording_to_chats(
                 topic[:80],
             )
 
-    lines = [
-        "☁️ **Meeting recording is available** / **会议录制可用**",
-    ]
-    if topic:
-        lines.append(f"**Topic / 主题:** {topic}")
-    if meeting_no:
-        lines.append(f"**Meeting no / 会议号:** {meeting_no}")
-    body = "\n".join(lines)
+    body = _cards.build_recording_available_text(topic, meeting_no)
 
     ok_any = False
     for oc in targets:

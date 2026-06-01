@@ -123,6 +123,33 @@ def _parse_incident_overview_target_map(raw: str) -> Dict[str, str]:
     return out
 
 
+def _parse_oc_chat_id_csv(raw: str) -> List[str]:
+    """Comma-separated ``oc_...`` group chat ids (deduped, invalid entries skipped)."""
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in (raw or "").split(","):
+        p = part.strip()
+        if not p.startswith("oc_") or len(p) < 12 or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def get_p0_notification_hub_chat_ids() -> List[str]:
+    """
+    Shared hub group(s) for **both** plain P0 join text and recording-available text.
+
+    ``P0_NOTIFICATION_HUB_CHAT_IDS`` (alias ``P0_HUB_CHAT_IDS``) — comma-separated ``oc_...``.
+    Merged with ``P0_MEETING_CREATED_TEXT_CHAT_IDS`` and ``VC_RECORDING_FANOUT_CHAT_IDS``.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("P0_NOTIFICATION_HUB_CHAT_IDS") or os.getenv("P0_HUB_CHAT_IDS") or ""
+    ).strip()
+    return _parse_oc_chat_id_csv(raw)
+
+
 def get_incident_overview_target_map() -> Dict[str, str]:
     """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> mirror ``oc_`` for meeting cards when split)."""
     reload_env_runtime()
@@ -215,6 +242,49 @@ def get_overview_detection_fanout_chat_ids() -> List[str]:
     return out
 
 
+def get_p0_meeting_created_text_map() -> Dict[str, str]:
+    """
+    ``P0_MEETING_CREATED_TEXT_MAP`` — per detection ``oc_`` → one extra group that gets the plain
+    ``🚨 P0 meeting created`` text (red meeting card still posts to the prompt group as before).
+    """
+    reload_env_runtime()
+    return _parse_incident_overview_target_map(os.getenv("P0_MEETING_CREATED_TEXT_MAP") or "")
+
+
+def get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id: str) -> List[str]:
+    """
+    Lark groups that receive the plain P0 meeting-created text in **addition** to the red card in
+    the prompt group. Per-detection ``P0_MEETING_CREATED_TEXT_MAP`` wins; else global
+    ``P0_MEETING_CREATED_TEXT_CHAT_IDS`` (alias ``P0_MEETING_ALERT_TEXT_CHAT_IDS``).
+    """
+    reload_env_runtime()
+    sid = (source_incident_chat_id or "").strip()
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(cid: str) -> None:
+        c = (cid or "").strip()
+        if not c.startswith("oc_") or len(c) < 12 or c in seen:
+            return
+        seen.add(c)
+        out.append(c)
+
+    if sid:
+        mapped = get_p0_meeting_created_text_map().get(sid, "")
+        if mapped:
+            _add(mapped)
+    raw = (
+        os.getenv("P0_MEETING_CREATED_TEXT_CHAT_IDS")
+        or os.getenv("P0_MEETING_ALERT_TEXT_CHAT_IDS")
+        or ""
+    ).strip()
+    for part in raw.split(","):
+        _add(part.strip())
+    for hub in get_p0_notification_hub_chat_ids():
+        _add(hub)
+    return out
+
+
 def is_overview_post_destination_detection(
     dest_chat_id: str, source_incident_chat_id: str, session_target_chat: str
 ) -> bool:
@@ -258,17 +328,12 @@ def get_vc_recording_fanout_chat_ids() -> List[str]:
     raw = (
         os.getenv("VC_RECORDING_FANOUT_CHAT_IDS") or os.getenv("P0_VC_RECORDING_FANOUT_CHAT_IDS") or ""
     ).strip()
-    if not raw:
-        return []
-    out: List[str] = []
-    seen: set[str] = set()
-    for part in raw.split(","):
-        p = part.strip()
-        if not p.startswith("oc_") or len(p) < 12:
-            continue
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
+    out = _parse_oc_chat_id_csv(raw)
+    seen = set(out)
+    for hub in get_p0_notification_hub_chat_ids():
+        if hub not in seen:
+            seen.add(hub)
+            out.append(hub)
     return out
 
 

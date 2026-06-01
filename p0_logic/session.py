@@ -1217,6 +1217,40 @@ def clear_p0_cooldown(chat_id: str) -> None:
     log.info("clear_p0_cooldown chat_id=%s", chat_id)
 
 
+def _fanout_p0_meeting_created_text(
+    token: str,
+    source_incident_chat_id: str,
+    prompt_chat_id: str,
+    link: str,
+) -> None:
+    """Plain ``🚨 P0 meeting created`` text to extra group(s) — red card stays in ``prompt_chat_id``."""
+    targets = _config.get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id)
+    if not targets:
+        return
+    msg = _cards.build_p0_meeting_created_text(link)
+    prompt = (prompt_chat_id or "").strip()
+    for oc in targets:
+        if oc == prompt:
+            continue
+        try:
+            st, resp = _lark.post_text_to_chat(oc, token, msg)
+            if st == 200:
+                log.info(
+                    "start_p0: P0 meeting text fan-out ok chat_id_tail=%s source=%s",
+                    oc[-12:] if len(oc) > 12 else oc,
+                    source_incident_chat_id[:24],
+                )
+            else:
+                log.warning(
+                    "start_p0: P0 meeting text fan-out HTTP=%s chat=%s body_head=%s",
+                    st,
+                    oc[:24],
+                    (resp or "")[:200],
+                )
+        except Exception as e:
+            log.warning("start_p0: P0 meeting text fan-out exception chat=%s err=%s", oc[:24], e)
+
+
 def start_p0(
     chat_id: str,
     token: str,
@@ -1322,32 +1356,26 @@ def start_p0(
                 log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
         log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
         meeting_no = str(vc.get("meeting_no", "")).strip()
-        invite_mid: Optional[str] = None
-        if priority == "P0":
-            st, body = _lark.post_text_to_chat(
-                target_chat,
-                token,
-                _cards.build_p0_meeting_created_text(link),
-            )
-        else:
-            st, body, invite_mid = _lark.post_card_to_chat(
-                target_chat,
-                token,
-                _cards.build_meeting_card(
-                    link=link,
-                    meeting_no=meeting_no,
-                    priority=priority,
-                    affected_players=affected_players,
-                    emergency_topic=emergency_topic,
-                ),
-            )
+        st, body, invite_mid = _lark.post_card_to_chat(
+            target_chat,
+            token,
+            _cards.build_meeting_card(
+                link=link,
+                meeting_no=meeting_no,
+                priority=priority,
+                affected_players=affected_players,
+                emergency_topic=emergency_topic,
+            ),
+        )
         if st != 200:
-            log.error("start_p0: meeting notify failed HTTP=%s body=%s", st, (body or "")[:300])
-            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting notification.")
+            log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
+            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting card.")
             P0_SESSIONS.pop(chat_id, None)
             return
         if invite_mid:
             P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
+        if priority == "P0":
+            _fanout_p0_meeting_created_text(token, chat_id, target_chat, link)
         if _session_disk.enabled():
             _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
     dm_targets = _dm_instruction_targets(trigger_open_id)

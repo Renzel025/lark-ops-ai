@@ -99,6 +99,32 @@ def build_p0_meeting_created_text(link: str) -> str:
     return f"🚨 **P0 meeting created.**\n\n**Join NOW:**\n{url}"
 
 
+def _strip_video_meeting_prefix(raw: str) -> str:
+    """Drop ``Video meeting—`` from Lark VC topic — show incident label only in chat."""
+    t = (raw or "").strip()
+    if not t:
+        return ""
+    prefix = (_config.VIDEO_MEETING_TOPIC_PREFIX or "Video meeting—").strip()
+    if prefix and t.lower().startswith(prefix.lower()):
+        return t[len(prefix) :].strip()
+    for p in ("Video meeting—", "Video meeting-", "Video meeting:"):
+        if t.lower().startswith(p.lower()):
+            return t[len(p) :].strip()
+    return t
+
+
+def build_recording_available_text(topic: str = "", meeting_no: str = "") -> str:
+    """Plain group message when VC cloud recording is ready (no link, no markdown)."""
+    lines = ["☁️ Meeting recording available · 会议录制可用", ""]
+    label = _strip_video_meeting_prefix(topic)
+    if label:
+        lines.append(f"Topic · 主题: {label}")
+    no = (meeting_no or "").strip()
+    if no:
+        lines.append(f"Meeting ID · 会议号: {no}")
+    return "\n".join(lines).rstrip()
+
+
 def build_meeting_card(
     link: str,
     meeting_no: str = "",
