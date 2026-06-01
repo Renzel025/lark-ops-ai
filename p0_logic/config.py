@@ -1239,6 +1239,21 @@ def get_p0_graph_screenshot_append_kiosk() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def get_p0_graph_screenshot_zoom_percent() -> int:
+    """
+    Browser page zoom for capture (``document.documentElement.style.zoom``).
+    ``P0_GRAPH_SCREENSHOT_ZOOM_PERCENT`` — e.g. ``50`` fits more dashboard panels per viewport.
+    Clamped 25–100; default 100.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT") or "100").strip()
+    try:
+        return max(25, min(int(raw), 100))
+    except ValueError:
+        log.warning("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT=%r invalid — using 100", raw)
+        return 100
+
+
 def get_p0_graph_screenshot_clip_selectors() -> List[str]:
     """
     Comma-separated CSS selectors (first **substantial** visible match) for the **dashboard body**.

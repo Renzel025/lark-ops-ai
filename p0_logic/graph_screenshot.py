@@ -77,6 +77,120 @@ def _apply_kiosk_to_grafana_url(url: str, enable: bool) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
+def _grafana_sidebar_likely_open(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                  const picks = [
+                    '.sidemenu',
+                    '[data-testid="NavBar"]',
+                    'nav[aria-label="Main"]',
+                    '.navbar',
+                  ];
+                  for (const sel of picks) {
+                    const el = document.querySelector(sel);
+                    if (!el) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width >= 120 && r.height >= 200) return true;
+                  }
+                  return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _collapse_grafana_sidebar(page) -> None:
+    """Hide Grafana left nav / dock so captures look like kiosk / full-width dashboard."""
+    for sel in (
+        '[aria-label="Close menu"]',
+        '[aria-label="Toggle menu"]',
+        'button[aria-label*="menu" i]',
+        ".navbar-toggle-button",
+        '[data-testid="nav-burger"]',
+    ):
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.click(timeout=2500)
+                page.wait_for_timeout(350)
+        except Exception:
+            continue
+    try:
+        page.evaluate(
+            """() => {
+              const hide = [
+                '.navbar',
+                '.sidemenu',
+                '[data-testid="NavBar"]',
+                '.page-sidebar',
+                'nav[aria-label="Main"]',
+                '.dashboard-solo .navbar',
+              ];
+              hide.forEach((sel) => {
+                document.querySelectorAll(sel).forEach((el) => {
+                  el.style.setProperty('display', 'none', 'important');
+                  el.style.setProperty('visibility', 'hidden', 'important');
+                  el.style.setProperty('width', '0', 'important');
+                  el.style.setProperty('min-width', '0', 'important');
+                });
+              });
+              document.body.classList.add('dashboard-solo');
+              const main = document.querySelector(
+                'main, .dashboard-container, [data-testid="dashboard-scene"], .main-view'
+              );
+              if (main) {
+                main.style.marginLeft = '0';
+                main.style.paddingLeft = '0';
+                main.style.maxWidth = '100%';
+                main.style.width = '100%';
+              }
+            }"""
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: sidebar hide JS failed: %s", e)
+
+
+def _apply_page_zoom_percent(page, percent: int) -> None:
+    pct = int(percent or 100)
+    if pct <= 0 or pct >= 100:
+        return
+    scale = pct / 100.0
+    try:
+        page.evaluate(
+            """(scale) => {
+              const z = String(scale);
+              document.documentElement.style.zoom = z;
+              document.body.style.zoom = z;
+            }""",
+            scale,
+        )
+        log.info("p0 graph screenshot: page zoom=%s%%", pct)
+    except Exception as e:
+        log.warning("p0 graph screenshot: page zoom failed: %s", e)
+
+
+def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
+    """Kiosk re-goto if needed, collapse left panel, apply zoom — before screenshots."""
+    from . import config as _config
+
+    u = (dashboard_url or "").strip()
+    if u and _config.get_p0_graph_screenshot_append_kiosk():
+        cur = (page.url or "").strip()
+        if "kiosk" not in cur.lower() or _grafana_sidebar_likely_open(page):
+            try:
+                log.info("p0 graph screenshot: re-open dashboard with kiosk (hide side panel)")
+                page.goto(u, wait_until="load", timeout=90_000)
+                page.wait_for_timeout(900)
+            except Exception as e:
+                log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
+    _collapse_grafana_sidebar(page)
+    _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
+    page.wait_for_timeout(500)
+
+
 def _measure_clip_rect(page, selector: str) -> Optional[Dict[str, int]]:
     """
     Rectangle in **document / layout** pixels for ``page.screenshot(full_page=True, clip=…)``.
@@ -512,11 +626,14 @@ def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
         pass
 
 
-def _viewport_top_and_bottom_screenshots(page, viewport_h: int) -> List[bytes]:
+def _viewport_top_and_bottom_screenshots(
+    page, viewport_h: int, dashboard_url: str = ""
+) -> List[bytes]:
     """Two full-viewport PNGs: scroll top, then scroll to bottom (dulo)."""
     scroll_sel: Optional[str] = None
     pngs: List[bytes] = []
     try:
+        _prepare_grafana_dashboard_for_capture(page, dashboard_url)
         _clear_p0_dash_page_scroll_marks(page)
         if _mark_wide_dashboard_scroll_container(page):
             scroll_sel = "[data-p0-dash-page-scroll='1']"
@@ -898,7 +1015,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 "p0 graph screenshot: P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1 — skip CSS clip/body clip chain"
             )
             if _config.get_p0_graph_screenshot_top_and_bottom():
-                top_bottom = _viewport_top_and_bottom_screenshots(page, h)
+                top_bottom = _viewport_top_and_bottom_screenshots(page, h, url)
                 if len(top_bottom) >= 2:
                     return top_bottom, cap_time
                 if len(top_bottom) == 1:
@@ -1219,6 +1336,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
             pass
         if wait_ms > 0:
             page.wait_for_timeout(wait_ms)
+        _prepare_grafana_dashboard_for_capture(page, url)
 
     launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
     if _config.get_p0_graph_screenshot_swiftshader():
