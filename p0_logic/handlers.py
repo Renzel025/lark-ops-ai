@@ -1039,6 +1039,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     chat_id=broadcast_dest,
                     priority=pri,
                     source_label=lab,
+                    card=card,
                 )
                 if not forwarder_ok:
                     log.warning(
@@ -1108,12 +1109,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             with ThreadPoolExecutor(max_workers=max(1, max_w)) as ex:
                 if edit_mid:
                     tasks.append(("edit", ex.submit(_lark.recall_im_message, tenant_token, edit_mid)))
-                if use_forwarder and broadcast_dest:
-                    ack = (
-                        "✅ Overview sent to detection + broadcast (overview-only bot)."
-                        if forwarder_ok
-                        else "⚠️ Overview sent to detection, but broadcast via overview bot failed (see server log)."
-                    )
+                if use_forwarder and broadcast_dest and not forwarder_ok:
+                    ack = "⚠️ Overview sent to detection, but broadcast via overview bot failed (see server log)."
                 else:
                     ack = "✅ Overview sent to the target group chat."
                 tasks.append(

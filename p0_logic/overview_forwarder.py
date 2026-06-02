@@ -1,9 +1,10 @@
 """
-HTTP client for lark-forwarder — posts overview text via the overview-only bot webhook.
+HTTP client for lark-forwarder — posts overview card via the overview-only Lark app.
 """
 from __future__ import annotations
 
 import logging
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -18,6 +19,7 @@ def post_overview_via_forwarder(
     chat_id: str,
     priority: str = "",
     source_label: str = "",
+    card: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     POST overview markdown to ``lark-forwarder`` ``/post-overview``.
@@ -43,6 +45,8 @@ def post_overview_via_forwarder(
         "priority": (priority or "").strip(),
         "source_label": (source_label or "").strip(),
     }
+    if isinstance(card, dict) and card:
+        payload["card"] = card
     try:
         r = requests.post(endpoint, json=payload, headers=headers, **_config.timeout_kw())
         body = r.json() if r.content else {}

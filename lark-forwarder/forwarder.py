@@ -111,6 +111,72 @@ def _get_tenant_token() -> str:
         return ""
 
 
+def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:
+    s = (source_chat_label or "").strip()
+    if not s:
+        return ""
+    if len(s) > max_chars:
+        s = s[: max_chars - 1] + "…"
+    return f" — {s}"
+
+
+def _build_overview_result_card(md: str, priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
+    """Same blue interactive card as Primary ``p0_logic.cards.build_overview_result_card``."""
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    safe_md = (md or "").strip()[:3500]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {
+                "tag": "plain_text",
+                "content": f"📝 {prio} Overview{_title_group_suffix(source_chat_label)}",
+            },
+        },
+        "body": {"elements": [{"tag": "div", "text": {"tag": "lark_md", "content": safe_md}}]},
+    }
+
+
+def _post_card_via_lark_app(chat_id: str, card: Dict[str, Any]) -> Tuple[bool, int, str]:
+    cid = (chat_id or "").strip()
+    if not cid.startswith("oc_") or not isinstance(card, dict):
+        return False, 0, "missing chat_id or card"
+    token = _get_tenant_token()
+    if not token:
+        return False, 0, "tenant token failed — check LARK_APP_ID / LARK_APP_SECRET"
+    url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
+    payload = {
+        "receive_id": cid,
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+    }
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=15,
+        )
+        body = r.json() if r.text else {}
+        ok = r.status_code == 200 and body.get("code") == 0
+        if not ok:
+            log.warning(
+                "lark im card post failed HTTP=%s code=%s msg=%s chat_id=%s",
+                r.status_code,
+                body.get("code"),
+                body.get("msg"),
+                cid[:28],
+            )
+            return False, r.status_code, json.dumps(body, ensure_ascii=False)[:500]
+        return True, r.status_code, ""
+    except Exception as e:
+        log.warning("lark im card post error chat_id=%s err=%s", cid[:28], e)
+        return False, 0, str(e)
+
+
 def _post_text_via_lark_app(chat_id: str, text: str) -> Tuple[bool, int, str]:
     cid = (chat_id or "").strip()
     if not cid.startswith("oc_") or not text.strip():
@@ -190,11 +256,20 @@ async def post_overview(request: Request, authorization: Optional[str] = Header(
     if not chat_id.startswith("oc_"):
         return {"ok": False, "error": "missing chat_id — set LARK_FORWARDER_BROADCAST_CHAT_ID or pass chat_id in body"}
 
+    card = body.get("card")
+    if not isinstance(card, dict) or not card:
+        card = _build_overview_result_card(
+            text,
+            priority=str(body.get("priority") or "P0"),
+            source_chat_label=str(body.get("source_label") or ""),
+        )
+
     if _lark_app_configured():
-        ok, status, detail = _post_text_via_lark_app(chat_id, text)
+        ok, status, detail = _post_card_via_lark_app(chat_id, card)
         return {
             "ok": ok,
             "mode": "lark_app",
+            "msg_type": "interactive",
             "chat_id": chat_id,
             "lark_status": status,
             "detail": detail if not ok else "",
