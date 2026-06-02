@@ -63,18 +63,39 @@ log = logging.getLogger("lark-ops-ai")
 
 
 def _apply_kiosk_to_grafana_url(url: str, enable: bool) -> str:
-    """Append ``kiosk`` / ``k kiosk=tv`` when missing — Grafana hides side menu & yields denser panel view."""
+    """Append ``kiosk=tv`` (+ hide dashboard chrome) when missing — Grafana 11 often ignores kiosk alone."""
     u = (url or "").strip()
     if not u or not enable:
         return u
     low = u.lower()
-    if "kiosk" in low:
-        return u
     parsed = urlparse(u)
-    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "kiosk"]
-    q.append(("kiosk", "tv"))
+    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)]
+    if "kiosk" not in low:
+        q = [(k, v) for k, v in q if k.lower() != "kiosk"]
+        q.append(("kiosk", "tv"))
+    if not any(k.lower() == "_dash.hidetimepicker" for k, _ in q):
+        q.append(("_dash.hideTimePicker", "true"))
+    if not any(k.lower() == "_dash.hidevariables" for k, _ in q):
+        q.append(("_dash.hideVariables", "true"))
     new_query = urlencode(q)
     return urlunparse(parsed._replace(query=new_query))
+
+
+def _preset_grafana_nav_local_storage(page) -> None:
+    """Grafana 11 dock prefs — apply before navigation so the sidebar starts collapsed/undocked."""
+    try:
+        page.evaluate(
+            """() => {
+              try {
+                localStorage.setItem('grafana.navigation.docked', 'false');
+                localStorage.setItem('grafana.navigation.dock', '');
+                localStorage.setItem('grafana.navigation.dockState', 'collapsed');
+                localStorage.setItem('grafana.navigation.dockStateBeforeLogin', 'collapsed');
+              } catch (e) {}
+            }"""
+        )
+    except Exception:
+        pass
 
 
 def _inject_grafana_capture_styles(page) -> None:
@@ -112,7 +133,14 @@ def _inject_grafana_capture_styles(page) -> None:
                 .sidemenu-custom,
                 [data-testid="mega-menu"],
                 [data-testid="navigation-menu"],
-                [class*="NavToolbar"] nav {
+                [class*="NavToolbar"] nav,
+                [class*="NavDock"],
+                [class*="navDock"],
+                [class*="DockMenuMain"],
+                [class*="dock-menu"],
+                [class*="page-content"] nav,
+                #reactRoot nav,
+                #reactRoot aside {
                   display: none !important;
                   visibility: hidden !important;
                   width: 0 !important;
@@ -120,6 +148,8 @@ def _inject_grafana_capture_styles(page) -> None:
                   max-width: 0 !important;
                   opacity: 0 !important;
                   pointer-events: none !important;
+                  position: absolute !important;
+                  left: -9999px !important;
                 }
                 .main-view,
                 main,
@@ -127,7 +157,9 @@ def _inject_grafana_capture_styles(page) -> None:
                 .dashboard-container,
                 .page-container,
                 [class*="DashboardCanvas"],
-                [class*="page-body"] {
+                [class*="page-body"],
+                [class*="page-content"],
+                [data-testid="page-content"] {
                   margin-left: 0 !important;
                   padding-left: 0 !important;
                   left: 0 !important;
@@ -277,20 +309,14 @@ def _click_grafana_nav_toggle(page) -> bool:
 
 def _collapse_grafana_sidebar(page) -> None:
     """Hide Grafana left nav / dock so captures look like kiosk / full-width dashboard."""
-    try:
-        page.evaluate(
-            """() => {
-              try {
-                localStorage.setItem('grafana.navigation.dock', '');
-                localStorage.setItem('grafana.navigation.dockState', 'hidden');
-                localStorage.setItem('grafana.navigation.dockStateBeforeLogin', 'hidden');
-              } catch (e) {}
-            }"""
-        )
-    except Exception:
-        pass
+    _preset_grafana_nav_local_storage(page)
+    _inject_grafana_capture_styles(page)
     _click_grafana_nav_toggle(page)
+    # Grafana 11: Undock button lives on the dock header — try nav-scoped clicks too.
     for sel in (
+        'nav button[aria-label="Undock menu"]',
+        'aside button[aria-label="Undock menu"]',
+        '[role="navigation"] button[aria-label="Undock menu"]',
         '[aria-label="Undock menu"]',
         '[aria-label="Dock menu"]',
         '[data-testid="nav-menu-collapse"]',
@@ -310,7 +336,7 @@ def _collapse_grafana_sidebar(page) -> None:
             loc = page.locator(sel)
             if loc.count() > 0 and loc.first.is_visible(timeout=500):
                 loc.first.click(timeout=2500)
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(350)
         except Exception:
             continue
     _inject_grafana_capture_styles(page)
@@ -362,6 +388,7 @@ def _hide_grafana_left_dock_strip(page) -> None:
         page.evaluate(
             """() => {
               const vh = window.innerHeight || 1080;
+              const navWords = /Home|Dashboards|Bookmarks|Starred|Alerting|Grafana/i;
               const picks = [
                 'nav',
                 'aside',
@@ -371,17 +398,35 @@ def _hide_grafana_left_dock_strip(page) -> None:
                 '[class*="Dock" i]',
                 '[class*="SideNav"]',
                 '[class*="NavMenu"]',
+                '[class*="NavDock"]',
               ];
               for (const sel of picks) {
                 document.querySelectorAll(sel).forEach((el) => {
                   const r = el.getBoundingClientRect();
-                  if (r.left > 24) return;
-                  if (r.width < 16 || r.width > 320) return;
-                  if (r.height < vh * 0.35) return;
-                  el.style.setProperty('display', 'none', 'important');
-                  el.style.setProperty('width', '0', 'important');
+                  const txt = (el.innerText || '').slice(0, 400);
+                  if (r.left > 32) return;
+                  if (r.width < 16) return;
+                  if (r.width > 360 && !navWords.test(txt)) return;
+                  if (r.height < vh * 0.25 && !navWords.test(txt)) return;
+                  if (r.width <= 360 || navWords.test(txt)) {
+                    el.style.setProperty('display', 'none', 'important');
+                    el.style.setProperty('width', '0', 'important');
+                    el.style.setProperty('min-width', '0', 'important');
+                    el.style.setProperty('position', 'absolute', 'important');
+                    el.style.setProperty('left', '-9999px', 'important');
+                  }
                 });
               }
+              document.querySelectorAll('body *').forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.left > 24) return;
+                if (r.width < 120 || r.width > 360) return;
+                if (r.height < vh * 0.45) return;
+                const txt = (el.innerText || '').slice(0, 400);
+                if (!navWords.test(txt)) return;
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('width', '0', 'important');
+              });
             }"""
         )
     except Exception as e:
@@ -430,6 +475,7 @@ def _grafana_viewport_clip_excluding_nav(page) -> Optional[Dict[str, int]]:
               const vw = window.innerWidth || 1920;
               const vh = window.innerHeight || 1080;
               let left = 0;
+              const navWords = /Home|Dashboards|Bookmarks|Starred|Alerting|Grafana/i;
               document.querySelectorAll(
                 '.sidemenu, [data-testid="NavBar"], [data-testid="navbar"], '
                 + '[data-testid="nav-menu"], [data-testid="NavMenu"], '
@@ -444,7 +490,16 @@ def _grafana_viewport_clip_excluding_nav(page) -> Optional[Dict[str, int]]:
                 if (r.width < 16 || r.height < vh * 0.2) return;
                 left = Math.max(left, Math.ceil(r.right));
               });
-              left = Math.min(left, Math.floor(vw * 0.25));
+              document.querySelectorAll('body *').forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.left > 24) return;
+                if (r.width < 100 || r.width > 360) return;
+                if (r.height < vh * 0.4) return;
+                const txt = (el.innerText || '').slice(0, 400);
+                if (!navWords.test(txt)) return;
+                left = Math.max(left, Math.ceil(r.right));
+              });
+              left = Math.min(left, Math.floor(vw * 0.28));
               return {
                 x: Math.max(0, left),
                 y: 0,
@@ -503,26 +558,27 @@ def _normalize_screenshot_png(png_bytes: bytes, *, max_width: int = 1920) -> byt
 
 
 def _dashboard_viewport_screenshot(page) -> bytes:
-    from . import config as _config
-
     _ensure_grafana_sidebar_collapsed(page)
+    _inject_grafana_capture_styles(page)
     _hide_grafana_left_dock_strip(page)
-    use_clip = (
-        _config.get_p0_graph_screenshot_dashboard_clip()
-        or _grafana_sidebar_likely_open(page)
-    )
-    if use_clip:
-        clip = _grafana_viewport_clip_excluding_nav(page)
-        if clip and int(clip.get("x") or 0) > 0:
-            log.info(
-                "p0 graph screenshot: nav strip clip x=%s y=%s w=%s h=%s",
-                clip.get("x"),
-                clip.get("y"),
-                clip.get("width"),
-                clip.get("height"),
-            )
-            raw = page.screenshot(full_page=False, type="png", clip=clip)
-            return _normalize_screenshot_png(raw)
+    page.wait_for_timeout(300)
+    clip = _grafana_viewport_clip_excluding_nav(page)
+    left = int((clip or {}).get("x") or 0)
+    if clip and left >= 20:
+        log.info(
+            "p0 graph screenshot: crop left nav strip x=%s y=%s w=%s h=%s",
+            clip.get("x"),
+            clip.get("y"),
+            clip.get("width"),
+            clip.get("height"),
+        )
+        raw = page.screenshot(full_page=False, type="png", clip=clip)
+        return _normalize_screenshot_png(raw)
+    if left > 0:
+        log.warning(
+            "p0 graph screenshot: left nav chrome ~%spx but clip failed — full viewport",
+            left,
+        )
     raw = page.screenshot(full_page=False, type="png")
     return _normalize_screenshot_png(raw)
 
@@ -539,19 +595,19 @@ def _apply_page_zoom_percent(page, percent: int) -> None:
 
 
 def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
-    """Kiosk re-goto if needed, collapse left panel, apply zoom — before screenshots."""
+    """Kiosk re-goto, undock nav, apply zoom — before screenshots."""
     from . import config as _config
 
-    u = (dashboard_url or "").strip()
-    if u and _config.get_p0_graph_screenshot_append_kiosk():
-        cur = (page.url or "").strip()
-        if "kiosk" not in cur.lower() or _grafana_sidebar_likely_open(page):
-            try:
-                log.info("p0 graph screenshot: re-open dashboard with kiosk (hide side panel)")
-                page.goto(u, wait_until="load", timeout=90_000)
-                page.wait_for_timeout(900)
-            except Exception as e:
-                log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
+    kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
+    u = _apply_kiosk_to_grafana_url((dashboard_url or "").strip(), kiosk_on)
+    if u and kiosk_on:
+        try:
+            _preset_grafana_nav_local_storage(page)
+            log.info("p0 graph screenshot: force kiosk re-open (Grafana 11 dock hide)")
+            page.goto(u, wait_until="load", timeout=90_000)
+            page.wait_for_timeout(1200)
+        except Exception as e:
+            log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
     try:
         base_w = _config.get_p0_graph_screenshot_viewport_width()
         base_h = _config.get_p0_graph_screenshot_viewport_height()
@@ -573,8 +629,9 @@ def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
     _clear_capture_zoom_styles(page)
     _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
     _ensure_grafana_sidebar_collapsed(page)
+    _inject_grafana_capture_styles(page)
     _hide_grafana_left_dock_strip(page)
-    page.wait_for_timeout(800)
+    page.wait_for_timeout(1000)
 
 
 def _measure_clip_rect(page, selector: str) -> Optional[Dict[str, int]]:
@@ -1733,6 +1790,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 pass
 
     def _goto_and_wait(page) -> None:
+        _preset_grafana_nav_local_storage(page)
         page.goto(url, wait_until=goto_wait, timeout=nav_ms)
         _grafana_auto_login_if_needed(page, url, nav_ms=nav_ms, goto_wait=goto_wait)
         try:
