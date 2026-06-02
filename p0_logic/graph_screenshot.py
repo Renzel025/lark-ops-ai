@@ -645,13 +645,18 @@ def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
     kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
     u = _apply_kiosk_to_grafana_url((dashboard_url or "").strip(), kiosk_on)
     if u and kiosk_on:
-        try:
-            _preset_grafana_nav_local_storage(page)
-            log.info("p0 graph screenshot: force kiosk re-open (Grafana 11 dock hide)")
-            page.goto(u, wait_until="load", timeout=90_000)
-            page.wait_for_timeout(1200)
-        except Exception as e:
-            log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
+        cur = (page.url or "").strip().lower()
+        need_goto = "kiosk" not in cur or _grafana_sidebar_likely_open(page)
+        if need_goto:
+            try:
+                _preset_grafana_nav_local_storage(page)
+                log.info("p0 graph screenshot: force kiosk re-open (Grafana 11 dock hide)")
+                page.goto(u, wait_until="load", timeout=90_000)
+                page.wait_for_timeout(1200)
+            except Exception as e:
+                log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
+        else:
+            log.info("p0 graph screenshot: already on kiosk URL — skip re-goto")
     top_bottom = _uses_top_and_bottom_framing()
     try:
         base_w = _config.get_p0_graph_screenshot_viewport_width()
@@ -1194,7 +1199,7 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
               if (panels.length < 2) return null;
 
               let splitY = null;
-              const splitRe = /CPMS1\\.0|CPMS2\\.0|CPMS\\s*1\\.0|CPMS\\s*进入游戏|CPMS\\s*注入游戏|CPMS\\s*登入游戏/i;
+              const splitRe = /CPMS1\\.0|CPMS2\\.0|CPMS\\s*1\\.0|CPMS\\s*进入游戏|CPMS\\s*注入游戏|CPMS\\s*登入游戏|CPMS1\\.0\\s*\\/\\s*CPMS2\\.0/i;
               for (const el of document.querySelectorAll(
                 'h2, h3, button, div, span, [class*="row"], [data-testid*="row" i]'
               )) {
@@ -1280,6 +1285,98 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
         return []
 
 
+def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout_ms: int = 15000) -> None:
+    """Wait for canvas/SVG inside a band clip — bottom band is off-screen until scroll."""
+    if timeout_ms <= 0:
+        return
+    try:
+        page.wait_for_function(
+            """(clip) => {
+              const sy = window.scrollY || 0;
+              const y0 = clip.y;
+              const y1 = clip.y + clip.height;
+              const panels = document.querySelectorAll(
+                '[data-panelid], .react-grid-item, [data-panel-id]'
+              );
+              let canv = 0;
+              let svg = 0;
+              panels.forEach((el) => {
+                const r = el.getBoundingClientRect();
+                const docTop = sy + r.top;
+                const docBot = sy + r.bottom;
+                if (docBot < y0 || docTop > y1) return;
+                el.querySelectorAll('canvas').forEach((c) => {
+                  const cr = c.getBoundingClientRect();
+                  if (cr.width > 80 && cr.height > 40) canv++;
+                });
+                el.querySelectorAll('svg').forEach((s) => {
+                  const sr = s.getBoundingClientRect();
+                  if (sr.width > 20 && sr.height > 12) svg++;
+                });
+              });
+              return canv >= 1 || svg >= 3;
+            }""",
+            doc_clip,
+            timeout=timeout_ms,
+            polling=500,
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: band chart wait: %s", e)
+
+
+def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]:
+    """
+    Scroll band into view first (fixes black PNG for off-screen band 2), then capture.
+    Headless Grafana often paints panels only after they enter the viewport.
+    """
+    try:
+        y = int(doc_clip.get("y") or 0)
+        h = int(doc_clip.get("height") or 0)
+        page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 12))", y)
+        page.wait_for_timeout(500)
+        page.evaluate(
+            """({ y, h }) => {
+              const mid = y + Math.floor(h * 0.4);
+              window.scrollTo(0, Math.max(0, mid - 100));
+              window.scrollTo(0, Math.max(0, y - 12));
+            }""",
+            {"y": y, "h": h},
+        )
+        page.wait_for_timeout(900)
+        _wait_for_charts_in_document_band(page, doc_clip, timeout_ms=12000)
+        page.wait_for_timeout(400)
+        vp_clip = page.evaluate(
+            """(c) => {
+              const sy = window.scrollY || 0;
+              const vh = window.innerHeight || 1080;
+              const yOff = Math.max(0, c.y - sy);
+              const hCap = Math.min(c.height, Math.max(200, vh - yOff));
+              return {
+                x: Math.max(0, c.x),
+                y: yOff,
+                width: c.width,
+                height: hCap,
+              };
+            }""",
+            doc_clip,
+        )
+        if not vp_clip or int(vp_clip.get("height") or 0) < 200:
+            return None
+        raw = page.screenshot(full_page=False, type="png", clip=vp_clip)
+        if raw and not _png_bytes_uniformly_blank(raw):
+            return _normalize_screenshot_png(raw)
+        if int(doc_clip.get("height") or 0) > int(vp_clip.get("height") or 0):
+            log.info("p0 graph screenshot: band taller than viewport — full_page clip fallback")
+            page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 12))", y)
+            page.wait_for_timeout(600)
+            raw2 = page.screenshot(full_page=True, type="png", clip=doc_clip)
+            if raw2 and not _png_bytes_uniformly_blank(raw2):
+                return _normalize_screenshot_png(raw2)
+    except Exception as e:
+        log.warning("p0 graph screenshot: document band capture failed: %s", e)
+    return None
+
+
 def _screenshot_highlight_bands(page) -> List[bytes]:
     """Capture only the two dashboard bands (red-box regions), not full viewports."""
     clips = _measure_grafana_highlight_band_clips(page)
@@ -1287,20 +1384,19 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
         return []
     pngs: List[bytes] = []
     for idx, clip in enumerate(clips):
-        try:
-            log.info(
-                "p0 graph screenshot: highlight band %s/2 clip x=%s y=%s w=%s h=%s",
-                idx + 1,
-                clip.get("x"),
-                clip.get("y"),
-                clip.get("width"),
-                clip.get("height"),
-            )
-            raw = page.screenshot(full_page=True, type="png", clip=clip)
-            if raw and not _png_bytes_uniformly_blank(raw):
-                pngs.append(_normalize_screenshot_png(raw))
-        except Exception as e:
-            log.warning("p0 graph screenshot: highlight band %s failed: %s", idx + 1, e)
+        log.info(
+            "p0 graph screenshot: highlight band %s/2 clip x=%s y=%s w=%s h=%s",
+            idx + 1,
+            clip.get("x"),
+            clip.get("y"),
+            clip.get("width"),
+            clip.get("height"),
+        )
+        raw = _screenshot_document_band(page, clip)
+        if raw:
+            pngs.append(raw)
+        else:
+            log.warning("p0 graph screenshot: highlight band %s/2 blank or failed", idx + 1)
     return pngs
 
 
@@ -1308,17 +1404,18 @@ def _viewport_top_and_bottom_screenshots(
     page, viewport_h: int, dashboard_url: str = ""
 ) -> List[bytes]:
     """
-    Two PNGs = only the highlighted dashboard bands (not full browser viewports):
-    **part 1** — Apisix / KPI / FPMS … through Login row;
-    **part 2** — CPMS / IGO / Pulsar section only.
+    Two PNGs = only the highlighted dashboard bands (not full browser viewports).
+    Page must already be prepared by ``_goto_and_wait`` — do not reload again here.
     """
     scroll_sel: Optional[str] = None
     pngs: List[bytes] = []
     try:
-        _prepare_grafana_dashboard_for_capture(page, dashboard_url)
-        _clear_p0_dash_page_scroll_marks(page)
+        from . import config as _config
+
         _scroll_pair_reset_top(page, scroll_sel)
-        page.wait_for_timeout(600)
+        extra = min(_config.get_p0_graph_screenshot_wait_ms(), 8000)
+        if extra > 0:
+            page.wait_for_timeout(extra)
         band_pngs = _screenshot_highlight_bands(page)
         if len(band_pngs) >= 2:
             log.info("p0 graph screenshot: captured 2 highlight-band PNGs")
