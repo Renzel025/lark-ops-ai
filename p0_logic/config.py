@@ -1508,7 +1508,8 @@ def get_p0_graph_screenshot_viewport_scroll_count() -> int:
 def get_p0_graph_screenshot_top_and_bottom() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_TOP_AND_BOTTOM`` — when ``1`` (default) with ``VIEWPORT_ONLY=1``:
-    capture **two** PNGs — dashboard **top**, then scroll to **bottom** and capture again.
+    capture **two** PNGs cropped to the two main dashboard bands (top KPI/FPMS block, then
+    CPMS/IGO/Pulsar block) — matching manual red-box regions, not full browser viewports.
     Set ``0`` to use incremental viewport scroll (``VIEWPORT_SCROLL_COUNT`` steps).
     """
     reload_env_runtime()

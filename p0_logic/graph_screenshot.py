@@ -454,7 +454,8 @@ def _clear_capture_zoom_styles(page) -> None:
               document.documentElement.style.zoom = '';
               document.body.style.zoom = '';
               document.querySelectorAll(
-                '[data-testid="dashboard-scene"], .dashboard-container, main .page-container, main'
+                '[data-testid="dashboard-scene"], .dashboard-container, '
+                + '[data-testid="page-content"], main .page-container, main .page-body, main'
               ).forEach((el) => {
                 el.style.zoom = '';
                 el.style.transform = '';
@@ -465,6 +466,43 @@ def _clear_capture_zoom_styles(page) -> None:
         )
     except Exception:
         pass
+
+
+def _apply_dashboard_scene_zoom(page, percent: int) -> None:
+    """
+    Top+bottom Lark framing: keep viewport at 1920×1080 but scale the dashboard scene (like browser
+    zoom 50 %) so each of the two scroll shots matches manual refs — expanded viewport fits the whole
+    board in one PNG and breaks the top/bottom split.
+    """
+    pct = int(percent or 100)
+    if pct <= 0 or pct >= 100:
+        _clear_capture_zoom_styles(page)
+        return
+    scale = pct / 100.0
+    inv_pct = 100.0 / pct
+    try:
+        page.evaluate(
+            """({ scale, invPct }) => {
+              document.documentElement.style.zoom = '';
+              document.body.style.zoom = '';
+              document.querySelectorAll(
+                '[data-testid="dashboard-scene"], .dashboard-container, '
+                + '[data-testid="page-content"], main .page-body, main'
+              ).forEach((el) => {
+                el.style.transform = 'scale(' + scale + ')';
+                el.style.transformOrigin = 'top left';
+                el.style.width = invPct + '%';
+                el.style.maxWidth = invPct + '%';
+              });
+            }""",
+            {"scale": scale, "invPct": inv_pct},
+        )
+        log.info(
+            "p0 graph screenshot: top+bottom scene zoom=%s%% (base viewport)",
+            pct,
+        )
+    except Exception as e:
+        log.warning("p0 graph screenshot: scene zoom failed: %s", e)
 
 
 def _grafana_viewport_clip_excluding_nav(page) -> Optional[Dict[str, int]]:
@@ -584,7 +622,7 @@ def _dashboard_viewport_screenshot(page) -> bytes:
 
 
 def _apply_page_zoom_percent(page, percent: int) -> None:
-    """Legacy hook — zoom is applied via expanded viewport in ``_prepare_grafana_dashboard_for_capture``."""
+    """Non top+bottom captures: zoom via expanded Playwright viewport."""
     _clear_capture_zoom_styles(page)
     pct = int(percent or 100)
     if pct > 0 and pct < 100:
@@ -592,6 +630,12 @@ def _apply_page_zoom_percent(page, percent: int) -> None:
             "p0 graph screenshot: zoom=%s%% via expanded viewport (no CSS zoom)",
             pct,
         )
+
+
+def _uses_top_and_bottom_framing() -> bool:
+    from . import config as _config
+
+    return _config.get_p0_graph_screenshot_viewport_only() and _config.get_p0_graph_screenshot_top_and_bottom()
 
 
 def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
@@ -608,26 +652,39 @@ def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
             page.wait_for_timeout(1200)
         except Exception as e:
             log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
+    top_bottom = _uses_top_and_bottom_framing()
     try:
         base_w = _config.get_p0_graph_screenshot_viewport_width()
         base_h = _config.get_p0_graph_screenshot_viewport_height()
         zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
-        cap_w, cap_h = _effective_capture_viewport(base_w, base_h, zoom_pct)
-        page.set_viewport_size({"width": cap_w, "height": cap_h})
-        if cap_w != base_w or cap_h != base_h:
+        if top_bottom:
+            cap_w, cap_h = base_w, base_h
             log.info(
-                "p0 graph screenshot: capture viewport=%sx%s (base=%sx%s zoom=%s%%)",
+                "p0 graph screenshot: top+bottom framing — viewport=%sx%s scene_zoom=%s%%",
                 cap_w,
                 cap_h,
-                base_w,
-                base_h,
                 zoom_pct,
             )
+        else:
+            cap_w, cap_h = _effective_capture_viewport(base_w, base_h, zoom_pct)
+            if cap_w != base_w or cap_h != base_h:
+                log.info(
+                    "p0 graph screenshot: capture viewport=%sx%s (base=%sx%s zoom=%s%%)",
+                    cap_w,
+                    cap_h,
+                    base_w,
+                    base_h,
+                    zoom_pct,
+                )
+        page.set_viewport_size({"width": cap_w, "height": cap_h})
     except Exception as e:
         log.debug("p0 graph screenshot: set_viewport_size: %s", e)
     _ensure_grafana_sidebar_collapsed(page)
-    _clear_capture_zoom_styles(page)
-    _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
+    if top_bottom:
+        _apply_dashboard_scene_zoom(page, _config.get_p0_graph_screenshot_zoom_percent())
+    else:
+        _clear_capture_zoom_styles(page)
+        _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
     _ensure_grafana_sidebar_collapsed(page)
     _inject_grafana_capture_styles(page)
     _hide_grafana_left_dock_strip(page)
@@ -1093,27 +1150,197 @@ def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
         pass
 
 
+def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
+    """
+    Two tight crops matching manual red-box refs:
+    band 1 = Apisix / KPI / FPMS … up to (not including) CPMS section;
+    band 2 = CPMS / IGO / Pulsar … through grid bottom.
+    Clips are in **document** pixels for ``page.screenshot(full_page=True, clip=…)``.
+    """
+    try:
+        raw = page.evaluate(
+            """() => {
+              const sx = window.scrollX || 0;
+              const sy = window.scrollY || 0;
+              const vw = window.innerWidth || 1920;
+              const navWords = /Home|Dashboards|Bookmarks|Starred|Alerting|Grafana/i;
+              let left = 0;
+              document.querySelectorAll(
+                'nav, aside, [role="navigation"], [class*="NavMenu"], [class*="DockMenu"], [class*="SideNav"]'
+              ).forEach((el) => {
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return;
+                const r = el.getBoundingClientRect();
+                if (r.left > 32 || r.width < 16 || r.height < 120) return;
+                left = Math.max(left, Math.ceil(r.right));
+              });
+              left = Math.min(left, Math.floor(vw * 0.28));
+
+              const panelNodes = Array.from(document.querySelectorAll(
+                '[data-panelid], .react-grid-item, [data-panel-id]'
+              ));
+              const panels = [];
+              for (const el of panelNodes) {
+                const r = el.getBoundingClientRect();
+                if (r.width < 48 || r.height < 48) continue;
+                if (r.right <= left + 8) continue;
+                panels.push({
+                  top: sy + r.top,
+                  bottom: sy + r.bottom,
+                  left: sx + Math.max(r.left, left),
+                  right: sx + r.right,
+                });
+              }
+              if (panels.length < 2) return null;
+
+              let splitY = null;
+              const splitRe = /CPMS1\\.0|CPMS2\\.0|CPMS\\s*1\\.0|CPMS\\s*进入游戏|CPMS\\s*注入游戏|CPMS\\s*登入游戏/i;
+              for (const el of document.querySelectorAll(
+                'h2, h3, button, div, span, [class*="row"], [data-testid*="row" i]'
+              )) {
+                const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
+                if (!t || t.length > 120) continue;
+                if (!splitRe.test(t)) continue;
+                const r = el.getBoundingClientRect();
+                if (r.height > 160) continue;
+                splitY = sy + r.top - 4;
+                break;
+              }
+              if (splitY == null) {
+                const grid = document.querySelector(
+                  '[data-testid="dashboard-layout-grid"], .react-grid-layout'
+                );
+                if (grid) {
+                  const gr = grid.getBoundingClientRect();
+                  splitY = sy + gr.top + gr.height * 0.54;
+                }
+              }
+              if (splitY == null) return null;
+
+              const union = (list) => {
+                if (!list.length) return null;
+                let x0 = list[0].left, y0 = list[0].top, x1 = list[0].right, y1 = list[0].bottom;
+                for (const p of list.slice(1)) {
+                  x0 = Math.min(x0, p.left);
+                  y0 = Math.min(y0, p.top);
+                  x1 = Math.max(x1, p.right);
+                  y1 = Math.max(y1, p.bottom);
+                }
+                return { x0, y0, x1, y1 };
+              };
+
+              const topPanels = panels.filter((p) => p.bottom <= splitY + 6);
+              const bottomPanels = panels.filter((p) => p.top >= splitY - 6);
+              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < splitY));
+              const u2 = union(bottomPanels.length ? bottomPanels : panels.filter((p) => p.top >= splitY));
+              if (!u1 || !u2) return null;
+
+              const pad = 8;
+              const mk = (u) => ({
+                x: Math.max(left, Math.floor(u.x0 - pad)),
+                y: Math.max(0, Math.floor(u.y0 - pad)),
+                width: Math.max(320, Math.ceil(u.x1 - u.x0 + pad * 2)),
+                height: Math.max(200, Math.ceil(u.y1 - u.y0 + pad * 2)),
+              });
+              return { splitY, band1: mk(u1), band2: mk(u2) };
+            }"""
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: highlight band measure failed: %s", e)
+        return []
+    if not raw or not isinstance(raw, dict):
+        return []
+    out: List[Dict[str, int]] = []
+    try:
+        split_y = raw.get("splitY")
+        for key in ("band1", "band2"):
+            band = raw.get(key)
+            if not band or not isinstance(band, dict):
+                return []
+            w = int(band.get("width") or 0)
+            h = int(band.get("height") or 0)
+            if w < 320 or h < 200:
+                return []
+            out.append({
+                "x": int(band.get("x") or 0),
+                "y": int(band.get("y") or 0),
+                "width": w,
+                "height": h,
+            })
+        log.info(
+            "p0 graph screenshot: highlight bands split_y=%s band1=%sx%s band2=%sx%s",
+            split_y,
+            out[0]["width"],
+            out[0]["height"],
+            out[1]["width"],
+            out[1]["height"],
+        )
+        return out
+    except (TypeError, ValueError):
+        return []
+
+
+def _screenshot_highlight_bands(page) -> List[bytes]:
+    """Capture only the two dashboard bands (red-box regions), not full viewports."""
+    clips = _measure_grafana_highlight_band_clips(page)
+    if len(clips) != 2:
+        return []
+    pngs: List[bytes] = []
+    for idx, clip in enumerate(clips):
+        try:
+            log.info(
+                "p0 graph screenshot: highlight band %s/2 clip x=%s y=%s w=%s h=%s",
+                idx + 1,
+                clip.get("x"),
+                clip.get("y"),
+                clip.get("width"),
+                clip.get("height"),
+            )
+            raw = page.screenshot(full_page=True, type="png", clip=clip)
+            if raw and not _png_bytes_uniformly_blank(raw):
+                pngs.append(_normalize_screenshot_png(raw))
+        except Exception as e:
+            log.warning("p0 graph screenshot: highlight band %s failed: %s", idx + 1, e)
+    return pngs
+
+
 def _viewport_top_and_bottom_screenshots(
     page, viewport_h: int, dashboard_url: str = ""
 ) -> List[bytes]:
-    """Two full-viewport PNGs: scroll top, then scroll to bottom (dulo)."""
+    """
+    Two PNGs = only the highlighted dashboard bands (not full browser viewports):
+    **part 1** — Apisix / KPI / FPMS … through Login row;
+    **part 2** — CPMS / IGO / Pulsar section only.
+    """
     scroll_sel: Optional[str] = None
     pngs: List[bytes] = []
     try:
         _prepare_grafana_dashboard_for_capture(page, dashboard_url)
         _clear_p0_dash_page_scroll_marks(page)
+        _scroll_pair_reset_top(page, scroll_sel)
+        page.wait_for_timeout(600)
+        band_pngs = _screenshot_highlight_bands(page)
+        if len(band_pngs) >= 2:
+            log.info("p0 graph screenshot: captured 2 highlight-band PNGs")
+            return band_pngs
+        if len(band_pngs) == 1:
+            pngs.extend(band_pngs)
+        log.info("p0 graph screenshot: highlight bands unavailable — fallback viewport top/bottom")
         if _mark_wide_dashboard_scroll_container(page):
             scroll_sel = "[data-p0-dash-page-scroll='1']"
         _scroll_pair_reset_top(page, scroll_sel)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(400)
         top = _dashboard_viewport_screenshot(page)
         if top:
             pngs.append(top)
+            log.info("p0 graph screenshot: top+bottom part 1/2 captured (scroll top fallback)")
         _scroll_to_max(page, scroll_sel)
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(1400)
         bottom = _dashboard_viewport_screenshot(page)
         if bottom and not _png_bytes_uniformly_blank(bottom):
-            pngs.append(bottom)
+            if not (top and bottom == top):
+                pngs.append(bottom)
+                log.info("p0 graph screenshot: top+bottom part 2/2 captured (scroll bottom fallback)")
         elif bottom:
             log.info("p0 graph screenshot: bottom capture looks blank — skipping 2nd image")
         log.info(
