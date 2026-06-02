@@ -44,7 +44,7 @@ def post_overview_via_forwarder(
         "source_label": (source_label or "").strip(),
     }
     try:
-        r = requests.post(endpoint, json=payload, headers=headers, timeout=20, **_config.timeout_kw())
+        r = requests.post(endpoint, json=payload, headers=headers, **_config.timeout_kw())
         body = r.json() if r.content else {}
         ok = r.status_code == 200 and isinstance(body, dict) and body.get("ok") is True
         if ok:
