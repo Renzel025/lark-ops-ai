@@ -14,6 +14,7 @@ from . import cards as _cards
 from . import config as _config
 from . import drafts as _drafts
 from . import lark_client as _lark
+from . import overview_forwarder as _overview_forwarder
 from . import participants as _participants
 from . import session as _session
 from . import support as _support
@@ -984,13 +985,18 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             card = _cards.build_overview_result_card(md, priority=pri, source_chat_label=lab)
-            lark_overview_dest = _config.get_lark_overview_post_chat_id_for_send(src_inc, target_chat).strip()
+            lark_overview_dest, broadcast_dest, use_forwarder = _config.resolve_overview_send_routing(
+                src_inc, target_chat
+            )
             if not lark_overview_dest.startswith("oc_"):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No valid overview destination chat.")
                 return
             log.info(
-                "send_preview: Lark overview destination chat_id=%s (source_incident=%s session_target_chat=%s)",
+                "send_preview: Lark overview primary chat_id=%s broadcast=%s forwarder=%s "
+                "(source_incident=%s session_target_chat=%s)",
                 lark_overview_dest,
+                broadcast_dest or "(none)",
+                use_forwarder,
                 src_inc or "(empty)",
                 target_chat or "(empty)",
             )
@@ -1026,6 +1032,19 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     lark_overview_dest,
                     target_chat,
                 )
+            forwarder_ok = True
+            if use_forwarder and broadcast_dest and md:
+                forwarder_ok = _overview_forwarder.post_overview_via_forwarder(
+                    md,
+                    chat_id=broadcast_dest,
+                    priority=pri,
+                    source_label=lab,
+                )
+                if not forwarder_ok:
+                    log.warning(
+                        "send_preview: overview forwarder failed broadcast_dest=%s (primary post ok)",
+                        broadcast_dest,
+                    )
             fanout_ids = _config.get_overview_detection_fanout_chat_ids()
             if (
                 fanout_ids
@@ -1089,6 +1108,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             with ThreadPoolExecutor(max_workers=max(1, max_w)) as ex:
                 if edit_mid:
                     tasks.append(("edit", ex.submit(_lark.recall_im_message, tenant_token, edit_mid)))
+                if use_forwarder and broadcast_dest:
+                    ack = (
+                        "✅ Overview sent to detection + broadcast (overview-only bot)."
+                        if forwarder_ok
+                        else "⚠️ Overview sent to detection, but broadcast via overview bot failed (see server log)."
+                    )
+                else:
+                    ack = "✅ Overview sent to the target group chat."
                 tasks.append(
                     (
                         "ok",
@@ -1096,7 +1123,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                             _lark.post_text_to_open_id,
                             sender_open_id,
                             tenant_token,
-                            "✅ Overview sent to the target group chat.",
+                            ack,
                         ),
                     )
                 )

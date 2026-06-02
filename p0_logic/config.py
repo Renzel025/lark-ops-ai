@@ -427,6 +427,60 @@ def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, sessio
     return tc
 
 
+def lark_overview_forwarder_enabled() -> bool:
+    """
+    ``LARK_OVERVIEW_FORWARDER_ENABLED=1`` — broadcast overview (``INCIDENT_OVERVIEW_SEND_MAP`` destination)
+    goes through ``lark-forwarder`` (overview-only bot webhook), not the primary bot.
+    """
+    reload_env_runtime()
+    v = (os.getenv("LARK_OVERVIEW_FORWARDER_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_lark_overview_forwarder_url() -> str:
+    """Base URL for ``lark-forwarder`` (e.g. ``http://127.0.0.1:8010``)."""
+    reload_env_runtime()
+    return (os.getenv("LARK_OVERVIEW_FORWARDER_URL") or "").strip().rstrip("/")
+
+
+def get_lark_overview_forwarder_secret() -> str:
+    """Optional shared secret sent as ``Authorization: Bearer …`` to ``lark-forwarder``."""
+    reload_env_runtime()
+    return (os.getenv("LARK_OVERVIEW_FORWARDER_SECRET") or "").strip()
+
+
+def resolve_overview_send_routing(
+    source_incident_chat_id: str, session_target_chat: str
+) -> tuple[str, str, bool]:
+    """
+    Returns ``(primary_dest, broadcast_dest, use_forwarder)`` for **Send overview**.
+
+    When forwarder is enabled and ``INCIDENT_OVERVIEW_SEND_MAP`` defines a broadcast ``oc_`` for this
+    incident, ``primary_dest`` is the detection / prompt group (primary bot) and ``broadcast_dest`` is
+    posted via ``lark-forwarder`` only.
+    """
+    sid = (source_incident_chat_id or "").strip()
+    tc = (session_target_chat or "").strip()
+    if not sid.startswith("oc_") and tc.startswith("oc_"):
+        sid = get_source_incident_chat_id_for_mirror_target(tc) or sid
+    broadcast = get_incident_overview_send_chat_id(sid) if sid.startswith("oc_") else ""
+    use_forwarder = bool(
+        lark_overview_forwarder_enabled()
+        and get_lark_overview_forwarder_url()
+        and broadcast.startswith("oc_")
+    )
+    if use_forwarder:
+        if get_p0_overview_post_to_source_incident_chat() and sid.startswith("oc_"):
+            primary = sid
+        elif tc.startswith("oc_"):
+            primary = tc
+        else:
+            primary = get_lark_overview_post_chat_id_for_send(sid, tc)
+        return primary.strip(), broadcast.strip(), True
+    primary = get_lark_overview_post_chat_id_for_send(sid, tc)
+    return primary.strip(), "", False
+
+
 def get_p0_meeting_cards_in_source_incident_chat() -> bool:
     """
     ``P0_MEETING_CARDS_IN_SOURCE_INCIDENT_CHAT`` — if ``1``, meeting invite / P1 confirm / end summaries
@@ -1243,15 +1297,25 @@ def get_p0_graph_screenshot_zoom_percent() -> int:
     """
     Browser page zoom for capture (``document.documentElement.style.zoom``).
     ``P0_GRAPH_SCREENSHOT_ZOOM_PERCENT`` — e.g. ``50`` fits more dashboard panels per viewport.
-    Clamped 25–100; default 100.
+    Clamped 25–100; default **50** (matches manual browser zoom for Core Metrics boards).
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT") or "100").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT") or "50").strip()
     try:
         return max(25, min(int(raw), 100))
     except ValueError:
-        log.warning("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT=%r invalid — using 100", raw)
-        return 100
+        log.warning("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT=%r invalid — using 50", raw)
+        return 50
+
+
+def get_p0_graph_screenshot_dashboard_clip() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_DASHBOARD_CLIP`` — when ``1``, crop to the dashboard body (fallback if nav
+    still visible). Default **off** — full viewport after CSS hide gives correct sizing in Lark.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_DASHBOARD_CLIP") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_p0_graph_screenshot_clip_selectors() -> List[str]:
@@ -1286,7 +1350,7 @@ def get_p0_graph_screenshot_target_chat_id() -> str:
 
 def get_p0_graph_screenshot_viewport_width() -> int:
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH") or "1280").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH") or "1920").strip()
     try:
         n = int(raw)
     except Exception:
@@ -1296,7 +1360,7 @@ def get_p0_graph_screenshot_viewport_width() -> int:
 
 def get_p0_graph_screenshot_viewport_height() -> int:
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_HEIGHT") or "720").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_HEIGHT") or "1080").strip()
     try:
         n = int(raw)
     except Exception:
