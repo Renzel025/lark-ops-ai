@@ -177,11 +177,29 @@ def _grafana_sidebar_likely_open(page) -> bool:
 
 
 def _click_grafana_nav_toggle(page) -> bool:
-    """Click Grafana 10/11 dock toggle (hamburger beside logo / breadcrumbs)."""
+    """Click Grafana 10/11 dock toggle — Grafana 11 uses ``Undock menu`` on the dock header."""
+    for name in (
+        "Undock menu",
+        "Close menu",
+        "Close navigation menu",
+        "Collapse menu",
+        "Toggle menu",
+    ):
+        try:
+            btn = page.get_by_role("button", name=name, exact=True)
+            if btn.count() > 0 and btn.first.is_visible(timeout=600):
+                btn.first.click(timeout=2500)
+                log.info("p0 graph screenshot: clicked Grafana button %r", name)
+                page.wait_for_timeout(500)
+                return True
+        except Exception:
+            continue
     try:
         clicked = page.evaluate(
             """() => {
               const labels = [
+                'Undock menu',
+                'Dock menu',
                 'Close menu',
                 'Close navigation menu',
                 'Collapse menu',
@@ -225,17 +243,20 @@ def _click_grafana_nav_toggle(page) -> bool:
         )
         if clicked:
             log.info("p0 graph screenshot: clicked Grafana nav toggle (%s)", clicked)
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(500)
             return True
     except Exception as e:
         log.debug("p0 graph screenshot: nav toggle JS click failed: %s", e)
     for sel in (
+        '[aria-label="Undock menu"]',
+        '[aria-label="Dock menu"]',
         '[data-testid="nav-menu-button"]',
         '[data-testid="nav-menu-collapse"]',
         '[aria-label="Close menu"]',
         '[aria-label="Close navigation menu"]',
         '[aria-label="Collapse menu"]',
         '[aria-label="Toggle menu"]',
+        'button[aria-label*="Undock" i]',
         'button[aria-label*="menu" i]',
         'button[aria-label*="Close" i]',
         ".navbar-toggle-button",
@@ -270,12 +291,15 @@ def _collapse_grafana_sidebar(page) -> None:
         pass
     _click_grafana_nav_toggle(page)
     for sel in (
+        '[aria-label="Undock menu"]',
+        '[aria-label="Dock menu"]',
         '[data-testid="nav-menu-collapse"]',
         '[data-testid="nav-menu-button"]',
         '[aria-label="Close menu"]',
         '[aria-label="Close navigation menu"]',
         '[aria-label="Collapse menu"]',
         '[aria-label="Toggle menu"]',
+        'button[aria-label*="Undock" i]',
         'button[aria-label*="menu" i]',
         'button[aria-label*="Close" i]',
         ".navbar-toggle-button",
@@ -352,7 +376,7 @@ def _hide_grafana_left_dock_strip(page) -> None:
                 document.querySelectorAll(sel).forEach((el) => {
                   const r = el.getBoundingClientRect();
                   if (r.left > 24) return;
-                  if (r.width < 16 || r.width > 220) return;
+                  if (r.width < 16 || r.width > 320) return;
                   if (r.height < vh * 0.35) return;
                   el.style.setProperty('display', 'none', 'important');
                   el.style.setProperty('width', '0', 'important');
