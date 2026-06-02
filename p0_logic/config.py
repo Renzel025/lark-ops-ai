@@ -1295,9 +1295,9 @@ def get_p0_graph_screenshot_append_kiosk() -> bool:
 
 def get_p0_graph_screenshot_zoom_percent() -> int:
     """
-    Browser page zoom for capture (``document.documentElement.style.zoom``).
-    ``P0_GRAPH_SCREENSHOT_ZOOM_PERCENT`` — e.g. ``50`` fits more dashboard panels per viewport.
-    Clamped 25–100; default **50** (matches manual browser zoom for Core Metrics boards).
+    Fit-more-dashboard scale for capture. ``P0_GRAPH_SCREENSHOT_ZOOM_PERCENT`` — e.g. ``50`` expands the
+    Playwright viewport (1920→3840) instead of CSS page zoom (which caused ultra-wide PNGs in Lark).
+    Clamped 25–100; default **50**.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT") or "50").strip()

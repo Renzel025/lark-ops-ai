@@ -95,6 +95,7 @@ def _inject_grafana_capture_styles(page) -> None:
                 [data-testid="navbar"],
                 [data-testid="nav-menu"],
                 [data-testid="NavMenu"],
+                [data-testid="DockedNavigation"],
                 nav[aria-label="Main"],
                 nav[aria-label="Navigation"],
                 aside[aria-label="Navigation"],
@@ -102,13 +103,16 @@ def _inject_grafana_capture_styles(page) -> None:
                 [class*="NavMenu"],
                 [class*="navMenu"],
                 [class*="DockMenu"],
+                [class*="dockedNav"],
+                [class*="DockedNav"],
                 [class*="SideNav"],
                 [class*="sideNav"],
                 #dockMenuContent,
                 .dashboard-solo .navbar,
                 .sidemenu-custom,
                 [data-testid="mega-menu"],
-                [data-testid="navigation-menu"] {
+                [data-testid="navigation-menu"],
+                [class*="NavToolbar"] nav {
                   display: none !important;
                   visibility: hidden !important;
                   width: 0 !important;
@@ -121,12 +125,15 @@ def _inject_grafana_capture_styles(page) -> None:
                 main,
                 [data-testid="dashboard-scene"],
                 .dashboard-container,
-                .page-container {
+                .page-container,
+                [class*="DashboardCanvas"],
+                [class*="page-body"] {
                   margin-left: 0 !important;
                   padding-left: 0 !important;
                   left: 0 !important;
                   width: 100% !important;
                   max-width: 100% !important;
+                  transform: none !important;
                 }
               `;
             }"""
@@ -283,6 +290,7 @@ def _collapse_grafana_sidebar(page) -> None:
         except Exception:
             continue
     _inject_grafana_capture_styles(page)
+    _hide_grafana_left_dock_strip(page)
     try:
         page.evaluate(
             """() => {
@@ -324,80 +332,105 @@ def _ensure_grafana_sidebar_collapsed(page, *, max_attempts: int = 4) -> bool:
     return not still_open
 
 
-def _grafana_main_viewport_clip(page) -> Optional[Dict[str, int]]:
-    """Clip to painted dashboard panels — avoids huge empty/black bands from body zoom."""
+def _hide_grafana_left_dock_strip(page) -> None:
+    """Hide collapsed dock rail / leftover left chrome (narrow full-height strip)."""
+    try:
+        page.evaluate(
+            """() => {
+              const vh = window.innerHeight || 1080;
+              const picks = [
+                'nav',
+                'aside',
+                '[role="navigation"]',
+                '[data-testid*="nav" i]',
+                '[class*="dock" i]',
+                '[class*="Dock" i]',
+                '[class*="SideNav"]',
+                '[class*="NavMenu"]',
+              ];
+              for (const sel of picks) {
+                document.querySelectorAll(sel).forEach((el) => {
+                  const r = el.getBoundingClientRect();
+                  if (r.left > 24) return;
+                  if (r.width < 16 || r.width > 220) return;
+                  if (r.height < vh * 0.35) return;
+                  el.style.setProperty('display', 'none', 'important');
+                  el.style.setProperty('width', '0', 'important');
+                });
+              }
+            }"""
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: hide left dock strip failed: %s", e)
+
+
+def _effective_capture_viewport(base_w: int, base_h: int, zoom_pct: int) -> Tuple[int, int]:
+    """
+    ``zoom_pct`` < 100 means fit more dashboard — expand Playwright viewport instead of CSS zoom
+    (CSS zoom + panel clip produced ultra-wide, ultra-short PNGs in Lark).
+    """
+    pct = int(zoom_pct or 100)
+    if pct <= 0 or pct >= 100:
+        return base_w, base_h
+    factor = 100.0 / pct
+    w = min(3840, max(320, int(round(base_w * factor))))
+    h = min(2160, max(240, int(round(base_h * factor))))
+    return w, h
+
+
+def _clear_capture_zoom_styles(page) -> None:
+    try:
+        page.evaluate(
+            """() => {
+              document.documentElement.style.zoom = '';
+              document.body.style.zoom = '';
+              document.querySelectorAll(
+                '[data-testid="dashboard-scene"], .dashboard-container, main .page-container, main'
+              ).forEach((el) => {
+                el.style.zoom = '';
+                el.style.transform = '';
+                el.style.width = '';
+                el.style.maxWidth = '';
+              });
+            }"""
+        )
+    except Exception:
+        pass
+
+
+def _grafana_viewport_clip_excluding_nav(page) -> Optional[Dict[str, int]]:
+    """Full viewport minus any left nav/dock strip — never panel-union (avoids panoramic crops)."""
     try:
         raw = page.evaluate(
             """() => {
               const vw = window.innerWidth || 1920;
               const vh = window.innerHeight || 1080;
-              let navRight = 0;
+              let left = 0;
               document.querySelectorAll(
                 '.sidemenu, [data-testid="NavBar"], [data-testid="navbar"], '
                 + '[data-testid="nav-menu"], [data-testid="NavMenu"], '
-                + 'nav[aria-label="Main"], nav[aria-label="Navigation"], .navbar, '
-                + '[class*="NavMenu"], [class*="DockMenu"], [class*="SideNav"]'
+                + 'nav[aria-label="Main"], nav[aria-label="Navigation"], aside, '
+                + '[class*="NavMenu"], [class*="DockMenu"], [class*="SideNav"], '
+                + '[class*="dockedNav"], [class*="DockedNav"], [role="navigation"]'
               ).forEach((el) => {
                 const st = window.getComputedStyle(el);
                 if (st.display === 'none' || st.visibility === 'hidden') return;
                 const r = el.getBoundingClientRect();
-                if (r.left < 32 && r.width > 40 && r.height > vh * 0.15) {
-                  navRight = Math.max(navRight, Math.ceil(r.right));
-                }
+                if (r.left > 32) return;
+                if (r.width < 16 || r.height < vh * 0.2) return;
+                left = Math.max(left, Math.ceil(r.right));
               });
-              const panels = Array.from(document.querySelectorAll(
-                '[data-panelid], .panel-container, .react-grid-item, .dashboard-row'
-              ));
-              let x0 = navRight;
-              let y0 = 0;
-              let x1 = navRight;
-              let y1 = 0;
-              let hit = false;
-              for (const el of panels) {
-                const r = el.getBoundingClientRect();
-                if (r.width < 40 || r.height < 40) continue;
-                if (r.right <= navRight + 8) continue;
-                if (!hit) {
-                  x0 = Math.max(navRight, Math.floor(r.left));
-                  y0 = Math.floor(r.top);
-                  x1 = Math.ceil(r.right);
-                  y1 = Math.ceil(r.bottom);
-                  hit = true;
-                } else {
-                  x0 = Math.min(x0, Math.max(navRight, Math.floor(r.left)));
-                  y0 = Math.min(y0, Math.floor(r.top));
-                  x1 = Math.max(x1, Math.ceil(r.right));
-                  y1 = Math.max(y1, Math.ceil(r.bottom));
-                }
-              }
-              if (hit) {
-                return {
-                  x: Math.max(0, x0),
-                  y: Math.max(0, y0),
-                  width: Math.max(320, x1 - x0),
-                  height: Math.max(200, Math.min(vh - Math.max(0, y0), y1 - y0)),
-                };
-              }
-              const scene = document.querySelector(
-                '[data-testid="dashboard-scene"], .dashboard-container, main'
-              );
-              if (scene) {
-                const r = scene.getBoundingClientRect();
-                const x = Math.max(navRight, Math.floor(r.left));
-                const w = Math.ceil(r.width);
-                return {
-                  x,
-                  y: Math.max(0, Math.floor(r.top)),
-                  width: Math.max(320, Math.min(w, vw - x)),
-                  height: Math.min(vh - Math.max(0, Math.floor(r.top)), Math.ceil(r.height)),
-                };
-              }
-              const x = Math.max(0, navRight);
-              return { x, y: 0, width: Math.max(480, vw - x), height: vh };
+              left = Math.min(left, Math.floor(vw * 0.25));
+              return {
+                x: Math.max(0, left),
+                y: 0,
+                width: Math.max(480, vw - Math.max(0, left)),
+                height: vh,
+              };
             }"""
         )
     except Exception as e:
-        log.debug("p0 graph screenshot: main viewport clip failed: %s", e)
+        log.debug("p0 graph screenshot: viewport clip failed: %s", e)
         return None
     if not raw or not isinstance(raw, dict):
         return None
@@ -416,74 +449,69 @@ def _grafana_main_viewport_clip(page) -> Optional[Dict[str, int]]:
         return None
 
 
+def _grafana_main_viewport_clip(page) -> Optional[Dict[str, int]]:
+    """Backward-compatible alias — always viewport-based, not panel bounding box."""
+    return _grafana_viewport_clip_excluding_nav(page)
+
+
+def _normalize_screenshot_png(png_bytes: bytes, *, max_width: int = 1920) -> bytes:
+    """Downscale wide captures for Lark (keeps aspect ratio)."""
+    if not png_bytes or max_width <= 0:
+        return png_bytes
+    try:
+        from PIL import Image
+    except ImportError:
+        return png_bytes
+    try:
+        im = Image.open(BytesIO(png_bytes))
+        im.load()
+        w, h = im.size
+        if w <= max_width:
+            return png_bytes
+        nh = max(1, int(round(h * (max_width / float(w)))))
+        im = im.resize((max_width, nh), Image.Resampling.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        log.debug("p0 graph screenshot: normalize screenshot failed: %s", e)
+        return png_bytes
+
+
 def _dashboard_viewport_screenshot(page) -> bytes:
     from . import config as _config
 
     _ensure_grafana_sidebar_collapsed(page)
-    zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
+    _hide_grafana_left_dock_strip(page)
     use_clip = (
         _config.get_p0_graph_screenshot_dashboard_clip()
         or _grafana_sidebar_likely_open(page)
-        or (zoom_pct > 0 and zoom_pct < 100)
     )
     if use_clip:
-        clip = _grafana_main_viewport_clip(page)
-        if clip:
+        clip = _grafana_viewport_clip_excluding_nav(page)
+        if clip and int(clip.get("x") or 0) > 0:
             log.info(
-                "p0 graph screenshot: dashboard clip x=%s y=%s w=%s h=%s",
+                "p0 graph screenshot: nav strip clip x=%s y=%s w=%s h=%s",
                 clip.get("x"),
                 clip.get("y"),
                 clip.get("width"),
                 clip.get("height"),
             )
-            return page.screenshot(full_page=False, type="png", clip=clip)
-    return page.screenshot(full_page=False, type="png")
+            raw = page.screenshot(full_page=False, type="png", clip=clip)
+            return _normalize_screenshot_png(raw)
+    raw = page.screenshot(full_page=False, type="png")
+    return _normalize_screenshot_png(raw)
 
 
 def _apply_page_zoom_percent(page, percent: int) -> None:
+    """Legacy hook — zoom is applied via expanded viewport in ``_prepare_grafana_dashboard_for_capture``."""
+    _clear_capture_zoom_styles(page)
     pct = int(percent or 100)
-    if pct <= 0 or pct >= 100:
-        try:
-            page.evaluate(
-                """() => {
-                  document.documentElement.style.zoom = '';
-                  document.body.style.zoom = '';
-                  document.querySelectorAll(
-                    '[data-testid="dashboard-scene"], .dashboard-container, main .page-container, main'
-                  ).forEach((el) => {
-                    el.style.zoom = '';
-                    el.style.transform = '';
-                    el.style.width = '';
-                    el.style.maxWidth = '';
-                  });
-                }"""
-            )
-        except Exception:
-            pass
-        return
-    scale = pct / 100.0
-    try:
-        page.evaluate(
-            """(scale) => {
-              document.documentElement.style.zoom = '';
-              document.body.style.zoom = '';
-              const inv = 100 / scale;
-              const roots = document.querySelectorAll(
-                '[data-testid="dashboard-scene"], .dashboard-container, main .page-container, main'
-              );
-              roots.forEach((el) => {
-                el.style.zoom = String(scale);
-                el.style.transformOrigin = 'top left';
-                el.style.transform = '';
-                el.style.width = inv + '%';
-                el.style.maxWidth = inv + '%';
-              });
-            }""",
-            scale,
+    if pct > 0 and pct < 100:
+        log.info(
+            "p0 graph screenshot: zoom=%s%% via expanded viewport (no CSS zoom)",
+            pct,
         )
-        log.info("p0 graph screenshot: dashboard zoom=%s%% (scene only, not full page)", pct)
-    except Exception as e:
-        log.warning("p0 graph screenshot: page zoom failed: %s", e)
 
 
 def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
@@ -501,14 +529,27 @@ def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
             except Exception as e:
                 log.warning("p0 graph screenshot: kiosk re-goto failed: %s", e)
     try:
-        vw = _config.get_p0_graph_screenshot_viewport_width()
-        vh = _config.get_p0_graph_screenshot_viewport_height()
-        page.set_viewport_size({"width": vw, "height": vh})
+        base_w = _config.get_p0_graph_screenshot_viewport_width()
+        base_h = _config.get_p0_graph_screenshot_viewport_height()
+        zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
+        cap_w, cap_h = _effective_capture_viewport(base_w, base_h, zoom_pct)
+        page.set_viewport_size({"width": cap_w, "height": cap_h})
+        if cap_w != base_w or cap_h != base_h:
+            log.info(
+                "p0 graph screenshot: capture viewport=%sx%s (base=%sx%s zoom=%s%%)",
+                cap_w,
+                cap_h,
+                base_w,
+                base_h,
+                zoom_pct,
+            )
     except Exception as e:
         log.debug("p0 graph screenshot: set_viewport_size: %s", e)
     _ensure_grafana_sidebar_collapsed(page)
+    _clear_capture_zoom_styles(page)
     _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
     _ensure_grafana_sidebar_collapsed(page)
+    _hide_grafana_left_dock_strip(page)
     page.wait_for_timeout(800)
 
 
