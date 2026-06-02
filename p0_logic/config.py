@@ -1508,12 +1508,22 @@ def get_p0_graph_screenshot_viewport_scroll_count() -> int:
 def get_p0_graph_screenshot_top_and_bottom() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_TOP_AND_BOTTOM`` — when ``1`` (default) with ``VIEWPORT_ONLY=1``:
-    capture **two** PNGs cropped to the two main dashboard bands (top KPI/FPMS block, then
-    CPMS/IGO/Pulsar block) — matching manual red-box regions, not full browser viewports.
+    capture cropped dashboard bands matching manual refs (top KPI/FPMS, then CPMS/IGO/Pulsar).
     Set ``0`` to use incremental viewport scroll (``VIEWPORT_SCROLL_COUNT`` steps).
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_TOP_AND_BOTTOM") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_include_login_panel() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — when ``1`` (default) with top+bottom bands,
+    post a **3rd** PNG: the ``Login With Password`` panel only (after the CPMS/Pulsar block).
+    Set ``0`` for two images only.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

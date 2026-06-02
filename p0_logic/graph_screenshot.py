@@ -1155,20 +1155,19 @@ def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
         pass
 
 
-def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
+def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = True) -> List[Dict[str, int]]:
     """
-    Two tight crops matching manual red-box refs:
-    band 1 = Apisix / KPI / FPMS … up to (not including) CPMS section;
-    band 2 = CPMS / IGO / Pulsar … through grid bottom.
-    Clips are in **document** pixels for ``page.screenshot(full_page=True, clip=…)``.
+    Band 1 = Apisix/KPI/FPMS (before Login With Password).
+    Band 2 = CPMS/IGO/Pulsar (from CPMS1.0 row).
+    Band 3 (optional) = Login With Password panel only.
+    Post order: top, CPMS/Pulsar, login (3rd).
     """
     try:
         raw = page.evaluate(
-            """() => {
+            """({ includeLogin }) => {
               const sx = window.scrollX || 0;
               const sy = window.scrollY || 0;
               const vw = window.innerWidth || 1920;
-              const navWords = /Home|Dashboards|Bookmarks|Starred|Alerting|Grafana/i;
               let left = 0;
               document.querySelectorAll(
                 'nav, aside, [role="navigation"], [class*="NavMenu"], [class*="DockMenu"], [class*="SideNav"]'
@@ -1176,7 +1175,7 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
                 const st = window.getComputedStyle(el);
                 if (st.display === 'none' || st.visibility === 'hidden') return;
                 const r = el.getBoundingClientRect();
-                if (r.left > 32 || r.width < 16 || r.height < 120) return;
+                if (r.left > 32 || r.width < 16 || r.height > 120) return;
                 left = Math.max(left, Math.ceil(r.right));
               });
               left = Math.min(left, Math.floor(vw * 0.28));
@@ -1187,40 +1186,58 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
               const panels = [];
               for (const el of panelNodes) {
                 const r = el.getBoundingClientRect();
-                if (r.width < 48 || r.height < 48) continue;
+                if (r.width < 48 || r.height < 40) continue;
                 if (r.right <= left + 8) continue;
+                const title = (el.innerText || '').trim().slice(0, 240);
                 panels.push({
                   top: sy + r.top,
                   bottom: sy + r.bottom,
                   left: sx + Math.max(r.left, left),
                   right: sx + r.right,
+                  title,
                 });
               }
               if (panels.length < 2) return null;
 
-              let splitY = null;
-              const splitRe = /CPMS1\\.0|CPMS2\\.0|CPMS\\s*1\\.0|CPMS\\s*进入游戏|CPMS\\s*注入游戏|CPMS\\s*登入游戏|CPMS1\\.0\\s*\\/\\s*CPMS2\\.0/i;
-              for (const el of document.querySelectorAll(
-                'h2, h3, button, div, span, [class*="row"], [data-testid*="row" i]'
-              )) {
-                const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
-                if (!t || t.length > 120) continue;
-                if (!splitRe.test(t)) continue;
-                const r = el.getBoundingClientRect();
-                if (r.height > 160) continue;
-                splitY = sy + r.top - 4;
-                break;
-              }
-              if (splitY == null) {
+              const findSplitY = (re, maxLen) => {
+                for (const el of document.querySelectorAll(
+                  'h2, h3, button, div, span, [class*="row"], [data-testid*="row" i]'
+                )) {
+                  const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+                  if (!t || t.length > maxLen) continue;
+                  if (!re.test(t)) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.height > 180) continue;
+                  return sy + r.top - 4;
+                }
+                return null;
+              };
+
+              const loginRe = /Login With Password/i;
+              const cpmsRe = /CPMS1\.0|CPMS2\.0|CPMS\s*1\.0|CPMS1\.0\s*\/\s*CPMS2\.0/i;
+
+              let loginSplit = findSplitY(loginRe, 80);
+              let cpmsSplit = findSplitY(cpmsRe, 120);
+
+              if (cpmsSplit == null) {
                 const grid = document.querySelector(
                   '[data-testid="dashboard-layout-grid"], .react-grid-layout'
                 );
                 if (grid) {
                   const gr = grid.getBoundingClientRect();
-                  splitY = sy + gr.top + gr.height * 0.54;
+                  cpmsSplit = sy + gr.top + gr.height * 0.52;
                 }
               }
-              if (splitY == null) return null;
+              if (cpmsSplit == null) return null;
+
+              if (loginSplit == null) {
+                for (const p of panels) {
+                  if (loginRe.test(p.title) && p.title.length < 200) {
+                    loginSplit = p.top - 4;
+                    break;
+                  }
+                }
+              }
 
               const union = (list) => {
                 if (!list.length) return null;
@@ -1234,21 +1251,46 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
                 return { x0, y0, x1, y1 };
               };
 
-              const topPanels = panels.filter((p) => p.bottom <= splitY + 6);
-              const bottomPanels = panels.filter((p) => p.top >= splitY - 6);
-              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < splitY));
-              const u2 = union(bottomPanels.length ? bottomPanels : panels.filter((p) => p.top >= splitY));
+              const isLoginPanel = (p) => loginRe.test(p.title) && p.title.length < 240;
+              const band1End = (loginSplit != null && loginSplit < cpmsSplit)
+                ? loginSplit
+                : cpmsSplit;
+
+              const topPanels = panels.filter(
+                (p) => !isLoginPanel(p) && p.bottom <= band1End + 4
+              );
+              const midPanels = panels.filter(
+                (p) => !isLoginPanel(p) && p.top >= cpmsSplit - 6
+              );
+              const loginPanels = panels.filter((p) => isLoginPanel(p));
+
+              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < cpmsSplit));
+              const u2 = union(midPanels.length ? midPanels : panels.filter((p) => p.top >= cpmsSplit));
               if (!u1 || !u2) return null;
 
               const pad = 8;
-              const mk = (u) => ({
+              const mk = (u, minH) => ({
                 x: Math.max(left, Math.floor(u.x0 - pad)),
                 y: Math.max(0, Math.floor(u.y0 - pad)),
                 width: Math.max(320, Math.ceil(u.x1 - u.x0 + pad * 2)),
-                height: Math.max(200, Math.ceil(u.y1 - u.y0 + pad * 2)),
+                height: Math.max(minH, Math.ceil(u.y1 - u.y0 + pad * 2)),
               });
-              return { splitY, band1: mk(u1), band2: mk(u2) };
-            }"""
+
+              const out = {
+                loginSplit,
+                cpmsSplit,
+                band1: mk(u1, 200),
+                band2: mk(u2, 200),
+                band3: null,
+              };
+
+              if (includeLogin && loginPanels.length) {
+                const u3 = union(loginPanels);
+                if (u3) out.band3 = mk(u3, 72);
+              }
+              return out;
+            }""",
+            {"includeLogin": bool(include_login_panel)},
         )
     except Exception as e:
         log.debug("p0 graph screenshot: highlight band measure failed: %s", e)
@@ -1257,14 +1299,21 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
         return []
     out: List[Dict[str, int]] = []
     try:
-        split_y = raw.get("splitY")
-        for key in ("band1", "band2"):
+        keys = ("band1", "band2")
+        if include_login_panel and raw.get("band3"):
+            keys = ("band1", "band2", "band3")
+        for key in keys:
             band = raw.get(key)
             if not band or not isinstance(band, dict):
+                if key == "band3":
+                    continue
                 return []
             w = int(band.get("width") or 0)
             h = int(band.get("height") or 0)
-            if w < 320 or h < 200:
+            min_h = 72 if key == "band3" else 200
+            if w < 200 or h < min_h:
+                if key == "band3":
+                    continue
                 return []
             out.append({
                 "x": int(band.get("x") or 0),
@@ -1272,13 +1321,14 @@ def _measure_grafana_highlight_band_clips(page) -> List[Dict[str, int]]:
                 "width": w,
                 "height": h,
             })
+        if len(out) < 2:
+            return []
         log.info(
-            "p0 graph screenshot: highlight bands split_y=%s band1=%sx%s band2=%sx%s",
-            split_y,
-            out[0]["width"],
-            out[0]["height"],
-            out[1]["width"],
-            out[1]["height"],
+            "p0 graph screenshot: highlight bands login_y=%s cpms_y=%s parts=%s sizes=%s",
+            raw.get("loginSplit"),
+            raw.get("cpmsSplit"),
+            len(out),
+            [(c["width"], c["height"]) for c in out],
         )
         return out
     except (TypeError, ValueError):
@@ -1343,7 +1393,10 @@ def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]
             {"y": y, "h": h},
         )
         page.wait_for_timeout(900)
-        _wait_for_charts_in_document_band(page, doc_clip, timeout_ms=12000)
+        if h >= 180:
+            _wait_for_charts_in_document_band(page, doc_clip, timeout_ms=12000)
+        else:
+            page.wait_for_timeout(600)
         page.wait_for_timeout(400)
         vp_clip = page.evaluate(
             """(c) => {
@@ -1360,7 +1413,10 @@ def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]
             }""",
             doc_clip,
         )
-        if not vp_clip or int(vp_clip.get("height") or 0) < 200:
+        if not vp_clip:
+            return None
+        min_h = 60 if h < 180 else 200
+        if int(vp_clip.get("height") or 0) < min_h:
             return None
         raw = page.screenshot(full_page=False, type="png", clip=vp_clip)
         if raw and not _png_bytes_uniformly_blank(raw):
@@ -1378,15 +1434,22 @@ def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]
 
 
 def _screenshot_highlight_bands(page) -> List[bytes]:
-    """Capture only the two dashboard bands (red-box regions), not full viewports."""
-    clips = _measure_grafana_highlight_band_clips(page)
-    if len(clips) != 2:
+    """Capture dashboard bands: top KPI block, CPMS/IGO/Pulsar block, optional Login panel."""
+    from . import config as _config
+
+    include_login = _config.get_p0_graph_screenshot_include_login_panel()
+    clips = _measure_grafana_highlight_band_clips(page, include_login_panel=include_login)
+    if len(clips) < 2:
         return []
     pngs: List[bytes] = []
+    labels = ("top KPI/FPMS", "CPMS/IGO/Pulsar", "Login With Password")
     for idx, clip in enumerate(clips):
+        label = labels[idx] if idx < len(labels) else f"band {idx + 1}"
         log.info(
-            "p0 graph screenshot: highlight band %s/2 clip x=%s y=%s w=%s h=%s",
+            "p0 graph screenshot: highlight %s (%s/%s) clip x=%s y=%s w=%s h=%s",
+            label,
             idx + 1,
+            len(clips),
             clip.get("x"),
             clip.get("y"),
             clip.get("width"),
@@ -1396,7 +1459,7 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
         if raw:
             pngs.append(raw)
         else:
-            log.warning("p0 graph screenshot: highlight band %s/2 blank or failed", idx + 1)
+            log.warning("p0 graph screenshot: highlight %s blank or failed", label)
     return pngs
 
 
@@ -1418,7 +1481,7 @@ def _viewport_top_and_bottom_screenshots(
             page.wait_for_timeout(extra)
         band_pngs = _screenshot_highlight_bands(page)
         if len(band_pngs) >= 2:
-            log.info("p0 graph screenshot: captured 2 highlight-band PNGs")
+            log.info("p0 graph screenshot: captured %s highlight-band PNG(s)", len(band_pngs))
             return band_pngs
         if len(band_pngs) == 1:
             pngs.extend(band_pngs)
