@@ -138,6 +138,13 @@ def main() -> int:
 
     print(f"env: {env_path}")
     print(f"url: {url[:72]}{'...' if len(url) > 72 else ''}")
+    print(
+        f"capture: viewport={cfg.get_p0_graph_screenshot_viewport_width()}x"
+        f"{cfg.get_p0_graph_screenshot_viewport_height()} "
+        f"zoom={cfg.get_p0_graph_screenshot_zoom_percent()}% "
+        f"top+bottom={cfg.get_p0_graph_screenshot_top_and_bottom()} "
+        f"login_3rd={cfg.get_p0_graph_screenshot_include_login_panel()}"
+    )
 
     from p0_logic.graph_screenshot import _capture_png_payloads, post_p0_graph_screenshots_to_chat
 
