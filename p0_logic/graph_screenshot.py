@@ -1185,11 +1185,14 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 '[data-panelid], .react-grid-item, [data-panel-id]'
               ));
               const panels = [];
+              const loginTitleRe = /login\\s*(with\\s*)?password/i;
+              const isLoginTitle = (t) => loginTitleRe.test(t || '');
               for (const el of panelNodes) {
                 const r = el.getBoundingClientRect();
-                if (r.width < 48 || r.height < 40) continue;
-                if (r.right <= left + 8) continue;
                 const title = (el.innerText || '').trim().slice(0, 240);
+                const minPanelH = isLoginTitle(title) ? 20 : 40;
+                if (r.width < 48 || r.height < minPanelH) continue;
+                if (r.right <= left + 8) continue;
                 panels.push({
                   top: sy + r.top,
                   bottom: sy + r.bottom,
@@ -1214,10 +1217,10 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 return null;
               };
 
-              const loginRe = /Login With Password/i;
-              const cpmsRe = /CPMS1\.0|CPMS2\.0|CPMS\s*1\.0|CPMS1\.0\s*\/\s*CPMS2\.0/i;
+              const loginRe = /login\\s*(with\\s*)?password/i;
+              const cpmsRe = /CPMS1\\.0|CPMS2\\.0|CPMS\\s*1\\.0|CPMS1\\.0\\s*\\/\\s*CPMS2\\.0/i;
 
-              let loginSplit = findSplitY(loginRe, 80);
+              let loginSplit = findSplitY(loginRe, 120);
               let cpmsSplit = findSplitY(cpmsRe, 120);
 
               if (cpmsSplit == null) {
@@ -1233,10 +1236,20 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 
               if (loginSplit == null) {
                 for (const p of panels) {
-                  if (loginRe.test(p.title) && p.title.length < 200) {
+                  if (isLoginTitle(p.title) && p.title.length < 200) {
                     loginSplit = p.top - 4;
                     break;
                   }
+                }
+              }
+              if (loginSplit == null) {
+                for (const el of panelNodes) {
+                  const t = (el.innerText || '').trim();
+                  if (!isLoginTitle(t)) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width < 48 || r.height < 16) continue;
+                  loginSplit = sy + r.top - 4;
+                  break;
                 }
               }
 
@@ -1252,7 +1265,7 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 return { x0, y0, x1, y1 };
               };
 
-              const isLoginPanel = (p) => loginRe.test(p.title) && p.title.length < 240;
+              const isLoginPanel = (p) => isLoginTitle(p.title) && p.title.length < 240;
               const band1End = (loginSplit != null && loginSplit < cpmsSplit)
                 ? loginSplit
                 : cpmsSplit;
