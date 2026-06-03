@@ -1295,17 +1295,24 @@ def get_p0_graph_screenshot_append_kiosk() -> bool:
 
 def get_p0_graph_screenshot_zoom_percent() -> int:
     """
-    Fit-more-dashboard scale for capture. ``P0_GRAPH_SCREENSHOT_ZOOM_PERCENT`` — e.g. ``50`` expands the
-    Playwright viewport (1920→3840) instead of CSS page zoom (which caused ultra-wide PNGs in Lark).
-    Clamped 25–100; default **50**.
+    **Browser zoom** for capture (like Chromium Ctrl +/-): ``30`` = 30% page zoom at 1920×1080 viewport.
+    Uses CDP ``Emulation.setPageScaleFactor`` + CSS ``zoom`` fallback. Clamped 5–100; default **50**.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT") or "50").strip()
     try:
-        return max(25, min(int(raw), 100))
+        n = int(raw)
     except ValueError:
         log.warning("P0_GRAPH_SCREENSHOT_ZOOM_PERCENT=%r invalid — using 50", raw)
         return 50
+    clamped = max(5, min(n, 100))
+    if clamped != n:
+        log.warning(
+            "P0_GRAPH_SCREENSHOT_ZOOM_PERCENT=%s clamped to %s (allowed 5–100)",
+            raw,
+            clamped,
+        )
+    return clamped
 
 
 def get_p0_graph_screenshot_dashboard_clip() -> bool:

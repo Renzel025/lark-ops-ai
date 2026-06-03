@@ -442,8 +442,9 @@ def _effective_capture_viewport(base_w: int, base_h: int, zoom_pct: int) -> Tupl
     if pct <= 0 or pct >= 100:
         return base_w, base_h
     factor = 100.0 / pct
-    w = min(3840, max(320, int(round(base_w * factor))))
-    h = min(2160, max(240, int(round(base_h * factor))))
+    # Cap high enough that 5% vs 30% vs 50% are not all identical (old 3840 cap broke zoom).
+    w = min(7680, max(320, int(round(base_w * factor))))
+    h = min(4320, max(240, int(round(base_h * factor))))
     return w, h
 
 
@@ -468,6 +469,56 @@ def _clear_capture_zoom_styles(page) -> None:
         pass
 
 
+def _apply_browser_page_zoom(page, percent: int) -> None:
+    """
+    Real **browser zoom** (like Ctrl +/- in Chromium): CDP ``Emulation.setPageScaleFactor``,
+    then CSS ``zoom`` on ``html``/``body``. Viewport stays 1920×1080 — not viewport resize.
+    """
+    pct = int(percent or 100)
+    if pct <= 0 or pct >= 100:
+        _clear_capture_zoom_styles(page)
+        try:
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": 1.0})
+        except Exception:
+            pass
+        return
+    scale = round(pct / 100.0, 4)
+    _clear_capture_zoom_styles(page)
+    applied = False
+    try:
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": scale})
+        log.info(
+            "p0 graph screenshot: browser zoom CDP pageScaleFactor=%s (%s%%)",
+            scale,
+            pct,
+        )
+        applied = True
+    except Exception as e:
+        log.debug("p0 graph screenshot: CDP browser zoom failed: %s", e)
+    page.evaluate(
+        """(z) => {
+          document.documentElement.style.zoom = z + '%';
+          document.body.style.zoom = z + '%';
+        }""",
+        pct,
+    )
+    verify = page.evaluate(
+        """() => ({
+          htmlZoom: document.documentElement.style.zoom || getComputedStyle(document.documentElement).zoom,
+          bodyZoom: document.body.style.zoom || getComputedStyle(document.body).zoom,
+        })"""
+    )
+    log.info(
+        "p0 graph screenshot: browser zoom=%s%% (CDP=%s) verify=%s",
+        pct,
+        applied,
+        verify,
+    )
+    page.wait_for_timeout(400)
+
+
 def _apply_dashboard_scene_zoom(page, percent: int) -> None:
     """
     Top+bottom Lark framing: keep viewport at 1920×1080 but scale the dashboard scene (like browser
@@ -482,9 +533,10 @@ def _apply_dashboard_scene_zoom(page, percent: int) -> None:
     inv_pct = 100.0 / pct
     try:
         page.evaluate(
-            """({ scale, invPct }) => {
+            """({ scale, invPct, pct }) => {
               document.documentElement.style.zoom = '';
               document.body.style.zoom = '';
+              let hit = 0;
               document.querySelectorAll(
                 '[data-testid="dashboard-scene"], .dashboard-container, '
                 + '[data-testid="page-content"], main .page-body, main'
@@ -493,13 +545,41 @@ def _apply_dashboard_scene_zoom(page, percent: int) -> None:
                 el.style.transformOrigin = 'top left';
                 el.style.width = invPct + '%';
                 el.style.maxWidth = invPct + '%';
+                hit++;
               });
+              if (!hit) {
+                document.documentElement.style.zoom = pct + '%';
+                document.body.style.zoom = pct + '%';
+              }
             }""",
-            {"scale": scale, "invPct": inv_pct},
+            {"scale": scale, "invPct": inv_pct, "pct": pct},
         )
+        verify = page.evaluate(
+            """() => {
+              const main = document.querySelector('main');
+              const tr = main ? getComputedStyle(main).transform : '';
+              const hz = document.documentElement.style.zoom || '';
+              const bz = document.body.style.zoom || '';
+              return {
+                mainTransform: tr && tr !== 'none' ? tr : '',
+                htmlZoom: hz,
+                bodyZoom: bz,
+              };
+            }"""
+        )
+        if verify and not (verify.get("mainTransform") or verify.get("htmlZoom")):
+            page.evaluate(
+                "(z) => { document.documentElement.style.zoom = z + '%'; document.body.style.zoom = z + '%'; }",
+                pct,
+            )
+            log.info(
+                "p0 graph screenshot: scene transform not detected — fallback html zoom=%s%%",
+                pct,
+            )
         log.info(
-            "p0 graph screenshot: top+bottom scene zoom=%s%% (base viewport)",
+            "p0 graph screenshot: top+bottom scene zoom=%s%% verify=%s",
             pct,
+            verify,
         )
     except Exception as e:
         log.warning("p0 graph screenshot: scene zoom failed: %s", e)
@@ -662,34 +742,18 @@ def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
         base_w = _config.get_p0_graph_screenshot_viewport_width()
         base_h = _config.get_p0_graph_screenshot_viewport_height()
         zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
-        if top_bottom:
-            cap_w, cap_h = base_w, base_h
-            log.info(
-                "p0 graph screenshot: top+bottom framing — viewport=%sx%s scene_zoom=%s%%",
-                cap_w,
-                cap_h,
-                zoom_pct,
-            )
-        else:
-            cap_w, cap_h = _effective_capture_viewport(base_w, base_h, zoom_pct)
-            if cap_w != base_w or cap_h != base_h:
-                log.info(
-                    "p0 graph screenshot: capture viewport=%sx%s (base=%sx%s zoom=%s%%)",
-                    cap_w,
-                    cap_h,
-                    base_w,
-                    base_h,
-                    zoom_pct,
-                )
-        page.set_viewport_size({"width": cap_w, "height": cap_h})
+        page.set_viewport_size({"width": base_w, "height": base_h})
+        log.info(
+            "p0 graph screenshot: viewport=%sx%s browser_zoom=%s%% top+bottom=%s",
+            base_w,
+            base_h,
+            zoom_pct,
+            top_bottom,
+        )
     except Exception as e:
         log.debug("p0 graph screenshot: set_viewport_size: %s", e)
     _ensure_grafana_sidebar_collapsed(page)
-    if top_bottom:
-        _apply_dashboard_scene_zoom(page, _config.get_p0_graph_screenshot_zoom_percent())
-    else:
-        _clear_capture_zoom_styles(page)
-        _apply_page_zoom_percent(page, _config.get_p0_graph_screenshot_zoom_percent())
+    _apply_browser_page_zoom(page, _config.get_p0_graph_screenshot_zoom_percent())
     _ensure_grafana_sidebar_collapsed(page)
     _inject_grafana_capture_styles(page)
     _hide_grafana_left_dock_strip(page)
