@@ -1391,6 +1391,34 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
         log.debug("p0 graph screenshot: band chart wait: %s", e)
 
 
+def _screenshot_viewport_at_band_start(page, doc_clip: Dict[str, int]) -> Optional[bytes]:
+    """
+    VNC-style: scroll to band top, capture **one viewport** (1920×1080), not the full band height.
+    Avoids huge 1800×1300+ PNGs from full_page band clips.
+    """
+    from . import config as _config
+
+    try:
+        y = int(doc_clip.get("y") or 0)
+        vh = _config.get_p0_graph_screenshot_viewport_height()
+        page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 8))", y)
+        page.wait_for_timeout(700)
+        vp_band = {
+            "x": int(doc_clip.get("x") or 0),
+            "y": y,
+            "width": int(doc_clip.get("width") or 1920),
+            "height": vh,
+        }
+        _wait_for_charts_in_document_band(page, vp_band, timeout_ms=8000)
+        page.wait_for_timeout(400)
+        raw = _dashboard_viewport_screenshot(page)
+        if raw and not _png_bytes_uniformly_blank(raw):
+            return _normalize_screenshot_png(raw)
+    except Exception as e:
+        log.warning("p0 graph screenshot: viewport-at-band failed: %s", e)
+    return None
+
+
 def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]:
     """
     Scroll band into view first (fixes black PNG for off-screen band 2), then capture.
@@ -1476,9 +1504,14 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
             clip.get("width"),
             clip.get("height"),
         )
-        raw = _screenshot_document_band(page, clip)
+        raw = _screenshot_viewport_at_band_start(page, clip)
         if raw:
             pngs.append(raw)
+            log.info(
+                "p0 graph screenshot: highlight %s viewport PNG bytes=%s",
+                label,
+                len(raw),
+            )
         else:
             log.warning("p0 graph screenshot: highlight %s blank or failed", label)
     return pngs
