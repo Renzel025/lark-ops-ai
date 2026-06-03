@@ -1525,16 +1525,18 @@ def _viewport_top_and_bottom_screenshots(
         _clear_p0_dash_page_scroll_marks(page)
 
 
-def _grafana_login_form_visible(page) -> bool:
+def _grafana_on_dashboard_page(page) -> bool:
+    """True when the dashboard grid is present (logged-in view)."""
     try:
         return bool(
             page.evaluate(
                 """() => {
-                  if (document.querySelector(
-                    'input[name="user"], input[name="username"], #user-input, '
-                    + 'input[autocomplete="username"]'
-                  )) return true;
-                  return !!document.querySelector('input[type="password"]');
+                  const grid = document.querySelector(
+                    '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
+                  );
+                  if (!grid) return false;
+                  const r = grid.getBoundingClientRect();
+                  return r.width > 200 && r.height > 120;
                 }"""
             )
         )
@@ -1542,53 +1544,113 @@ def _grafana_login_form_visible(page) -> bool:
         return False
 
 
-def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto_wait: str) -> None:
+def _grafana_login_form_visible(page) -> bool:
+    """
+    True only when a **visible** login form is shown — not hidden inputs left in the DOM
+    after a successful login (that caused false ``auto-login failed`` warnings).
+    """
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const st = window.getComputedStyle(el);
+                    if (r.width < 40 || r.height < 12) return false;
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    if (parseFloat(st.opacity || '1') < 0.05) return false;
+                    return true;
+                  };
+                  const user = document.querySelector(
+                    'input[name="user"], input[name="username"], #user-input, '
+                    + 'input[autocomplete="username"]'
+                  );
+                  const pw = document.querySelector(
+                    'input[name="password"], input[type="password"]'
+                  );
+                  if (vis(pw)) return true;
+                  if (vis(user) && pw) return true;
+                  const path = (window.location.pathname || '').toLowerCase();
+                  if (path.includes('/login') && !document.querySelector('.react-grid-layout')) {
+                    return true;
+                  }
+                  return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto_wait: str) -> bool:
+    """Return True if logged in (or login not required). False if still on login form."""
     from . import config as _config
 
     user = _config.get_p0_graph_screenshot_username()
     pwd = _config.get_p0_graph_screenshot_password()
     if not user or not pwd:
-        return
+        return True
     if not _grafana_login_form_visible(page):
-        return
-    log.info("p0 graph screenshot: Grafana login page — auto-login user=%s", user)
+        return True
+    log.info(
+        "p0 graph screenshot: Grafana login page — auto-login user=%s (pwd_len=%s)",
+        user,
+        len(pwd),
+    )
     user_filled = False
+    user_loc = None
     for sel in (
         'input[name="user"]',
         'input[name="username"]',
         "#user-input",
         'input[autocomplete="username"]',
+        '[data-testid="username-input"] input',
+        '[data-testid="Username input"]',
     ):
         try:
             loc = page.locator(sel)
             if loc.count() > 0:
-                loc.first.fill(user, timeout=8000)
+                user_loc = loc.first
+                user_loc.click(timeout=5000)
+                user_loc.fill("", timeout=5000)
+                user_loc.fill(user, timeout=8000)
                 user_filled = True
                 break
         except Exception:
             continue
     if not user_filled:
         log.warning("p0 graph screenshot: auto-login — username field not found")
-        return
+        return False
     pwd_filled = False
-    for sel in ('input[name="password"]', 'input[type="password"]'):
+    pwd_loc = None
+    for sel in (
+        'input[name="password"]',
+        'input[type="password"]',
+        '[data-testid="password-input"] input',
+        '[data-testid="Password input"]',
+    ):
         try:
             loc = page.locator(sel)
             if loc.count() > 0:
-                loc.first.fill(pwd, timeout=8000)
+                pwd_loc = loc.first
+                pwd_loc.click(timeout=5000)
+                pwd_loc.fill("", timeout=5000)
+                pwd_loc.fill(pwd, timeout=8000)
                 pwd_filled = True
                 break
         except Exception:
             continue
     if not pwd_filled:
         log.warning("p0 graph screenshot: auto-login — password field not found")
-        return
+        return False
     clicked = False
     for sel in (
         'button[type="submit"]',
         'button:has-text("Log in")',
         'button:has-text("Login")',
         'button:has-text("Sign in")',
+        '[data-testid="data-testid Login button"]',
     ):
         try:
             loc = page.locator(sel)
@@ -1600,16 +1662,55 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
             continue
     if not clicked:
         try:
-            page.keyboard.press("Enter")
+            if pwd_loc:
+                pwd_loc.press("Enter")
+            else:
+                page.keyboard.press("Enter")
         except Exception:
             pass
+    wait_ms = max(nav_ms, 45_000)
     try:
-        page.wait_for_load_state(goto_wait if goto_wait in ("load", "domcontentloaded") else "load", timeout=nav_ms)
+        page.wait_for_function(
+            """() => {
+              const grid = document.querySelector(
+                '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
+              );
+              if (grid) {
+                const r = grid.getBoundingClientRect();
+                if (r.width > 200 && r.height > 120) return true;
+              }
+              const pw = document.querySelector('input[type="password"], input[name="password"]');
+              if (!pw) return true;
+              const r = pw.getBoundingClientRect();
+              const st = window.getComputedStyle(pw);
+              if (r.width < 40 || st.display === 'none' || st.visibility === 'hidden') return true;
+              return false;
+            }""",
+            timeout=wait_ms,
+            polling=400,
+        )
     except Exception as e:
-        log.warning("p0 graph screenshot: auto-login wait after submit: %s", e)
-    if _grafana_login_form_visible(page):
-        log.warning("p0 graph screenshot: auto-login failed — still on login form")
-        return
+        log.warning("p0 graph screenshot: auto-login wait for dashboard: %s", e)
+    try:
+        page.wait_for_load_state(
+            goto_wait if goto_wait in ("load", "domcontentloaded", "networkidle") else "load",
+            timeout=wait_ms,
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: auto-login load_state: %s", e)
+    if _grafana_on_dashboard_page(page):
+        log.info("p0 graph screenshot: auto-login — dashboard grid visible")
+    elif _grafana_login_form_visible(page):
+        log.warning(
+            "p0 graph screenshot: auto-login failed — login form still visible "
+            "(pwd_len=%s — wrong password or use P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR)",
+            len(pwd),
+        )
+        return False
+    else:
+        log.info(
+            "p0 graph screenshot: auto-login — no login form (dashboard may still be loading)"
+        )
     dash = (dashboard_url or "").strip()
     if dash and "/d/" in dash and dash not in (page.url or ""):
         try:
@@ -1617,6 +1718,7 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
         except Exception as e:
             log.warning("p0 graph screenshot: auto-login redirect to dashboard failed: %s", e)
     log.info("p0 graph screenshot: auto-login succeeded")
+    return True
 
 
 def _clear_p0_scroll_target_marks(page) -> None:
@@ -1940,7 +2042,16 @@ def _load_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
     _preset_grafana_nav_local_storage(page)
     page.goto(dashboard_url, wait_until=goto_wait, timeout=nav_ms)
-    _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait)
+    if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
+        raise RuntimeError(
+            "Grafana login failed — login form still visible. "
+            "Use scripts/grafana_playwright_login_once.py + P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
+        )
+    if not _grafana_on_dashboard_page(page):
+        log.warning(
+            "p0 graph screenshot: dashboard grid not detected after login — "
+            "screenshot may be wrong (panels still loading?)"
+        )
     try:
         page.evaluate("window.scrollTo(0, 0)")
     except Exception:
@@ -2317,7 +2428,11 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                     dsf,
                     wait_ms,
                 )
-                _load_grafana_dashboard_for_capture(page, url)
+                try:
+                    _load_grafana_dashboard_for_capture(page, url)
+                except RuntimeError as e:
+                    log.error("p0 graph screenshot: %s", e)
+                    return [], ""
                 return _snap_with_blank_viewport_fallback(page)
             finally:
                 context.close()
@@ -2337,7 +2452,11 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 dsf,
                 wait_ms,
             )
-            _load_grafana_dashboard_for_capture(page, url)
+            try:
+                _load_grafana_dashboard_for_capture(page, url)
+            except RuntimeError as e:
+                log.error("p0 graph screenshot: %s", e)
+                return [], ""
             return _snap_with_blank_viewport_fallback(page)
         finally:
             browser.close()
