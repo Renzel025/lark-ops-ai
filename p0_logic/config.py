@@ -1518,12 +1518,12 @@ def get_p0_graph_screenshot_top_and_bottom() -> bool:
 
 def get_p0_graph_screenshot_include_login_panel() -> bool:
     """
-    ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — when ``1`` (default) with top+bottom bands,
-    post a **3rd** PNG: the ``Login With Password`` panel only (after the CPMS/Pulsar block).
-    Set ``0`` for two images only.
+    ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — ``0`` (recommended): **two** PNGs like manual VNC —
+    pic1 = KPI/FPMS block; pic2 = Login strip + CPMS/IGO/Pulsar. ``1``: **three** PNGs with Login
+    as its own 3rd image (between top and CPMS blocks in post order).
     """
     reload_env_runtime()
-    v = (os.getenv("P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL") or "1").strip().lower()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

@@ -26,19 +26,26 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-def _load_dotenv() -> None:
+def _bootstrap_env() -> None:
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    from p0_logic import config as cfg
+
+    path = cfg.resolve_env_file_path()
     try:
         from dotenv import load_dotenv
-
-        env_path = os.path.join(_REPO_ROOT, ".env")
-        if os.path.isfile(env_path):
-            load_dotenv(env_path)
-    except Exception:
-        pass
+    except ImportError:
+        return
+    if os.path.isfile(path):
+        try:
+            load_dotenv(path, encoding="utf-8", override=True)
+        except TypeError:
+            load_dotenv(path, override=True)
+    cfg.reload_env_runtime()
 
 
 def main() -> None:
-    _load_dotenv()
+    _bootstrap_env()
     if len(sys.argv) >= 3:
         profile = sys.argv[1].strip()
         url = sys.argv[2].strip()

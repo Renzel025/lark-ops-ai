@@ -16,8 +16,12 @@ Run the **same** Playwright capture as the P0 bot. By default saves PNG(s) to di
   # Optional: watch Chromium on VNC
   export P0_GRAPH_SCREENSHOT_HEADED=1
 
-Requires ``P0_GRAPH_SCREENSHOT_URL`` in ``.env``. ``P0_GRAPH_SCREENSHOT_ENABLED`` does **not**
-need to be on for this script.
+  # If the bot uses a non-default env file (same as systemd ``ENV_PATH``):
+  export ENV_PATH=/root/lark-ops-ai/.env
+  python3 scripts/grafana_screenshot_run_once.py
+
+Requires ``P0_GRAPH_SCREENSHOT_URL`` in the env file (``ENV_PATH`` or repo ``.env``).
+``P0_GRAPH_SCREENSHOT_ENABLED`` does **not** need to be on for this script.
 """
 from __future__ import annotations
 
@@ -32,19 +36,66 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-def _load_dotenv() -> None:
+def _bootstrap_env(env_path_override: str = "") -> str:
+    """Load env the same way as ``main._load_dotenv_early`` + ``config.reload_env_runtime``."""
+    if env_path_override.strip():
+        os.environ["ENV_PATH"] = env_path_override.strip()
+    from p0_logic import config as cfg
+
+    path = cfg.resolve_env_file_path()
     try:
         from dotenv import load_dotenv
+    except ImportError:
+        load_dotenv = None  # type: ignore[misc, assignment]
+    if load_dotenv and os.path.isfile(path):
+        try:
+            load_dotenv(path, encoding="utf-8", override=True)
+        except TypeError:
+            load_dotenv(path, override=True)
+    cfg.reload_env_runtime()
+    return path
 
-        env_path = os.path.join(_REPO_ROOT, ".env")
-        if os.path.isfile(env_path):
-            load_dotenv(env_path)
-    except Exception:
-        pass
+
+def _diagnose_missing_url(env_path: str) -> None:
+    exists = os.path.isfile(env_path)
+    print(f"ENV file: {env_path} (exists={exists})", file=sys.stderr)
+    try:
+        from dotenv import dotenv_values  # noqa: F401
+    except ImportError:
+        print(
+            "python-dotenv is not installed — install: pip install python-dotenv",
+            file=sys.stderr,
+        )
+        return
+    if not exists:
+        print(
+            "Create the file or set ENV_PATH=/path/to/.env before running this script.",
+            file=sys.stderr,
+        )
+        return
+    try:
+        from dotenv import dotenv_values
+
+        vals = dotenv_values(env_path) or {}
+        raw = vals.get("P0_GRAPH_SCREENSHOT_URL")
+        if raw is None:
+            print(
+                "P0_GRAPH_SCREENSHOT_URL is missing in that file (add an uncommented line).",
+                file=sys.stderr,
+            )
+        elif not str(raw).strip():
+            print("P0_GRAPH_SCREENSHOT_URL is present but empty.", file=sys.stderr)
+        else:
+            print(
+                "P0_GRAPH_SCREENSHOT_URL is set in the file but did not reach the process "
+                "(check for typos or run: export ENV_PATH=...)",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"Could not read env file: {e}", file=sys.stderr)
 
 
 def main() -> int:
-    _load_dotenv()
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
@@ -61,8 +112,14 @@ def main() -> int:
         action="store_true",
         help="After capture, post caption + image(s) to P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID (tenant token from .env).",
     )
+    ap.add_argument(
+        "--env-path",
+        default="",
+        help="Override ENV_PATH for this run (default: ENV_PATH env var or repo .env).",
+    )
     args = ap.parse_args()
 
+    env_path = _bootstrap_env(args.env_path or "")
     out_dir = (args.out_dir or "").strip()
     if not out_dir:
         out_dir = os.path.join(_REPO_ROOT, "logs", "grafana-screenshot-manual")
@@ -76,7 +133,11 @@ def main() -> int:
             "Set P0_GRAPH_SCREENSHOT_URL in .env (and profile if login is required).",
             file=sys.stderr,
         )
+        _diagnose_missing_url(env_path)
         return 1
+
+    print(f"env: {env_path}")
+    print(f"url: {url[:72]}{'...' if len(url) > 72 else ''}")
 
     from p0_logic.graph_screenshot import _capture_png_payloads, post_p0_graph_screenshots_to_chat
 

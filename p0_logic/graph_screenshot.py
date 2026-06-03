@@ -1157,10 +1157,11 @@ def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
 
 def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = True) -> List[Dict[str, int]]:
     """
-    Band 1 = Apisix/KPI/FPMS (before Login With Password).
-    Band 2 = CPMS/IGO/Pulsar (from CPMS1.0 row).
-    Band 3 (optional) = Login With Password panel only.
-    Post order: top, CPMS/Pulsar, login (3rd).
+    Two bands (``include_login_panel=False``, default VNC-style):
+      Band 1 = Apisix/KPI/FPMS (stops before Login With Password).
+      Band 2 = Login With Password + CPMS/IGO/Pulsar (login strip at top of 2nd PNG).
+    Three bands (``include_login_panel=True``):
+      Band 1 = top block; band 2 = CPMS/IGO/Pulsar; band 3 = Login panel only.
     """
     try:
         raw = page.evaluate(
@@ -1259,13 +1260,16 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
               const topPanels = panels.filter(
                 (p) => !isLoginPanel(p) && p.bottom <= band1End + 4
               );
-              const midPanels = panels.filter(
-                (p) => !isLoginPanel(p) && p.top >= cpmsSplit - 6
-              );
+              const band2Start = includeLogin
+                ? cpmsSplit
+                : ((loginSplit != null && loginSplit < cpmsSplit) ? loginSplit : cpmsSplit);
+              const midPanels = includeLogin
+                ? panels.filter((p) => !isLoginPanel(p) && p.top >= cpmsSplit - 6)
+                : panels.filter((p) => p.top >= band2Start - 6);
               const loginPanels = panels.filter((p) => isLoginPanel(p));
 
-              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < cpmsSplit));
-              const u2 = union(midPanels.length ? midPanels : panels.filter((p) => p.top >= cpmsSplit));
+              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < band2Start));
+              const u2 = union(midPanels.length ? midPanels : panels.filter((p) => p.top >= band2Start));
               if (!u1 || !u2) return null;
 
               const pad = 8;
@@ -1434,7 +1438,7 @@ def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]
 
 
 def _screenshot_highlight_bands(page) -> List[bytes]:
-    """Capture dashboard bands: top KPI block, CPMS/IGO/Pulsar block, optional Login panel."""
+    """Capture dashboard bands: 2 (VNC-style) or 3 (optional separate Login PNG)."""
     from . import config as _config
 
     include_login = _config.get_p0_graph_screenshot_include_login_panel()
@@ -1442,7 +1446,11 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
     if len(clips) < 2:
         return []
     pngs: List[bytes] = []
-    labels = ("top KPI/FPMS", "CPMS/IGO/Pulsar", "Login With Password")
+    labels = (
+        ("top KPI/FPMS", "Login+CPMS/IGO/Pulsar")
+        if not include_login
+        else ("top KPI/FPMS", "CPMS/IGO/Pulsar", "Login With Password")
+    )
     for idx, clip in enumerate(clips):
         label = labels[idx] if idx < len(labels) else f"band {idx + 1}"
         log.info(
@@ -1833,6 +1841,190 @@ def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> 
     post_p0_graph_screenshots_to_chat(token, chat_id, pngs, captured_at, source_label)
 
 
+def _wait_for_grafana_panels_if_configured(page) -> None:
+    from . import config as _config
+
+    panel_timeout = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
+    if panel_timeout <= 0:
+        return
+    sel = (
+        ".react-grid-item, [data-panel-id], [data-viz-key], "
+        "[data-testid='dashboard-layout-grid']"
+    )
+    try:
+        page.wait_for_selector(sel, state="visible", timeout=panel_timeout)
+        log.info(
+            "p0 graph screenshot: dashboard panel DOM ready (waited up to %sms)",
+            panel_timeout,
+        )
+    except Exception as e:
+        log.warning(
+            "p0 graph screenshot: panel readiness wait failed or timed out — continuing anyway: %s",
+            e,
+        )
+
+
+def _wait_for_grafana_chart_content_if_configured(page) -> None:
+    from . import config as _config
+
+    tmax = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
+    if tmax <= 0:
+        return
+    js = r"""
+        () => {
+          const root = document.querySelector('main') || document.body;
+          if (!root) return false;
+          const panels = root.querySelectorAll(
+            '[data-panel-id], .react-grid-item, [data-viz-key], '
+            + '[data-testid*="panel"], [data-testid*="Panel"]'
+          );
+          if (panels.length < 1) return false;
+          let chartCanv = 0;
+          root.querySelectorAll('canvas').forEach((c) => {
+            const r = c.getBoundingClientRect();
+            if (r.width > 96 && r.height > 56) chartCanv++;
+          });
+          let bigSvg = 0;
+          root.querySelectorAll('svg').forEach((s) => {
+            const r = s.getBoundingClientRect();
+            if (r.width > 20 && r.height > 12) bigSvg++;
+          });
+          if (chartCanv >= 1) return true;
+          if (bigSvg >= 4) return true;
+          const t = (root.innerText || '').trim();
+          if (t.length > 400 && /error|no data|query|failed|exception/i.test(t)) return true;
+          const rows = root.querySelectorAll('table tbody tr, [role="rowgroup"] [role="row"]').length;
+          if (rows >= 12 && t.length > 2000) return true;
+          return false;
+        }
+    """
+    try:
+        page.wait_for_function(js, timeout=tmax, polling=400)
+        log.info(
+            "p0 graph screenshot: chart/table content signal detected (waited up to %sms)",
+            tmax,
+        )
+    except Exception as e:
+        log.warning(
+            "p0 graph screenshot: chart content wait timed out — screenshot may still be blank: %s",
+            e,
+        )
+        try:
+            diag = page.evaluate(
+                """() => {
+                  const r = document.querySelector('main') || document.body;
+                  if (!r) return { panels: 0, chartCanv: 0, textLen: 0 };
+                  let chartCanv = 0;
+                  r.querySelectorAll('canvas').forEach((c) => {
+                    const b = c.getBoundingClientRect();
+                    if (b.width > 96 && b.height > 56) chartCanv++;
+                  });
+                  return {
+                    panels: r.querySelectorAll('[data-panel-id], .react-grid-item').length,
+                    chartCanv: chartCanv,
+                    textLen: (r.innerText || '').length
+                  };
+                }"""
+            )
+            log.warning("p0 graph screenshot: DOM diagnostic %s", diag)
+        except Exception:
+            pass
+
+
+def _load_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
+    """Goto dashboard, login if configured, wait for panels, apply kiosk/zoom (same as capture)."""
+    from . import config as _config
+
+    nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
+    goto_wait = _config.get_p0_graph_screenshot_goto_wait_until()
+    wait_ms = _config.get_p0_graph_screenshot_wait_ms()
+    _preset_grafana_nav_local_storage(page)
+    page.goto(dashboard_url, wait_until=goto_wait, timeout=nav_ms)
+    _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait)
+    try:
+        page.evaluate("window.scrollTo(0, 0)")
+    except Exception:
+        pass
+    _wait_for_grafana_panels_if_configured(page)
+    _wait_for_grafana_chart_content_if_configured(page)
+    try:
+        page.evaluate("window.scrollBy(0, 600); window.scrollTo(0, 0)")
+    except Exception:
+        pass
+    if wait_ms > 0:
+        page.wait_for_timeout(wait_ms)
+    _prepare_grafana_dashboard_for_capture(page, dashboard_url)
+
+
+def open_grafana_dashboard_for_inspection() -> int:
+    """
+    Open **headed** Chromium with the same viewport / kiosk / scene zoom as P0 capture.
+    Blocks until Enter in the terminal (for VNC sizing checks). Does not screenshot or post to Lark.
+    """
+    from . import config as _config
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log.error("playwright not installed (pip install playwright; playwright install chromium)")
+        return 1
+    raw_url = _config.get_p0_graph_screenshot_url()
+    if not raw_url:
+        log.error("Set P0_GRAPH_SCREENSHOT_URL in .env")
+        return 1
+    kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
+    url = _apply_kiosk_to_grafana_url(raw_url, kiosk_on)
+    w = _config.get_p0_graph_screenshot_viewport_width()
+    h = _config.get_p0_graph_screenshot_viewport_height()
+    user_data = _config.get_p0_graph_screenshot_playwright_user_data_dir()
+    dsf = _config.get_p0_graph_screenshot_device_scale_factor()
+    zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
+    launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
+    top_bottom = _uses_top_and_bottom_framing()
+    log.info(
+        "p0 graph screenshot inspect: headed viewport=%sx%s zoom=%s%% top+bottom=%s",
+        w,
+        h,
+        zoom_pct,
+        top_bottom,
+    )
+    with sync_playwright() as p:
+        if user_data:
+            context = p.chromium.launch_persistent_context(
+                user_data,
+                headless=False,
+                viewport={"width": w, "height": h},
+                device_scale_factor=dsf,
+                args=launch_args,
+            )
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                _load_grafana_dashboard_for_capture(page, url)
+                print(
+                    "\nGrafana open (same sizing as P0). Scroll and check layout. Press Enter to close…",
+                    flush=True,
+                )
+                input()
+            finally:
+                context.close()
+        else:
+            browser = p.chromium.launch(headless=False, args=launch_args)
+            try:
+                page = browser.new_page(
+                    viewport={"width": w, "height": h},
+                    device_scale_factor=dsf,
+                )
+                _load_grafana_dashboard_for_capture(page, url)
+                print(
+                    "\nGrafana open (same sizing as P0). Scroll and check layout. Press Enter to close…",
+                    flush=True,
+                )
+                input()
+            finally:
+                browser.close()
+    return 0
+
+
 def _capture_png_payloads() -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
@@ -2084,117 +2276,6 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         log.info("p0 graph screenshot: viewport-only retry succeeded (non-blank)")
         return pngs2, cap2
 
-    def _wait_for_grafana_panels_if_configured(page) -> None:
-        panel_timeout = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
-        if panel_timeout <= 0:
-            return
-        # Grafana 8–11: grid items; some builds use data-panel-id on the panel wrapper.
-        sel = (
-            ".react-grid-item, [data-panel-id], [data-viz-key], "
-            "[data-testid='dashboard-layout-grid']"
-        )
-        try:
-            page.wait_for_selector(sel, state="visible", timeout=panel_timeout)
-            log.info(
-                "p0 graph screenshot: dashboard panel DOM ready (waited up to %sms)",
-                panel_timeout,
-            )
-        except Exception as e:
-            log.warning(
-                "p0 graph screenshot: panel readiness wait failed or timed out — continuing anyway: %s",
-                e,
-            )
-
-    def _wait_for_grafana_chart_content_if_configured(page) -> None:
-        """
-        Grid can exist while time-series cells are still empty (black). Wait until a **large** chart
-        canvas exists, enough SVG widgets, an error string, or a very full **table** (table-only boards).
-        """
-        tmax = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
-        if tmax <= 0:
-            return
-        # Runs in browser; panels may use canvas (Time series) or SVG (Stat, bar gauge); tables have text.
-        # Do **not** treat ``panels >= 2 && long text`` alone as ready — dashboards like Core Metrics render
-        # the left table first while the main time-series grid is still empty (black); that caused early screenshots.
-        js = r"""
-            () => {
-              const root = document.querySelector('main') || document.body;
-              if (!root) return false;
-              const panels = root.querySelectorAll(
-                '[data-panel-id], .react-grid-item, [data-viz-key], '
-                + '[data-testid*="panel"], [data-testid*="Panel"]'
-              );
-              if (panels.length < 1) return false;
-              let chartCanv = 0;
-              root.querySelectorAll('canvas').forEach((c) => {
-                const r = c.getBoundingClientRect();
-                if (r.width > 96 && r.height > 56) chartCanv++;
-              });
-              let bigSvg = 0;
-              root.querySelectorAll('svg').forEach((s) => {
-                const r = s.getBoundingClientRect();
-                if (r.width > 20 && r.height > 12) bigSvg++;
-              });
-              if (chartCanv >= 1) return true;
-              if (bigSvg >= 4) return true;
-              const t = (root.innerText || '').trim();
-              if (t.length > 400 && /error|no data|query|failed|exception/i.test(t)) return true;
-              const rows = root.querySelectorAll('table tbody tr, [role="rowgroup"] [role="row"]').length;
-              if (rows >= 12 && t.length > 2000) return true;
-              return false;
-            }
-        """
-        try:
-            page.wait_for_function(js, timeout=tmax, polling=400)
-            log.info(
-                "p0 graph screenshot: chart/table content signal detected (waited up to %sms)",
-                tmax,
-            )
-        except Exception as e:
-            log.warning(
-                "p0 graph screenshot: chart content wait timed out — screenshot may still be blank: %s",
-                e,
-            )
-            try:
-                diag = page.evaluate(
-                    """() => {
-                      const r = document.querySelector('main') || document.body;
-                      if (!r) return { panels: 0, chartCanv: 0, textLen: 0 };
-                      let chartCanv = 0;
-                      r.querySelectorAll('canvas').forEach((c) => {
-                        const b = c.getBoundingClientRect();
-                        if (b.width > 96 && b.height > 56) chartCanv++;
-                      });
-                      return {
-                        panels: r.querySelectorAll('[data-panel-id], .react-grid-item').length,
-                        chartCanv: chartCanv,
-                        textLen: (r.innerText || '').length
-                      };
-                    }"""
-                )
-                log.warning("p0 graph screenshot: DOM diagnostic %s", diag)
-            except Exception:
-                pass
-
-    def _goto_and_wait(page) -> None:
-        _preset_grafana_nav_local_storage(page)
-        page.goto(url, wait_until=goto_wait, timeout=nav_ms)
-        _grafana_auto_login_if_needed(page, url, nav_ms=nav_ms, goto_wait=goto_wait)
-        try:
-            page.evaluate("window.scrollTo(0, 0)")
-        except Exception:
-            pass
-        _wait_for_grafana_panels_if_configured(page)
-        _wait_for_grafana_chart_content_if_configured(page)
-        # Nudge lazy panels / below-the-fold queries (harmless if no scroll).
-        try:
-            page.evaluate("window.scrollBy(0, 600); window.scrollTo(0, 0)")
-        except Exception:
-            pass
-        if wait_ms > 0:
-            page.wait_for_timeout(wait_ms)
-        _prepare_grafana_dashboard_for_capture(page, url)
-
     launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
     if _config.get_p0_graph_screenshot_swiftshader():
         extra = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
@@ -2236,7 +2317,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                     dsf,
                     wait_ms,
                 )
-                _goto_and_wait(page)
+                _load_grafana_dashboard_for_capture(page, url)
                 return _snap_with_blank_viewport_fallback(page)
             finally:
                 context.close()
@@ -2256,7 +2337,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
                 dsf,
                 wait_ms,
             )
-            _goto_and_wait(page)
+            _load_grafana_dashboard_for_capture(page, url)
             return _snap_with_blank_viewport_fallback(page)
         finally:
             browser.close()
