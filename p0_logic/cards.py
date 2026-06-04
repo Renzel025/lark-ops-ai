@@ -229,7 +229,7 @@ def build_p0_ongoing_dm_buzz_card(
                         "tag": "plain_text",
                         "content": (
                             f"P0 video meeting for {label} is still active ({dur}).\n\n"
-                            f"Contact - {contacts}\n\n"
+                            f"Please help to contact {contacts} if needed.\n\n"
                             f"Meeting ID: {mno}"
                         ),
                     },

@@ -705,12 +705,8 @@ def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, tri
         log.warning("p0 ongoing buzz: no tenant token chat_id=%s", chat_id)
         return
     delay_sec = _config.get_p0_ongoing_dm_buzz_delay_sec()
-    start_epoch = int(sess.get("start_epoch") or 0)
-    if start_epoch > 0:
-        elapsed_min = max(1, (int(time.time()) - start_epoch + 59) // 60)
-        duration_text = f"{elapsed_min} minutes"
-    else:
-        duration_text = f"{max(1, delay_sec // 60)} minutes"
+    buzz_min = max(1, delay_sec // 60)
+    duration_text = f"{buzz_min} minute" if buzz_min == 1 else f"{buzz_min} minutes"
     label = str(sess.get("source_chat_name") or "").strip()
     if not label:
         label = _lark.get_group_chat_name(chat_id, token)
