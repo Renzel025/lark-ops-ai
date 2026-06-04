@@ -723,24 +723,40 @@ def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, tri
         contact_names=contacts,
     )
     targets = _dm_instruction_targets(trigger_open_id)
+    urgent_mode = _config.get_p0_ongoing_lark_urgent_mode()
     sent = 0
+    urgent_ok = 0
     for oid in targets:
         if not oid:
             continue
-        st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
-        if st == 200:
-            sent += 1
-        else:
+        st, body, mid = _lark.post_card_to_open_id(oid, token, card)
+        if st != 200:
             log.warning(
                 "p0 ongoing buzz: DM failed HTTP=%s open_id_tail=%s body=%s",
                 st,
                 oid[-12:] if len(oid) > 12 else oid,
                 (body or "")[:300],
             )
+            continue
+        sent += 1
+        if urgent_mode != "off" and mid:
+            uok, udetail = _lark.urgent_message_for_users(token, mid, [oid], mode=urgent_mode)
+            if uok:
+                urgent_ok += 1
+            else:
+                log.warning(
+                    "p0 ongoing buzz: Lark urgent_%s failed open_id_tail=%s detail=%s "
+                    "(enable im:message.urgent on the bot app?)",
+                    urgent_mode,
+                    oid[-12:] if len(oid) > 12 else oid,
+                    (udetail or "")[:300],
+                )
     log.info(
-        "p0 ongoing buzz: sent to %s/%s operators chat_id=%s delay_sec=%s contacts=%r",
+        "p0 ongoing buzz: sent=%s/%s urgent_%s=%s chat_id=%s delay_sec=%s contacts=%r",
         sent,
         len(targets),
+        urgent_mode,
+        urgent_ok,
         chat_id,
         delay_sec,
         contacts,

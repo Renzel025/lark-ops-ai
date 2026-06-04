@@ -246,6 +246,70 @@ def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) ->
         perf_log("lark patch_interactive_card", t0)
 
 
+def urgent_message_for_users(
+    token: str,
+    message_id: str,
+    open_ids: List[str],
+    *,
+    mode: str = "app",
+) -> Tuple[bool, str]:
+    """
+    Lark 加急 (buzz) on a message the bot already sent — ``urgent_app`` / ``urgent_phone`` / ``urgent_sms``.
+    See https://open.feishu.cn/document/server-docs/im-v1/buzz-messages/buzz-overview
+    """
+    mid = (message_id or "").strip()
+    mode = (mode or "app").strip().lower()
+    if mode not in ("app", "phone", "sms"):
+        return False, f"unsupported urgent mode: {mode}"
+    if not mid or not token:
+        return False, "missing message_id or token"
+    ids = [x.strip() for x in (open_ids or []) if (x or "").strip()]
+    if not ids:
+        return False, "empty open_ids"
+    url = (
+        f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}/urgent_{mode}"
+        f"?user_id_type=open_id"
+    )
+    payload = {"user_id_list": ids}
+    try:
+        r = _lark_http().patch(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json=payload,
+            **_timeout_kw(),
+        )
+        body = r.text or ""
+        if r.status_code != 200:
+            log.warning(
+                "lark urgent_%s failed HTTP=%s message_id=%s body=%s",
+                mode,
+                r.status_code,
+                mid[:24],
+                body[:400],
+            )
+            return False, body[:500]
+        try:
+            jb = json.loads(body) if body else {}
+            if isinstance(jb, dict) and jb.get("code") not in (0, None):
+                log.warning(
+                    "lark urgent_%s API code=%s msg=%s message_id=%s",
+                    mode,
+                    jb.get("code"),
+                    jb.get("msg"),
+                    mid[:24],
+                )
+                return False, body[:500]
+        except Exception:
+            pass
+        return True, ""
+    except Exception as e:
+        log.warning("lark urgent_%s error message_id=%s err=%s", mode, mid[:24], e)
+        return False, str(e)
+
+
 def post_text_to_open_id(open_id: str, token: str, text: str) -> Tuple[int, str]:
     url = f"{LARK_BASE}/im/v1/messages?receive_id_type=open_id"
     payload = {"receive_id": open_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}

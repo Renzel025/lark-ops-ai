@@ -812,6 +812,22 @@ def get_p0_ongoing_contact_names() -> str:
     """Who operators should contact (``P0_ONGOING_CONTACT_NAMES``, default Greg and Eason)."""
     reload_env_runtime()
     return (os.getenv("P0_ONGOING_CONTACT_NAMES") or "Greg and Eason").strip() or "Greg and Eason"
+
+
+def get_p0_ongoing_lark_urgent_mode() -> str:
+    """
+    Lark native 加急 (buzz) on the DM card after it is sent.
+
+    ``P0_ONGOING_LARK_URGENT_MODE``: ``app`` (in-app urgent, default), ``phone``, ``sms``, or ``off``.
+    Requires the matching ``im:message.urgent*`` scopes on the primary Lark app.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ONGOING_LARK_URGENT_MODE") or "app").strip().lower()
+    if v in ("0", "false", "no", "off", "none", "disabled"):
+        return "off"
+    if v in ("app", "phone", "sms"):
+        return v
+    return "app"
 P0_COOLDOWN_SEC = int((os.getenv("P0_COOLDOWN_SEC", "300") or "300").strip())
 SUPPORT_MAP_TTL_SEC = int((os.getenv("SUPPORT_MAP_TTL_SEC", "600") or "600").strip())
 
