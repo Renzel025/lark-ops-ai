@@ -1293,6 +1293,16 @@ def get_p0_graph_screenshot_append_kiosk() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def get_p0_graph_screenshot_include_time_bar() -> bool:
+    """
+    When True, pic 1 scrolls to the dashboard top so **Last 6 hours** / refresh controls appear,
+    and does not append ``_dash.hideTimePicker=true`` to the capture URL.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_INCLUDE_TIME_BAR") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_graph_screenshot_zoom_percent() -> int:
     """
     **Browser zoom** for capture (like Chromium Ctrl +/-): ``30`` = 30% page zoom at 1920×1080 viewport.
@@ -1648,6 +1658,54 @@ def get_p0_graph_screenshot_viewport_only() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_band_warm_scroll() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_BAND_WARM_SCROLL`` — scroll through band 2 before capture so lazy
+    panels (Pulsar row) load. Set ``0`` if runs feel stuck (skips warm scroll).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_WARM_SCROLL") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_band_max_wait_ms() -> int:
+    """
+    Max ms to wait for panels per screenshot band (avoids feeling stuck on band 2).
+    ``P0_GRAPH_SCREENSHOT_BAND_MAX_WAIT_MS`` — default **30000**; capped at 120000.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_MAX_WAIT_MS") or "30000").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 30_000
+    return max(5000, min(n, 120_000))
+
+
+def get_p0_graph_screenshot_fast_capture() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_FAST_CAPTURE=1`` — shorter scroll settles and post-band sleeps;
+    use with ``TOP_AND_BOTTOM=1``. Accuracy still relies on per-band panel waits.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_FAST_CAPTURE") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_interval_min() -> int:
+    """
+    While any **P0** session is active, repeat screenshot posts every N minutes.
+    ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` — **0** = only on P0 start (default). **20** = every 20 min until P0 ends.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_INTERVAL_MIN") or "0").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 0
+    return max(0, min(n, 24 * 60))
 
 
 def get_p0_graph_screenshot_blank_fallback_viewport() -> bool:

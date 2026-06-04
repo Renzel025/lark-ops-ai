@@ -775,6 +775,12 @@ def end_p0_session(
     _session_disk.delete_session(chat_id)
     if token:
         release_dm_slots_for_incident_chat(chat_id, token)
+    try:
+        from .graph_screenshot import on_p0_session_ended_for_graph_screenshot
+
+        on_p0_session_ended_for_graph_screenshot()
+    except Exception as e:
+        log.warning("end_p0_session: graph screenshot interval stop failed: %s", e)
 
 
 def cancel_p0_session(
@@ -832,6 +838,12 @@ def cancel_p0_session(
     _session_disk.delete_session(chat_id)
     if token:
         release_dm_slots_for_incident_chat(chat_id, token)
+    try:
+        from .graph_screenshot import on_p0_session_ended_for_graph_screenshot
+
+        on_p0_session_ended_for_graph_screenshot()
+    except Exception as e:
+        log.warning("cancel_p0_session: graph screenshot interval stop failed: %s", e)
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:

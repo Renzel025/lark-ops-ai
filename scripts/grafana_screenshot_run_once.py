@@ -143,7 +143,10 @@ def main() -> int:
         f"{cfg.get_p0_graph_screenshot_viewport_height()} "
         f"zoom={cfg.get_p0_graph_screenshot_zoom_percent()}% "
         f"top+bottom={cfg.get_p0_graph_screenshot_top_and_bottom()} "
-        f"login_3rd={cfg.get_p0_graph_screenshot_include_login_panel()}"
+        f"login_3rd={cfg.get_p0_graph_screenshot_include_login_panel()} "
+        f"band_max_ms={cfg.get_p0_graph_screenshot_band_max_wait_ms()} "
+        f"fast={cfg.get_p0_graph_screenshot_fast_capture()} "
+        f"time_bar={cfg.get_p0_graph_screenshot_include_time_bar()}"
     )
 
     from p0_logic.graph_screenshot import _capture_png_payloads, post_p0_graph_screenshots_to_chat

@@ -61,9 +61,119 @@ except ImportError:  # Python < 3.9 (see p0_logic/requirements.txt backports.zon
 
 log = logging.getLogger("lark-ops-ai")
 
+_INTERVAL_LOCK = threading.Lock()
+_interval_timer: Optional[threading.Timer] = None
+_interval_source_label: str = ""
+_capture_busy_lock = threading.Lock()
+_capture_busy = False
 
-def _apply_kiosk_to_grafana_url(url: str, enable: bool) -> str:
-    """Append ``kiosk=tv`` (+ hide dashboard chrome) when missing — Grafana 11 often ignores kiosk alone."""
+
+def _has_active_p0_session() -> bool:
+    from .session import P0_SESSIONS
+
+    for sess in P0_SESSIONS.values():
+        if str(sess.get("priority") or "").strip().upper() == "P0":
+            return True
+    return False
+
+
+def _stop_graph_screenshot_interval() -> None:
+    global _interval_timer
+    with _INTERVAL_LOCK:
+        if _interval_timer is not None:
+            _interval_timer.cancel()
+            _interval_timer = None
+
+
+def _schedule_graph_screenshot_interval_tick(delay_sec: float) -> None:
+    global _interval_timer
+    with _INTERVAL_LOCK:
+        if _interval_timer is not None:
+            _interval_timer.cancel()
+        t = threading.Timer(delay_sec, _graph_screenshot_interval_tick)
+        t.daemon = True
+        _interval_timer = t
+        t.start()
+
+
+def _graph_screenshot_interval_tick() -> None:
+    global _interval_timer
+    with _INTERVAL_LOCK:
+        _interval_timer = None
+    try:
+        from . import config as _config
+        from . import lark_client as _lark
+
+        if not _config.p0_graph_screenshot_enabled():
+            return
+        mins = _config.get_p0_graph_screenshot_interval_min()
+        if mins <= 0:
+            return
+        if not _has_active_p0_session():
+            log.info("p0 graph screenshot interval: no active P0 — stopped")
+            return
+        url = _config.get_p0_graph_screenshot_url()
+        chat_id = _config.get_p0_graph_screenshot_target_chat_id()
+        if not url or not chat_id:
+            return
+        tok = _lark.get_tenant_token_primary()
+        if not tok:
+            log.warning("p0 graph screenshot interval: no tenant token")
+            return
+        label = _interval_source_label
+        with _capture_busy_lock:
+            if _capture_busy:
+                log.info(
+                    "p0 graph screenshot interval: previous capture still running — skip this tick"
+                )
+            else:
+                log.info(
+                    "p0 graph screenshot interval: repeat capture (%s min, P0 still active)",
+                    mins,
+                )
+                _capture_and_post_thread_body(tok, url, chat_id, label)
+    except Exception as e:
+        log.warning("p0 graph screenshot interval tick failed: %s", e, exc_info=True)
+    finally:
+        from . import config as _config
+
+        if (
+            _config.p0_graph_screenshot_enabled()
+            and _config.get_p0_graph_screenshot_interval_min() > 0
+            and _has_active_p0_session()
+        ):
+            delay = float(_config.get_p0_graph_screenshot_interval_min()) * 60.0
+            _schedule_graph_screenshot_interval_tick(delay)
+
+
+def start_p0_graph_screenshot_interval(source_chat_label: str) -> None:
+    """Schedule repeat captures every ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` while P0 is active."""
+    from . import config as _config
+
+    mins = _config.get_p0_graph_screenshot_interval_min()
+    if mins <= 0 or not _config.p0_graph_screenshot_enabled():
+        return
+    global _interval_source_label
+    _interval_source_label = (source_chat_label or "").strip()
+    delay = float(mins) * 60.0
+    _schedule_graph_screenshot_interval_tick(delay)
+    log.info(
+        "p0 graph screenshot interval: next repeat in %s min while P0 active (label=%r)",
+        mins,
+        _interval_source_label[:48] if _interval_source_label else "",
+    )
+
+
+def on_p0_session_ended_for_graph_screenshot() -> None:
+    """Call when a P0/P1 session ends; stops the repeat timer if no P0 remains."""
+    if _has_active_p0_session():
+        return
+    _stop_graph_screenshot_interval()
+    log.info("p0 graph screenshot interval: stopped (no active P0)")
+
+
+def _apply_kiosk_to_grafana_url(url: str, enable: bool, *, hide_time_picker: bool = True) -> str:
+    """Append ``kiosk=tv`` (+ optional hide dashboard chrome) when missing."""
     u = (url or "").strip()
     if not u or not enable:
         return u
@@ -73,12 +183,37 @@ def _apply_kiosk_to_grafana_url(url: str, enable: bool) -> str:
     if "kiosk" not in low:
         q = [(k, v) for k, v in q if k.lower() != "kiosk"]
         q.append(("kiosk", "tv"))
-    if not any(k.lower() == "_dash.hidetimepicker" for k, _ in q):
+    if hide_time_picker and not any(k.lower() == "_dash.hidetimepicker" for k, _ in q):
         q.append(("_dash.hideTimePicker", "true"))
     if not any(k.lower() == "_dash.hidevariables" for k, _ in q):
         q.append(("_dash.hideVariables", "true"))
     new_query = urlencode(q)
     return urlunparse(parsed._replace(query=new_query))
+
+
+def _prepare_grafana_capture_url(url: str, *, kiosk: bool) -> str:
+    """
+    URL used for Playwright capture: drop ``refresh=`` so panels do not auto-reload during waits
+    (``refresh=1m`` on a heavy board looks like a hang on the KPI row).
+    """
+    u = (url or "").strip()
+    if not u:
+        return u
+    parsed = urlparse(u)
+    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)]
+    had_refresh = any(k.lower() == "refresh" for k, _ in q)
+    q = [(k, v) for k, v in q if k.lower() != "refresh"]
+    if had_refresh:
+        log.info(
+            "p0 graph screenshot: removed refresh= from capture URL (avoids reload during panel wait)"
+        )
+    u = urlunparse(parsed._replace(query=urlencode(q)))
+    from . import config as _config
+
+    hide_tp = not _config.get_p0_graph_screenshot_include_time_bar()
+    if not hide_tp:
+        log.info("p0 graph screenshot: INCLUDE_TIME_BAR=1 — keep Grafana time range / refresh visible")
+    return _apply_kiosk_to_grafana_url(u, kiosk, hide_time_picker=hide_tp)
 
 
 def _preset_grafana_nav_local_storage(page) -> None:
@@ -718,12 +853,47 @@ def _uses_top_and_bottom_framing() -> bool:
     return _config.get_p0_graph_screenshot_viewport_only() and _config.get_p0_graph_screenshot_top_and_bottom()
 
 
+def _highlight_band_capture_mode() -> bool:
+    """Two (or three) viewport PNGs from dashboard row bands — per-band waits, not one global chart wait."""
+    return _uses_top_and_bottom_framing()
+
+
+def _band_scroll_settle_ms() -> int:
+    from . import config as _config
+
+    return 350 if _config.get_p0_graph_screenshot_fast_capture() else 550
+
+
+def _band_post_capture_settle_ms() -> int:
+    """Short sleep after band panels look ready, before ``screenshot``."""
+    from . import config as _config
+
+    wait_ms = _config.get_p0_graph_screenshot_wait_ms()
+    if _config.get_p0_graph_screenshot_fast_capture():
+        return min(wait_ms, 1500)
+    if _highlight_band_capture_mode():
+        return min(wait_ms, 3000)
+    return min(wait_ms, 8000)
+
+
+def _post_nav_settle_ms() -> int:
+    """Sleep after panel/grid waits, before kiosk/zoom and band capture."""
+    from . import config as _config
+
+    wait_ms = _config.get_p0_graph_screenshot_wait_ms()
+    if not _highlight_band_capture_mode():
+        return wait_ms
+    if _config.get_p0_graph_screenshot_fast_capture():
+        return min(wait_ms, 2500)
+    return min(wait_ms, 5000)
+
+
 def _prepare_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
     """Kiosk re-goto, undock nav, apply zoom — before screenshots."""
     from . import config as _config
 
     kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
-    u = _apply_kiosk_to_grafana_url((dashboard_url or "").strip(), kiosk_on)
+    u = _prepare_grafana_capture_url((dashboard_url or "").strip(), kiosk=kiosk_on)
     if u and kiosk_on:
         cur = (page.url or "").strip().lower()
         need_goto = "kiosk" not in cur or _grafana_sidebar_likely_open(page)
@@ -1219,6 +1389,40 @@ def _scroll_to_max(page, scroll_sel: Optional[str]) -> None:
         pass
 
 
+def _scroll_toolbar_and_apisix_into_view(page) -> None:
+    """Pic 1: top of page + full **Apisix Error Count** panel visible (not clipped by scroll)."""
+    try:
+        page.evaluate(
+            """() => {
+              window.scrollTo(0, 0);
+              const sy = window.scrollY || 0;
+              const vh = window.innerHeight || 1080;
+              const toolbarPad = 58;
+              let apisix = null;
+              document.querySelectorAll(
+                '[data-panelid], .react-grid-item, [data-panel-id]'
+              ).forEach((el) => {
+                const t = (el.innerText || '').trim().slice(0, 120);
+                if (!/apisix\\s*error/i.test(t)) return;
+                const r = el.getBoundingClientRect();
+                if (r.width < 120 || r.height < 40) return;
+                if (!apisix || r.height > apisix.h) {
+                  apisix = { top: sy + r.top, h: r.height, bottom: sy + r.bottom };
+                }
+              });
+              if (!apisix) return;
+              if (apisix.h + toolbarPad <= vh - 12) {
+                const target = Math.max(0, apisix.top - toolbarPad);
+                window.scrollTo(0, target);
+              } else {
+                window.scrollTo(0, Math.max(0, apisix.top - toolbarPad));
+              }
+            }"""
+        )
+    except Exception as e:
+        log.debug("p0 graph screenshot: apisix scroll into view: %s", e)
+
+
 def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = True) -> List[Dict[str, int]]:
     """
     Two bands (``include_login_panel=False``, default VNC-style):
@@ -1227,9 +1431,11 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
     Three bands (``include_login_panel=True``):
       Band 1 = top block; band 2 = CPMS/IGO/Pulsar; band 3 = Login panel only.
     """
+    from . import config as _config
+
     try:
         raw = page.evaluate(
-            """({ includeLogin }) => {
+            """({ includeLogin, includeTimeBar }) => {
               const sx = window.scrollX || 0;
               const sy = window.scrollY || 0;
               const vw = window.innerWidth || 1920;
@@ -1365,13 +1571,39 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 band3: null,
               };
 
+              if (includeTimeBar) {
+                const grid = document.querySelector(
+                  '[data-testid="dashboard-layout-grid"], .react-grid-layout'
+                );
+                if (grid) {
+                  const gr = grid.getBoundingClientRect();
+                  const toolY = Math.max(0, Math.floor(sy + gr.top - 56));
+                  out.band1.y = Math.min(out.band1.y, toolY);
+                }
+                let ax = null;
+                for (const p of panels) {
+                  if (!/apisix\\s*error/i.test(p.title || '')) continue;
+                  if (!ax || (p.bottom - p.top) > (ax.bottom - ax.top)) ax = p;
+                }
+                if (ax) {
+                  out.band1.y = Math.min(out.band1.y, Math.max(0, Math.floor(ax.top - 12)));
+                  out.band1.height = Math.max(
+                    out.band1.height,
+                    Math.ceil(ax.bottom - out.band1.y + 16)
+                  );
+                }
+              }
+
               if (includeLogin && loginPanels.length) {
                 const u3 = union(loginPanels);
                 if (u3) out.band3 = mk(u3, 72);
               }
               return out;
             }""",
-            {"includeLogin": bool(include_login_panel)},
+            {
+                "includeLogin": bool(include_login_panel),
+                "includeTimeBar": bool(_config.get_p0_graph_screenshot_include_time_bar()),
+            },
         )
     except Exception as e:
         log.debug("p0 graph screenshot: highlight band measure failed: %s", e)
@@ -1419,13 +1651,14 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 def _band_panel_wait_timeout_ms() -> int:
     from . import config as _config
 
+    cap = _config.get_p0_graph_screenshot_band_max_wait_ms()
     t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
     if t > 0:
-        return min(t, 120_000)
+        return min(t, cap)
     pr = _config.get_p0_graph_screenshot_panel_ready_timeout_ms()
     if pr > 0:
-        return min(max(35_000, pr + 20_000), 120_000)
-    return 50_000
+        return min(max(20_000, pr + 10_000), cap)
+    return min(35_000, cap)
 
 
 def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
@@ -1437,6 +1670,10 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
         timeout_ms = _band_panel_wait_timeout_ms()
     if timeout_ms <= 0:
         return
+    log.info(
+        "p0 graph screenshot: waiting for band panels (max %ss) — not stuck, Grafana loading…",
+        timeout_ms // 1000,
+    )
     try:
         page.wait_for_function(
             """(clip) => {
@@ -1479,17 +1716,18 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
                 if (/no data/i.test(t)) nodata++;
               });
               if (total < 2) return false;
-              if (loading > 0) return false;
+              if (loading > 2) return false;
+              if (loading > 0 && charts < 2) return false;
               const done = charts + nodata;
-              const need = Math.max(3, Math.ceil(total * 0.55));
+              const need = Math.max(2, Math.ceil(total * 0.5));
               return done >= need;
             }""",
             doc_clip,
             timeout=timeout_ms,
-            polling=500,
+            polling=300,
         )
         log.info(
-            "p0 graph screenshot: band viewport panels ready (up to %sms)",
+            "p0 graph screenshot: band viewport panels ready (waited up to %sms)",
             timeout_ms,
         )
     except Exception as e:
@@ -1503,6 +1741,10 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
     """Band 2: bottom row (Pulsar) loads last — require charts in the lower part of the viewport."""
     if timeout_ms <= 0:
         return
+    log.info(
+        "p0 graph screenshot: waiting for bottom-row panels (max %ss)…",
+        timeout_ms // 1000,
+    )
     try:
         page.wait_for_function(
             """(clip) => {
@@ -1538,7 +1780,7 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
             }""",
             doc_clip,
             timeout=timeout_ms,
-            polling=500,
+            polling=300,
         )
         log.info("p0 graph screenshot: bottom-row panels ready in viewport")
     except Exception as e:
@@ -1547,22 +1789,17 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
 
 def _warm_band_lazy_panels(page, doc_clip: Dict[str, int]) -> None:
     """Scroll through the band so off-screen / lazy panels (e.g. Pulsar row) start queries."""
+    from . import config as _config
+
     try:
         y = int(doc_clip.get("y") or 0)
         h = int(doc_clip.get("height") or 0)
-        vh = 1080
-        try:
-            from . import config as _config
-
-            vh = _config.get_p0_graph_screenshot_viewport_height()
-        except Exception:
-            pass
+        vh = _config.get_p0_graph_screenshot_viewport_height()
         end_y = max(y, y + h - vh)
-        mid1 = y + max(0, h // 3)
-        mid2 = y + max(0, (2 * h) // 3)
-        for sy in (y, mid1, mid2, end_y, y):
+        warm_ms = 380 if _config.get_p0_graph_screenshot_fast_capture() else 520
+        for sy in (y, end_y, y):
             page.evaluate("(s) => window.scrollTo(0, Math.max(0, s))", sy)
-            page.wait_for_timeout(1400)
+            page.wait_for_timeout(warm_ms)
         log.info(
             "p0 graph screenshot: warmed lazy panels band y=%s..%s (scroll through)",
             y,
@@ -1573,7 +1810,11 @@ def _warm_band_lazy_panels(page, doc_clip: Dict[str, int]) -> None:
 
 
 def _screenshot_viewport_at_band_start(
-    page, doc_clip: Dict[str, int], *, is_lower_band: bool = False
+    page,
+    doc_clip: Dict[str, int],
+    *,
+    is_lower_band: bool = False,
+    is_first_band: bool = False,
 ) -> Optional[bytes]:
     """
     VNC-style: scroll to band top, capture **one viewport** (1920×1080), not the full band height.
@@ -1585,10 +1826,23 @@ def _screenshot_viewport_at_band_start(
         y = int(doc_clip.get("y") or 0)
         h = int(doc_clip.get("height") or 0)
         vh = _config.get_p0_graph_screenshot_viewport_height()
+        if is_first_band and _config.get_p0_graph_screenshot_include_time_bar():
+            page.evaluate("() => window.scrollTo(0, 0)")
+            page.wait_for_timeout(400)
+            _scroll_toolbar_and_apisix_into_view(page)
+            y = 0
+            log.info(
+                "p0 graph screenshot: pic 1/2 — include time bar + full Apisix panel (scroll top)"
+            )
         if is_lower_band:
-            _warm_band_lazy_panels(page, doc_clip)
+            from . import config as _cfg_warm
+
+            if _cfg_warm.get_p0_graph_screenshot_band_warm_scroll():
+                log.info("p0 graph screenshot: pic 2/2 — warm-scroll lazy panels…")
+                _warm_band_lazy_panels(page, doc_clip)
+        settle = _band_scroll_settle_ms()
         page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 8))", y)
-        page.wait_for_timeout(900)
+        page.wait_for_timeout(settle + 120)
         page.evaluate(
             """(y) => {
               window.scrollBy(0, Math.min(400, window.innerHeight * 0.35));
@@ -1596,7 +1850,7 @@ def _screenshot_viewport_at_band_start(
             }""",
             y,
         )
-        page.wait_for_timeout(600)
+        page.wait_for_timeout(settle)
         vp_band = {
             "x": int(doc_clip.get("x") or 0),
             "y": y,
@@ -1604,21 +1858,20 @@ def _screenshot_viewport_at_band_start(
             "height": vh,
         }
         band_ms = _band_panel_wait_timeout_ms()
-        if is_lower_band:
-            band_ms = min(max(band_ms, 60_000), 120_000)
         _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
         if is_lower_band:
+            bottom_cap = 12_000 if _config.get_p0_graph_screenshot_fast_capture() else 18_000
             _wait_for_viewport_bottom_row_ready(
                 page,
                 {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
-                timeout_ms=min(band_ms, 45_000),
+                timeout_ms=min(bottom_cap, max(8000, band_ms // 3)),
             )
             page.evaluate(
                 "(y) => window.scrollTo(0, Math.max(0, y - 8))",
                 y,
             )
-            page.wait_for_timeout(800)
-        extra = min(_config.get_p0_graph_screenshot_wait_ms(), 15_000 if is_lower_band else 12_000)
+            page.wait_for_timeout(280)
+        extra = _band_post_capture_settle_ms()
         if extra > 0:
             page.wait_for_timeout(extra)
         raw = _dashboard_viewport_screenshot(page)
@@ -1715,7 +1968,10 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
             clip.get("height"),
         )
         raw = _screenshot_viewport_at_band_start(
-            page, clip, is_lower_band=(idx >= 1)
+            page,
+            clip,
+            is_lower_band=(idx >= 1),
+            is_first_band=(idx == 0),
         )
         if raw:
             pngs.append(raw)
@@ -1742,7 +1998,7 @@ def _viewport_top_and_bottom_screenshots(
         from . import config as _config
 
         _scroll_pair_reset_top(page, scroll_sel)
-        extra = min(_config.get_p0_graph_screenshot_wait_ms(), 8000)
+        extra = _band_post_capture_settle_ms()
         if extra > 0:
             page.wait_for_timeout(extra)
         band_pngs = _screenshot_highlight_bands(page)
@@ -2025,10 +2281,26 @@ def _format_captured_at(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _capture_and_post_thread_body(
+    token: str, url: str, chat_id: str, source_label: str
+) -> None:
+    global _capture_busy
+    with _capture_busy_lock:
+        _capture_busy = True
+    try:
+        _capture_and_post(token, url, chat_id, source_label)
+    finally:
+        with _capture_busy_lock:
+            _capture_busy = False
+
+
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
     """
     Non-blocking: starts a daemon thread to screenshot ``P0_GRAPH_SCREENSHOT_URL`` and post to
     ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Only runs for **P0** when env is enabled.
+
+    If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
+    until no **P0** session remains (see ``on_p0_session_ended_for_graph_screenshot``).
     """
     if (priority or "").strip().upper() != "P0":
         return
@@ -2049,12 +2321,13 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
 
     def _run() -> None:
         try:
-            _capture_and_post(tok, url, chat_id, label)
+            _capture_and_post_thread_body(tok, url, chat_id, label)
         except Exception as e:
             log.warning("p0 graph screenshot: thread failed: %s", e, exc_info=True)
 
     t = threading.Thread(target=_run, name="p0-graph-screenshot", daemon=True)
     t.start()
+    start_p0_graph_screenshot_interval(label)
 
 
 def _split_png_vertical_halves(png_bytes: bytes) -> List[bytes]:
@@ -2227,6 +2500,11 @@ def _wait_for_grafana_panels_if_configured(page) -> None:
 def _wait_for_grafana_chart_content_if_configured(page) -> None:
     from . import config as _config
 
+    if _highlight_band_capture_mode():
+        log.info(
+            "p0 graph screenshot: skip global chart wait (TOP_AND_BOTTOM uses per-band panel waits)"
+        )
+        return
     tmax = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
     if tmax <= 0:
         return
@@ -2322,8 +2600,9 @@ def _load_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
         page.evaluate("window.scrollBy(0, 600); window.scrollTo(0, 0)")
     except Exception:
         pass
-    if wait_ms > 0:
-        page.wait_for_timeout(wait_ms)
+    settle = _post_nav_settle_ms()
+    if settle > 0:
+        page.wait_for_timeout(settle)
     _prepare_grafana_dashboard_for_capture(page, dashboard_url)
 
 
@@ -2344,7 +2623,7 @@ def open_grafana_dashboard_for_inspection() -> int:
         log.error("Set P0_GRAPH_SCREENSHOT_URL in .env")
         return 1
     kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
-    url = _apply_kiosk_to_grafana_url(raw_url, kiosk_on)
+    url = _prepare_grafana_capture_url(raw_url, kiosk=kiosk_on)
     w = _config.get_p0_graph_screenshot_viewport_width()
     h = _config.get_p0_graph_screenshot_viewport_height()
     user_data = _config.get_p0_graph_screenshot_playwright_user_data_dir()
@@ -2412,9 +2691,9 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
 
     raw_url = _config.get_p0_graph_screenshot_url()
     kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
-    url = _apply_kiosk_to_grafana_url(raw_url, kiosk_on)
+    url = _prepare_grafana_capture_url(raw_url, kiosk=kiosk_on)
     if kiosk_on and url != raw_url:
-        log.info("p0 graph screenshot: appended kiosk=tv to URL (hide Grafana side menu)")
+        log.info("p0 graph screenshot: capture URL adjusted (kiosk / no auto-refresh)")
     clip_selectors = _config.get_p0_graph_screenshot_clip_selectors()
     w = _config.get_p0_graph_screenshot_viewport_width()
     h = _config.get_p0_graph_screenshot_viewport_height()
