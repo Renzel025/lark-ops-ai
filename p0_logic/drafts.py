@@ -237,6 +237,8 @@ def _save_preview(
     group_chat_id: str = "",
     group_message_id: str = "",
     group_edit_only: bool = False,
+    broadcast_chat_id: str = "",
+    broadcast_message_id: str = "",
 ) -> str:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -255,10 +257,14 @@ def _save_preview(
         old_edit_mid = ""
         old = tx.get()
         old_warn_mid = ""
+        old_bc_id = ""
+        old_bc_mid = ""
         if old:
             old_mid = str(old.get("preview_message_id") or "").strip()
             old_edit_mid = str(old.get("edit_message_id") or "").strip()
             old_warn_mid = str(old.get("send_block_warning_message_id") or "").strip()
+            old_bc_id = str(old.get("broadcast_chat_id") or "").strip()
+            old_bc_mid = str(old.get("broadcast_message_id") or "").strip()
         row: Dict[str, Any] = {
             "target_chat": target_chat,
             "start_epoch": start_epoch,
@@ -282,6 +288,11 @@ def _save_preview(
             row["edit_message_id"] = old_edit_mid
         if old_warn_mid:
             row["send_block_warning_message_id"] = old_warn_mid
+        bc_id = (broadcast_chat_id or "").strip() or old_bc_id
+        bc_mid = (broadcast_message_id or "").strip() or old_bc_mid
+        if bc_mid:
+            row["broadcast_chat_id"] = bc_id
+            row["broadcast_message_id"] = bc_mid
         tx.set(row)
     return str(md or "").strip()
 
@@ -580,6 +591,8 @@ def save_preview(
     group_chat_id: str = "",
     group_message_id: str = "",
     group_edit_only: bool = False,
+    broadcast_chat_id: str = "",
+    broadcast_message_id: str = "",
 ) -> None:
     """Persist preview state for the sender."""
     _save_preview(
@@ -599,6 +612,8 @@ def save_preview(
         group_chat_id=group_chat_id,
         group_message_id=group_message_id,
         group_edit_only=group_edit_only,
+        broadcast_chat_id=broadcast_chat_id,
+        broadcast_message_id=broadcast_message_id,
     )
 
 
@@ -618,6 +633,8 @@ def load_group_overview_edit_session(sender_open_id: str, state: Dict[str, Any])
         group_chat_id=str(state.get("group_chat_id") or "").strip(),
         group_message_id=str(state.get("group_message_id") or "").strip(),
         group_edit_only=True,
+        broadcast_chat_id=str(state.get("broadcast_chat_id") or "").strip(),
+        broadcast_message_id=str(state.get("broadcast_message_id") or "").strip(),
     )
 
 

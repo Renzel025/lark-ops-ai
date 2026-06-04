@@ -38,6 +38,8 @@ def save_group_overview(
     source_incident_chat_id: str,
     source_chat_label: str,
     sent_by_open_id: str = "",
+    broadcast_chat_id: str = "",
+    broadcast_message_id: str = "",
 ) -> None:
     cid = (group_chat_id or "").strip()
     mid = (group_message_id or "").strip()
@@ -46,6 +48,8 @@ def save_group_overview(
     row = {
         "group_chat_id": cid,
         "group_message_id": mid,
+        "broadcast_chat_id": (broadcast_chat_id or "").strip(),
+        "broadcast_message_id": (broadcast_message_id or "").strip(),
         "md": (md or "").strip(),
         "issue": (issue or "").strip(),
         "impact": (impact or "").strip(),
@@ -88,6 +92,30 @@ def get_group_overview(group_chat_id: str, group_message_id: str) -> Optional[Di
             _BY_KEY.pop(k, None)
             return None
         return dict(row)
+
+
+def attach_broadcast_message(
+    group_chat_id: str,
+    group_message_id: str,
+    *,
+    broadcast_chat_id: str,
+    broadcast_message_id: str,
+) -> None:
+    """Link the overview-bot copy (``lark-forwarder``) to the primary-bot overview row."""
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    bcid = (broadcast_chat_id or "").strip()
+    bmid = (broadcast_message_id or "").strip()
+    if not cid or not mid or not bmid:
+        return
+    k = _key(cid, mid)
+    with _LOCK:
+        row = _BY_KEY.get(k)
+        if not row:
+            return
+        row["broadcast_chat_id"] = bcid
+        row["broadcast_message_id"] = bmid
+        row["updated_at"] = int(time.time())
 
 
 def update_group_overview_md(

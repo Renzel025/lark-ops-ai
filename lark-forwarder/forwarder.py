@@ -15,6 +15,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -128,7 +129,7 @@ def _build_overview_result_card(md: str, priority: str = "P0", source_chat_label
     safe_md = (md or "").strip()[:3500]
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        "config": {"enable_forward": True, "update_multi": True},
         "header": {
             "template": "blue",
             "title": {
@@ -140,13 +141,22 @@ def _build_overview_result_card(md: str, priority: str = "P0", source_chat_label
     }
 
 
-def _post_card_via_lark_app(chat_id: str, card: Dict[str, Any]) -> Tuple[bool, int, str]:
+def _parse_message_id_from_lark_body(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    data = body.get("data")
+    if isinstance(data, dict):
+        return str(data.get("message_id") or "").strip()
+    return ""
+
+
+def _post_card_via_lark_app(chat_id: str, card: Dict[str, Any]) -> Tuple[bool, int, str, str]:
     cid = (chat_id or "").strip()
     if not cid.startswith("oc_") or not isinstance(card, dict):
-        return False, 0, "missing chat_id or card"
+        return False, 0, "missing chat_id or card", ""
     token = _get_tenant_token()
     if not token:
-        return False, 0, "tenant token failed — check LARK_APP_ID / LARK_APP_SECRET"
+        return False, 0, "tenant token failed — check LARK_APP_ID / LARK_APP_SECRET", ""
     url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
     payload = {
         "receive_id": cid,
@@ -170,10 +180,46 @@ def _post_card_via_lark_app(chat_id: str, card: Dict[str, Any]) -> Tuple[bool, i
                 body.get("msg"),
                 cid[:28],
             )
+            return False, r.status_code, json.dumps(body, ensure_ascii=False)[:500], ""
+        return True, r.status_code, "", _parse_message_id_from_lark_body(body)
+    except Exception as e:
+        log.warning("lark im card post error chat_id=%s err=%s", cid[:28], e)
+        return False, 0, str(e), ""
+
+
+def _patch_card_via_lark_app(message_id: str, card: Dict[str, Any]) -> Tuple[bool, int, str]:
+    mid = (message_id or "").strip()
+    if not mid or not isinstance(card, dict):
+        return False, 0, "missing message_id or card"
+    token = _get_tenant_token()
+    if not token:
+        return False, 0, "tenant token failed — check LARK_APP_ID / LARK_APP_SECRET"
+    url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}"
+    payload = {"content": json.dumps(card, ensure_ascii=False)}
+    try:
+        r = requests.patch(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json=payload,
+            timeout=15,
+        )
+        body = r.json() if r.text else {}
+        ok = r.status_code == 200 and body.get("code") == 0
+        if not ok:
+            log.warning(
+                "lark im card patch failed HTTP=%s code=%s msg=%s message_id=%s",
+                r.status_code,
+                body.get("code"),
+                body.get("msg"),
+                mid[:24],
+            )
             return False, r.status_code, json.dumps(body, ensure_ascii=False)[:500]
         return True, r.status_code, ""
     except Exception as e:
-        log.warning("lark im card post error chat_id=%s err=%s", cid[:28], e)
+        log.warning("lark im card patch error message_id=%s err=%s", mid[:24], e)
         return False, 0, str(e)
 
 
@@ -265,12 +311,13 @@ async def post_overview(request: Request, authorization: Optional[str] = Header(
         )
 
     if _lark_app_configured():
-        ok, status, detail = _post_card_via_lark_app(chat_id, card)
+        ok, status, detail, message_id = _post_card_via_lark_app(chat_id, card)
         return {
             "ok": ok,
             "mode": "lark_app",
             "msg_type": "interactive",
             "chat_id": chat_id,
+            "message_id": message_id if ok else "",
             "lark_status": status,
             "detail": detail if not ok else "",
         }
@@ -287,6 +334,30 @@ async def post_overview(request: Request, authorization: Optional[str] = Header(
         "ok": ok,
         "mode": "webhook",
         "chat_id": chat_id,
+        "message_id": "",
+        "lark_status": status,
+        "detail": detail if not ok else "",
+    }
+
+
+@app.post("/patch-overview")
+async def patch_overview(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """PATCH an interactive overview card posted by the Overview Lark app (same bot token as POST)."""
+    _check_auth(authorization)
+    body = await request.json()
+    message_id = str(body.get("message_id") or "").strip()
+    card = body.get("card")
+    if not message_id:
+        return {"ok": False, "error": "missing message_id"}
+    if not isinstance(card, dict) or not card:
+        return {"ok": False, "error": "missing card"}
+    if not _lark_app_configured():
+        return {"ok": False, "error": "lark app not configured — cannot PATCH (webhook posts are not editable)"}
+    ok, status, detail = _patch_card_via_lark_app(message_id, card)
+    return {
+        "ok": ok,
+        "mode": "lark_app",
+        "message_id": message_id,
         "lark_status": status,
         "detail": detail if not ok else "",
     }

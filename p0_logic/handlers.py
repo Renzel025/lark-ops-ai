@@ -671,16 +671,43 @@ def _finalize_group_overview_for_edit(
         source_incident_chat_id=src,
         allow_group_edit=False,
     )
-    st, body = _lark.patch_interactive_card(tenant_token, mid, card)
-    if st != 200:
+    primary_ok, _ = _patch_group_overview_cards(tenant_token, cid, mid, card)
+    if not primary_ok:
         log.warning(
-            "group_overview_edit: PATCH Edit button failed HTTP=%s chat_id=%s body=%s",
-            st,
+            "group_overview_edit: PATCH failed HTTP chat_id=%s message_id=%s",
             cid,
-            (body or "")[:350],
+            mid[:20] + "…" if len(mid) > 20 else mid,
         )
     else:
         log.info("group_overview_edit: group overview stored for DM Edit chat_id=%s message_id=%s", cid, mid)
+
+
+def _patch_group_overview_cards(
+    tenant_token: str, group_chat_id: str, group_message_id: str, card: Dict[str, Any]
+) -> Tuple[bool, bool]:
+    """
+    PATCH the primary-bot overview in the group, then the overview-bot copy (lark-forwarder) if linked.
+    Returns ``(primary_ok, broadcast_ok)``; ``broadcast_ok`` is True when there is no broadcast row to patch.
+    """
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    primary_ok = False
+    if mid:
+        st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+        primary_ok = st == 200
+        if not primary_ok:
+            log.warning(
+                "patch group overview primary failed HTTP=%s chat_id=%s body=%s",
+                st,
+                cid,
+                (body or "")[:350],
+            )
+    broadcast_ok = True
+    row = _group_overview_store.get_group_overview(cid, mid) or {}
+    bmid = str(row.get("broadcast_message_id") or "").strip()
+    if bmid and _config.lark_overview_forwarder_enabled() and _config.get_lark_overview_forwarder_url():
+        broadcast_ok = _overview_forwarder.patch_overview_via_forwarder(bmid, card)
+    return primary_ok, broadcast_ok
 
 
 def _recall_send_block_warning_dm(sender_open_id: str, tenant_token: str) -> None:
@@ -1260,14 +1287,26 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     sent_by_open_id=sender_open_id,
                 )
             forwarder_ok = True
+            forwarder_mid = ""
             if use_forwarder and broadcast_dest and md:
-                forwarder_ok = _overview_forwarder.post_overview_via_forwarder(
+                forwarder_ok, forwarder_mid = _overview_forwarder.post_overview_via_forwarder(
                     md,
                     chat_id=broadcast_dest,
                     priority=pri,
                     source_label=lab,
                     card=card,
                 )
+                if forwarder_ok and forwarder_mid and post_mid:
+                    _group_overview_store.attach_broadcast_message(
+                        lark_overview_dest,
+                        post_mid,
+                        broadcast_chat_id=broadcast_dest,
+                        broadcast_message_id=forwarder_mid,
+                    )
+                elif forwarder_ok and not forwarder_mid:
+                    log.warning(
+                        "send_preview: forwarder ok but no message_id — upgrade lark-forwarder for editable broadcast overviews"
+                    )
                 if not forwarder_ok:
                     log.warning(
                         "send_preview: overview forwarder failed broadcast_dest=%s (primary post ok)",
@@ -1538,20 +1577,22 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     source_incident_chat_id=src_g,
                     allow_group_edit=False,
                 )
-                st_g, body_g = _lark.patch_interactive_card(tenant_token, group_mid, gcard)
-                if st_g != 200:
-                    log.warning(
-                        "save_edit group: PATCH failed HTTP=%s chat_id=%s body=%s",
-                        st_g,
-                        group_cid,
-                        (body_g or "")[:350],
-                    )
+                primary_ok, broadcast_ok = _patch_group_overview_cards(
+                    tenant_token, group_cid, group_mid, gcard
+                )
+                if not primary_ok:
                     _lark.post_text_to_open_id(
                         sender_open_id,
                         tenant_token,
                         "❌ Failed to update the group overview (see server log).",
                     )
                     return
+                if not broadcast_ok:
+                    log.warning(
+                        "save_edit group: overview-bot PATCH failed chat_id=%s primary_mid=%s",
+                        group_cid,
+                        group_mid[:20],
+                    )
                 _group_overview_store.update_group_overview_md(
                     group_cid,
                     group_mid,
@@ -1562,6 +1603,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     start_epoch=new_start_epoch,
                 )
                 _recall_dm_overview_edit_card(sender_open_id, tenant_token)
+                bc_warn = ""
+                row_bc = _group_overview_store.get_group_overview(group_cid, group_mid) or {}
+                if str(row_bc.get("broadcast_message_id") or "").strip() and not broadcast_ok:
+                    bc_warn = "Overview bot copy could not be updated (restart lark-forwarder?)."
                 sent_card = _cards.build_dm_overview_sent_card(
                     pri,
                     source_chat_label=lab_g,
@@ -1570,6 +1615,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     target_chat=target_chat,
                     source_incident_chat_id=src_g,
                     group_updated=True,
+                    forwarder_warning=bc_warn,
                 )
                 _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card)
                 return
