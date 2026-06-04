@@ -861,32 +861,28 @@ def _group_overview_button_value(
 
 
 def _help_commands_md() -> str:
-    """Bilingual command reference for DM Help button and typed ``help``."""
+    """Command reference for DM Help button and typed ``help``."""
     return (
-        "**How to read this card**\n"
-        "• **Type** = send as a plain chat message (whole line, case-insensitive).\n"
-        "• **Tap** = use a button on an interactive card (not typed).\n"
-        "• **Type** = 在聊天里输入整行文字 · **Tap** = 点击卡片按钮\n\n"
-        "---\n\n"
-        "**⌨️ Type in DM / 私聊输入**\n"
-        "• **coe** — standalone overview, emergency group (no meeting)\n"
-        "• **cog** — standalone overview, game group (no meeting)\n\n"
-        "**🎛 Tap — green instruction card (DM) / 私聊绿色卡片按钮**\n"
-        "• **Build overview** — generate preview from draft\n"
-        "• **Clear draft** — reset pasted text/images\n"
-        "• **Participants** — list meeting attendees\n"
-        "• **Help** — show this card\n\n"
-        "**🎛 Tap — preview card (DM) / 预览卡片按钮**\n"
-        "• **Send to group** — post overview to incident group\n"
-        "• **Generate** — refresh Issue from draft\n"
-        "• **Edit** — open Issue / Impact / Support form\n"
-        "• **Cancel** — discard preview and restart\n\n"
-        "**🎛 Tap — edit card (DM) / 编辑卡片按钮**\n"
-        "• **Save** — apply edits to preview\n"
-        "• **Back** — close edit form, return to preview\n\n"
-        "**🎛 Tap — group P1 cards / 群内 P1 卡片按钮**\n"
-        "• **Create meeting** / **Don't need** — answer P1 “create meeting?”\n"
-        "• **Declare as P0** / **Still P1** — answer P1 15‑min escalation card"
+        "commands help for overview automation\n\n"
+        "Manually create overview\n"
+        '• type "coe" — standalone overview, emergency group (no meeting)\n'
+        '• type "cog" — standalone overview, game group (no meeting)\n\n'
+        "Tap — green instruction card (DM) / 私聊绿色卡片按钮\n"
+        "• Build overview — generate preview from draft\n"
+        "• Clear draft — reset pasted text/images\n"
+        "• Participants — list meeting attendees\n"
+        "• Help — show this card\n\n"
+        "Tap — preview card (DM) / 预览卡片按钮\n"
+        "• Send to group — post overview to incident group\n"
+        "• Generate — refresh Issue from draft\n"
+        "• Edit — open Issue / Impact / Support form\n"
+        "• Cancel — discard preview and restart\n\n"
+        "Tap — edit card (DM) / 编辑卡片按钮\n"
+        "• Save — apply edits to preview\n"
+        "• Back — close edit form, return to preview\n\n"
+        "Tap — group P1 cards / 群内 P1 卡片按钮\n"
+        "• Create meeting / Don't need — answer P1 create meeting?\n"
+        "• Declare as P0 / Still P1 — answer P1 15-min escalation card"
     )
 
 

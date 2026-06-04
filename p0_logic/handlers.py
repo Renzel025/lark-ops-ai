@@ -101,8 +101,10 @@ DM_DRAFT_CLEARED_PROMPT = (
 )
 
 _DM_OVERVIEW_MEETING_ENDED_MSG = (
-    "No active meeting session for this overview — use manual create: "
-    "type **create overview emergency** or **create overview game**."
+    "No active meeting session for this overview\n"
+    "use manual create\n"
+    "Type - coe - create overview for emergency group\n"
+    "Type - cog - create overview for game urgent group"
 )
 
 
