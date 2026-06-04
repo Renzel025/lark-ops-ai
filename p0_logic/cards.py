@@ -1063,9 +1063,10 @@ def build_dm_overview_sent_card(
     target_chat: str = "",
     source_incident_chat_id: str = "",
     forwarder_warning: str = "",
+    group_updated: bool = False,
 ) -> Dict[str, Any]:
     """
-    DM card after **Send to group** — **Edit overview** stays in the bot DM (no need to open the group).
+    DM card after Send to group — Edit overview opens the form in DM; Done dismisses this card.
     """
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -1076,13 +1077,11 @@ def build_dm_overview_sent_card(
         draft_priority=prio,
     )
     label = (source_chat_label or "").strip() or "target group"
-    lines = [
-        f"✅ Overview posted to **{label}**.",
-        "",
-        "Tap **Edit overview** below to change the group message (form opens here in DM).",
-    ]
+    body_text = f"Posted to {label}."
+    if group_updated:
+        body_text = f"{body_text} Updated just now."
     if (forwarder_warning or "").strip():
-        lines.insert(1, forwarder_warning.strip())
+        body_text = f"{forwarder_warning.strip()}\n{body_text}"
     cfg: Dict[str, Any] = {"enable_forward": True, "update_multi": True}
     gcid = (group_chat_id or "").strip()
     gmid = (group_message_id or "").strip()
@@ -1135,7 +1134,7 @@ def build_dm_overview_sent_card(
         },
         "body": {
             "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {"tag": "div", "text": {"tag": "plain_text", "content": body_text}},
                 {"tag": "hr"},
                 {
                     "tag": "column_set",
@@ -1266,14 +1265,15 @@ def build_edit_overview_card(
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
+    if editing_group_overview:
+        intro = "Tap Save to update the group overview. Back closes this form."
+    else:
+        intro = (
+            "Only Incident start uses the calendar/date-time picker. "
+            "Issue, Impact, and Support are plain text. Tap Save when done."
+        )
     form_elements: List[Dict[str, Any]] = [
-        {
-            "tag": "div",
-            "text": {
-                "tag": "plain_text",
-                "content": "Only Incident start uses the calendar/date-time picker. Issue, Impact, and Support are plain text fields. Tap Save when done.",
-            },
-        },
+        {"tag": "div", "text": {"tag": "plain_text", "content": intro}},
     ]
     # Calendar picker applies to incident start only; issue/impact/support stay ``input`` fields below.
     form_elements.append(

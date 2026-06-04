@@ -600,7 +600,7 @@ def _missing_overview_fields_for_send(
     """Human labels for fields that must be filled before **Send to group**."""
     missing: List[str] = []
     if not (combined_text or "").strip():
-        missing.append("Incident details (paste text or screenshots in DM, then **Build overview**)")
+        missing.append("Incident details (paste text or screenshots in DM, then Build overview)")
     if not _overview_field_complete(issue):
         missing.append("Issue")
     if not _overview_field_complete(impact):
@@ -683,6 +683,21 @@ def _finalize_group_overview_for_edit(
         log.info("group_overview_edit: group overview stored for DM Edit chat_id=%s message_id=%s", cid, mid)
 
 
+def _recall_dm_overview_edit_card(sender_open_id: str, tenant_token: str) -> None:
+    """Remove the DM edit form so only the sent-overview card stays visible."""
+    edit_mid = _drafts.take_edit_message_id(sender_open_id)
+    if edit_mid:
+        st, body = _lark.recall_im_message(tenant_token, edit_mid)
+        if st != 200:
+            log.warning(
+                "recall edit card failed HTTP=%s open_id=%s body=%s",
+                st,
+                sender_open_id,
+                (body or "")[:300],
+            )
+    _drafts.clear_preview_edit_flags(sender_open_id)
+
+
 def _handle_edit_group_overview(
     payload: Dict[str, Any], tenant_token: str, sender_open_id: str
 ) -> None:
@@ -722,11 +737,6 @@ def _handle_edit_group_overview(
     if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_card):
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to open edit form in DM.")
         return
-    _lark.post_text_to_open_id(
-        sender_open_id,
-        tenant_token,
-        "✏️ Edit here in DM. Tap **Save** to update the group overview.",
-    )
 
 
 def _dm_has_open_preview_workflow(sender_open_id: str) -> bool:
@@ -1134,14 +1144,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 issue, impact, support, combined_text
             )
             if missing_fields:
-                bullets = "\n".join(f"• **{name}**" for name in missing_fields)
+                lines = "\n".join(f"Missing fields - {name}" for name in missing_fields)
                 _lark.post_text_to_open_id(
                     sender_open_id,
                     tenant_token,
-                    "⚠️ **Cannot send to group** — complete all overview details first:\n"
-                    f"{bullets}\n\n"
-                    "Tap **Edit** on the preview card → fill every field → **Save**, "
-                    "then tap **Send to group** again.",
+                    "⚠️ Cannot send to group — complete all overview details first:\n"
+                    f"{lines}\n\n"
+                    "Tap Edit on the preview card → fill every field → Save, "
+                    "then tap Send to group again.",
                 )
                 log.info(
                     "send_preview blocked incomplete fields open_id_tail=%s missing=%s",
@@ -1419,6 +1429,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         if action_name == "dismiss_sent_overview":
             prev = _drafts.get_preview(sender_open_id) or {}
+            _recall_dm_overview_edit_card(sender_open_id, tenant_token)
             sent_mid = str(prev.get("preview_message_id") or "").strip()
             if sent_mid:
                 _lark.recall_im_message(tenant_token, sent_mid)
@@ -1435,12 +1446,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not prev.get("group_edit_only"):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No group overview edit in progress.")
                 return
-            edit_mid = _drafts.take_edit_message_id(sender_open_id)
-            if edit_mid:
-                _lark.recall_im_message(tenant_token, edit_mid)
-            _drafts.clear_preview(sender_open_id)
-            _drafts.clear_preview_edit_flags(sender_open_id)
-            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Group overview edit cancelled.")
+            _recall_dm_overview_edit_card(sender_open_id, tenant_token)
             return
         if action_name == "save_edit":
             manual_issue = _extract_issue_input_value(payload)
@@ -1522,18 +1528,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     support=new_support,
                     start_epoch=new_start_epoch,
                 )
-                se2 = int(new_preview.get("start_epoch") or 0)
-                edit_refresh = _cards.build_edit_overview_card(
-                    new_issue,
-                    new_impact,
-                    new_support,
-                    priority=pri,
-                    source_chat_label=lab_g,
-                    start_epoch=se2,
-                    editing_group_overview=True,
-                )
-                if str(new_preview.get("edit_message_id") or "").strip():
-                    _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh)
+                _recall_dm_overview_edit_card(sender_open_id, tenant_token)
                 sent_card = _cards.build_dm_overview_sent_card(
                     pri,
                     source_chat_label=lab_g,
@@ -1541,13 +1536,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     group_message_id=group_mid,
                     target_chat=target_chat,
                     source_incident_chat_id=src_g,
+                    group_updated=True,
                 )
                 _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card)
-                _lark.post_text_to_open_id(
-                    sender_open_id,
-                    tenant_token,
-                    "✅ Group overview updated. Tap **Edit overview** again if you need more changes.",
-                )
                 return
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             se2 = int(new_preview.get("start_epoch") or 0)
