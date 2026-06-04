@@ -202,6 +202,43 @@ def build_ongoing_meeting_card(
     }
 
 
+def build_p0_ongoing_dm_buzz_card(
+    *,
+    source_chat_label: str = "",
+    meeting_no: str = "",
+    duration_text: str = "10 minutes",
+    contact_names: str = "Greg and Eason",
+) -> Dict[str, Any]:
+    """DM reminder when a P0 VC is still active after the configured delay."""
+    label = (source_chat_label or "").strip() or "incident group"
+    mno = (meeting_no or "").strip() or "Not available"
+    contacts = (contact_names or "").strip() or "Greg and Eason"
+    dur = (duration_text or "").strip() or "10 minutes"
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": f"⏱ P0 meeting — {dur} ongoing"},
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": (
+                            f"P0 video meeting for {label} is still active ({dur}).\n\n"
+                            f"Please contact {contacts} now.\n\n"
+                            f"Meeting ID: {mno}"
+                        ),
+                    },
+                },
+            ]
+        },
+    }
+
+
 def build_p1_fifteen_min_confirm_card(meeting_no: str) -> Dict[str, Any]:
     """After 15 min on P1: declare as P0, or **Still P1** (continue without escalating)."""
     m = (meeting_no or "").strip() or "Not available"

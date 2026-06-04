@@ -784,6 +784,34 @@ GROQ_OVERVIEW_ONE_SHOT = (os.getenv("GROQ_OVERVIEW_ONE_SHOT", "1") or "1").strip
 AUTO_PREVIEW_DELAY_SEC = float((os.getenv("AUTO_PREVIEW_DELAY_SEC", "6") or "6").strip())
 ONGOING_CARD_DELAY_SEC = int((os.getenv("ONGOING_CARD_DELAY_SEC", "600") or "600").strip())
 P1_TO_P0_ESCALATION_SEC = int((os.getenv("P1_TO_P0_ESCALATION_SEC", "900") or "900").strip())
+
+
+def get_p0_ongoing_dm_buzz_enabled() -> bool:
+    """``P0_ONGOING_DM_BUZZ_ENABLED=1`` — DM operators after a P0 meeting runs past the delay (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ONGOING_DM_BUZZ_ENABLED") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def get_p0_ongoing_dm_buzz_delay_sec() -> int:
+    """
+    Seconds after P0 start before the Greg/Eason DM buzz. Uses ``P0_ONGOING_DM_BUZZ_DELAY_SEC``,
+    else ``ONGOING_CARD_DELAY_SEC`` (default 600 = 10 minutes).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ONGOING_DM_BUZZ_DELAY_SEC") or "").strip()
+    if raw:
+        try:
+            return max(60, int(raw))
+        except ValueError:
+            pass
+    return max(60, ONGOING_CARD_DELAY_SEC)
+
+
+def get_p0_ongoing_contact_names() -> str:
+    """Who operators should contact (``P0_ONGOING_CONTACT_NAMES``, default Greg and Eason)."""
+    reload_env_runtime()
+    return (os.getenv("P0_ONGOING_CONTACT_NAMES") or "Greg and Eason").strip() or "Greg and Eason"
 P0_COOLDOWN_SEC = int((os.getenv("P0_COOLDOWN_SEC", "300") or "300").strip())
 SUPPORT_MAP_TTL_SEC = int((os.getenv("SUPPORT_MAP_TTL_SEC", "600") or "600").strip())
 

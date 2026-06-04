@@ -699,6 +699,123 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
     ).start()
 
 
+def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, trigger_open_id: str) -> None:
+    """DM duty operators that the P0 meeting is still running — contact Greg/Eason (configurable)."""
+    if not token:
+        log.warning("p0 ongoing buzz: no tenant token chat_id=%s", chat_id)
+        return
+    delay_sec = _config.get_p0_ongoing_dm_buzz_delay_sec()
+    start_epoch = int(sess.get("start_epoch") or 0)
+    if start_epoch > 0:
+        elapsed_min = max(1, (int(time.time()) - start_epoch + 59) // 60)
+        duration_text = f"{elapsed_min} minutes"
+    else:
+        duration_text = f"{max(1, delay_sec // 60)} minutes"
+    label = str(sess.get("source_chat_name") or "").strip()
+    if not label:
+        label = _lark.get_group_chat_name(chat_id, token)
+    meeting_no = str(sess.get("meeting_no") or "").strip()
+    contacts = _config.get_p0_ongoing_contact_names()
+    card = _cards.build_p0_ongoing_dm_buzz_card(
+        source_chat_label=label,
+        meeting_no=meeting_no,
+        duration_text=duration_text,
+        contact_names=contacts,
+    )
+    targets = _dm_instruction_targets(trigger_open_id)
+    sent = 0
+    for oid in targets:
+        if not oid:
+            continue
+        st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
+        if st == 200:
+            sent += 1
+        else:
+            log.warning(
+                "p0 ongoing buzz: DM failed HTTP=%s open_id_tail=%s body=%s",
+                st,
+                oid[-12:] if len(oid) > 12 else oid,
+                (body or "")[:300],
+            )
+    log.info(
+        "p0 ongoing buzz: sent to %s/%s operators chat_id=%s delay_sec=%s contacts=%r",
+        sent,
+        len(targets),
+        chat_id,
+        delay_sec,
+        contacts,
+    )
+
+
+def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
+    """After ``P0_ONGOING_DM_BUZZ_DELAY_SEC``, DM operators if the P0 session is still active."""
+    chat_id = (chat_id or "").strip()
+    if not chat_id or not _config.get_p0_ongoing_dm_buzz_enabled():
+        return
+    delay = float(_config.get_p0_ongoing_dm_buzz_delay_sec())
+    if delay <= 0:
+        return
+    sess0 = P0_SESSIONS.get(chat_id)
+    if not sess0:
+        log.warning("p0 ongoing buzz: not scheduled chat_id=%s (no session)", chat_id)
+        return
+    if str(sess0.get("priority") or "").strip().upper() != "P0":
+        log.info("p0 ongoing buzz: not scheduled chat_id=%s (priority is not P0)", chat_id)
+        return
+    run_id = secrets.token_hex(8)
+    sess0["p0_ongoing_buzz_run_id"] = run_id
+    sess0["p0_ongoing_buzz_sent"] = False
+    P0_SESSIONS[chat_id] = sess0
+    if _session_disk.enabled():
+        _session_disk.save_session(chat_id, sess0)
+    log.info(
+        "p0 ongoing buzz: scheduled chat_id=%s delay_sec=%s run_id=%s",
+        chat_id,
+        int(delay),
+        run_id,
+    )
+
+    def worker() -> None:
+        time.sleep(delay)
+        try:
+            _config.reload_env_runtime()
+            if not _config.get_p0_ongoing_dm_buzz_enabled():
+                return
+            sess = P0_SESSIONS.get(chat_id)
+            if not sess:
+                log.info("p0 ongoing buzz: worker exit (session ended) chat_id=%s", chat_id)
+                return
+            if str(sess.get("p0_ongoing_buzz_run_id") or "") != run_id:
+                log.info("p0 ongoing buzz: worker exit (stale run_id) chat_id=%s", chat_id)
+                return
+            if sess.get("p0_ongoing_buzz_sent"):
+                return
+            if str(sess.get("priority") or "").strip().upper() != "P0":
+                log.info("p0 ongoing buzz: worker exit (no longer P0) chat_id=%s", chat_id)
+                return
+            tok = _lark.get_tenant_token_primary()
+            if not tok:
+                log.warning("p0 ongoing buzz: no primary tenant token chat_id=%s", chat_id)
+                return
+            trigger = str(sess.get("trigger_open_id") or trigger_open_id or "").strip()
+            _send_p0_ongoing_dm_buzz(chat_id, sess, tok, trigger)
+            sess2 = P0_SESSIONS.get(chat_id)
+            if not sess2 or str(sess2.get("p0_ongoing_buzz_run_id") or "") != run_id:
+                return
+            sess2["p0_ongoing_buzz_sent"] = True
+            P0_SESSIONS[chat_id] = sess2
+            if _session_disk.enabled():
+                _session_disk.save_session(chat_id, sess2)
+        except Exception as e:
+            log.warning("p0 ongoing buzz worker failed chat_id=%s err=%s", chat_id, e)
+
+    threading.Thread(
+        target=worker,
+        name=f"p0-ongoing-buzz-{chat_id[-12:]}",
+        daemon=True,
+    ).start()
+
+
 def end_p0_session(
     chat_id: str,
     token: Optional[str] = None,
@@ -1501,6 +1618,11 @@ def start_p0(
         schedule_vc_auto_cancel_if_no_external_joins(chat_id)
     except Exception as e:
         log.warning("start_p0: schedule vc auto-cancel failed: %s", e)
+    if priority == "P0":
+        try:
+            schedule_p0_ongoing_dm_buzz(chat_id, trigger_open_id)
+        except Exception as e:
+            log.warning("start_p0: schedule p0 ongoing DM buzz failed: %s", e)
 
 
 def slack_cross_post_slack_enabled_for_incident_chat(chat_id: str) -> bool:
