@@ -14,6 +14,7 @@ from . import cards as _cards
 from . import config as _config
 from . import drafts as _drafts
 from . import lark_client as _lark
+from . import group_overview_store as _group_overview_store
 from . import overview_forwarder as _overview_forwarder
 from . import participants as _participants
 from . import session as _session
@@ -35,9 +36,12 @@ _PREVIEW_WORKFLOW_ACTIONS = frozenset(
         "edit_preview",
         "save_edit",
         "back_to_preview",
+        "back_group_edit",
         "cancel_preview",
     }
 )
+
+_GROUP_OVERVIEW_EDIT_ACTIONS = frozenset({"edit_group_overview", "back_group_edit"})
 
 # DM card actions for Slack severity / minor follow-up — must win over preview workflow if Lark misparses value.
 _SLACK_DM_SCOPE_ACTIONS = frozenset(
@@ -583,6 +587,122 @@ def _preview_priority(preview: Dict[str, Any]) -> str:
     return pr if pr in ("P0", "P1") else "P0"
 
 
+def _finalize_group_overview_for_edit(
+    tenant_token: str,
+    *,
+    group_chat_id: str,
+    group_message_id: str,
+    md: str,
+    priority: str,
+    source_chat_label: str,
+    target_chat: str,
+    source_incident_chat_id: str,
+    combined_text: str,
+    mention_names: List[str],
+    issue: str,
+    impact: str,
+    support: str,
+    start_epoch: int,
+    sent_by_open_id: str,
+) -> None:
+    """Store overview snapshot and PATCH group message to add **Edit overview** (update_multi)."""
+    if not _group_overview_store.group_overview_edit_enabled():
+        return
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    if not cid.startswith("oc_") or not mid:
+        return
+    pri = (priority or "P0").strip().upper()
+    if pri not in ("P0", "P1"):
+        pri = "P0"
+    lab = (source_chat_label or "").strip()
+    src = (source_incident_chat_id or "").strip()
+    tc = (target_chat or "").strip()
+    md_s = (md or "").strip()
+    _group_overview_store.save_group_overview(
+        group_chat_id=cid,
+        group_message_id=mid,
+        md=md_s,
+        issue=issue,
+        impact=impact,
+        support=support,
+        combined_text=combined_text,
+        mention_names=mention_names,
+        start_epoch=start_epoch,
+        priority=pri,
+        target_chat=tc,
+        source_incident_chat_id=src,
+        source_chat_label=lab,
+        sent_by_open_id=sent_by_open_id,
+    )
+    card = _cards.build_overview_result_card(
+        md_s,
+        priority=pri,
+        source_chat_label=lab,
+        group_chat_id=cid,
+        group_message_id=mid,
+        allow_group_edit=True,
+        target_chat=tc,
+        source_incident_chat_id=src,
+    )
+    st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+    if st != 200:
+        log.warning(
+            "group_overview_edit: PATCH Edit button failed HTTP=%s chat_id=%s body=%s",
+            st,
+            cid,
+            (body or "")[:350],
+        )
+    else:
+        log.info("group_overview_edit: group card ready for Edit chat_id=%s message_id=%s", cid, mid)
+
+
+def _handle_edit_group_overview(
+    payload: Dict[str, Any], tenant_token: str, sender_open_id: str
+) -> None:
+    if not _group_overview_store.group_overview_edit_enabled():
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "ℹ️ Group overview edit is disabled (P0_GROUP_OVERVIEW_EDIT_ENABLED=0).",
+        )
+        return
+    val = _card_action_value_dict(payload)
+    gcid = str(val.get("group_chat_id") or "").strip()
+    gmid = str(val.get("group_message_id") or "").strip()
+    state = _group_overview_store.get_group_overview(gcid, gmid)
+    if not state:
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "⚠️ Cannot edit this overview (too old, or it was posted before group edit was enabled).",
+        )
+        return
+    _drafts.load_group_overview_edit_session(sender_open_id, state)
+    _drafts.set_preview_edit_waiting(sender_open_id, True)
+    lab = str(state.get("source_chat_label") or "").strip()
+    if not lab:
+        lab = _session.get_source_chat_label_for_target_chat(str(state.get("target_chat") or ""))
+    pri = str(state.get("priority") or "P0").strip().upper()
+    edit_card = _cards.build_edit_overview_card(
+        str(state.get("issue") or ""),
+        str(state.get("impact") or ""),
+        str(state.get("support") or ""),
+        priority=pri,
+        source_chat_label=lab,
+        start_epoch=int(state.get("start_epoch") or 0),
+        editing_group_overview=True,
+    )
+    if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_card):
+        _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to open edit form in DM.")
+        return
+    _lark.post_text_to_open_id(
+        sender_open_id,
+        tenant_token,
+        "✏️ Edit the overview in DM. Tap **Save** to update the message in the group.",
+    )
+
+
 def _dm_has_open_preview_workflow(sender_open_id: str) -> bool:
     """True when a preview or edit flow is active — operators should use Cancel on the preview card, not Clear draft."""
     pv = _drafts.get_preview(sender_open_id) or {}
@@ -949,6 +1069,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if action_name == "show_help":
             _send_help_commands_card(sender_open_id, tenant_token)
             return
+        if action_name == "edit_group_overview":
+            _handle_edit_group_overview(payload, tenant_token, sender_open_id)
+            return
         if action_name not in _PREVIEW_WORKFLOW_ACTIONS:
             log.warning("Unknown card action: %s", action_name)
             return
@@ -1032,6 +1155,23 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     lark_overview_dest,
                     target_chat,
                 )
+                _finalize_group_overview_for_edit(
+                    tenant_token,
+                    group_chat_id=lark_overview_dest,
+                    group_message_id=post_mid,
+                    md=md,
+                    priority=pri,
+                    source_chat_label=lab,
+                    target_chat=target_chat,
+                    source_incident_chat_id=src_inc,
+                    combined_text=combined_text,
+                    mention_names=mention_names,
+                    issue=issue,
+                    impact=impact,
+                    support=support,
+                    start_epoch=start_epoch,
+                    sent_by_open_id=sender_open_id,
+                )
             forwarder_ok = True
             if use_forwarder and broadcast_dest and md:
                 forwarder_ok = _overview_forwarder.post_overview_via_forwarder(
@@ -1057,11 +1197,30 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     st_f, body_f, mid_f = _lark.post_card_to_chat(oc_extra, tenant_token, card)
                     ok_f, code_f, msg_f = _lark.lark_im_message_create_ok(body_f)
                     if st_f == 200 and ok_f:
+                        mid_f_s = (mid_f or "").strip()
                         log.info(
                             "send_preview: detection fan-out overview message_id=%s dest=%s",
-                            (mid_f or "").strip() or "(none)",
+                            mid_f_s or "(none)",
                             oc_extra,
                         )
+                        if mid_f_s:
+                            _finalize_group_overview_for_edit(
+                                tenant_token,
+                                group_chat_id=oc_extra,
+                                group_message_id=mid_f_s,
+                                md=md,
+                                priority=pri,
+                                source_chat_label=lab,
+                                target_chat=target_chat,
+                                source_incident_chat_id=src_inc,
+                                combined_text=combined_text,
+                                mention_names=mention_names,
+                                issue=issue,
+                                impact=impact,
+                                support=support,
+                                start_epoch=start_epoch,
+                                sent_by_open_id=sender_open_id,
+                            )
                     else:
                         log.warning(
                             "send_preview: detection fan-out failed HTTP=%s lark_code=%s lark_msg=%r dest=%s",
@@ -1221,6 +1380,18 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 log.error("edit_preview failed open_id=%s", sender_open_id)
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to open the edit card.")
             return
+        if action_name == "back_group_edit":
+            prev = _drafts.get_preview(sender_open_id) or {}
+            if not prev.get("group_edit_only"):
+                _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ No group overview edit in progress.")
+                return
+            edit_mid = _drafts.take_edit_message_id(sender_open_id)
+            if edit_mid:
+                _lark.recall_im_message(tenant_token, edit_mid)
+            _drafts.clear_preview(sender_open_id)
+            _drafts.clear_preview_edit_flags(sender_open_id)
+            _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ Group overview edit cancelled.")
+            return
         if action_name == "save_edit":
             manual_issue = _extract_issue_input_value(payload)
             manual_impact = _extract_impact_input_value(payload)
@@ -1244,6 +1415,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 if _form_field_left_blank(manual_support)
                 else _support.normalize_support_request_text(manual_support)
             )
+            group_cid = str(preview.get("group_chat_id") or "").strip()
+            group_mid = str(preview.get("group_message_id") or "").strip()
+            group_edit_only = bool(preview.get("group_edit_only"))
             _drafts.save_preview(
                 sender_open_id=sender_open_id,
                 target_chat=target_chat,
@@ -1256,8 +1430,68 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 awaiting_edit_input=False,
                 priority=pri,
                 source_incident_chat_id=str(preview.get("source_incident_chat_id") or "").strip(),
+                group_chat_id=group_cid,
+                group_message_id=group_mid,
+                group_edit_only=group_edit_only,
             )
             new_preview = _drafts.get_preview(sender_open_id) or {}
+            new_md = str(new_preview.get("md") or "").strip()
+            if group_edit_only and group_cid.startswith("oc_") and group_mid and new_md:
+                lab_g = str(new_preview.get("source_chat_label") or "").strip()
+                if not lab_g:
+                    lab_g = _session.get_source_chat_label_for_target_chat(target_chat)
+                src_g = str(new_preview.get("source_incident_chat_id") or "").strip()
+                gcard = _cards.build_overview_result_card(
+                    new_md,
+                    priority=pri,
+                    source_chat_label=lab_g,
+                    group_chat_id=group_cid,
+                    group_message_id=group_mid,
+                    allow_group_edit=True,
+                    target_chat=target_chat,
+                    source_incident_chat_id=src_g,
+                )
+                st_g, body_g = _lark.patch_interactive_card(tenant_token, group_mid, gcard)
+                if st_g != 200:
+                    log.warning(
+                        "save_edit group: PATCH failed HTTP=%s chat_id=%s body=%s",
+                        st_g,
+                        group_cid,
+                        (body_g or "")[:350],
+                    )
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "❌ Failed to update the group overview (see server log).",
+                    )
+                    return
+                _group_overview_store.update_group_overview_md(
+                    group_cid,
+                    group_mid,
+                    md=new_md,
+                    issue=new_issue,
+                    impact=new_impact,
+                    support=new_support,
+                    start_epoch=new_start_epoch,
+                )
+                se2 = int(new_preview.get("start_epoch") or 0)
+                edit_refresh = _cards.build_edit_overview_card(
+                    new_issue,
+                    new_impact,
+                    new_support,
+                    priority=pri,
+                    source_chat_label=lab_g,
+                    start_epoch=se2,
+                    editing_group_overview=True,
+                )
+                if str(new_preview.get("edit_message_id") or "").strip():
+                    _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh)
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "✅ Group overview updated.",
+                )
+                return
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
             se2 = int(new_preview.get("start_epoch") or 0)
             card = _cards.build_preview_card(

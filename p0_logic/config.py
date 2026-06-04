@@ -1694,6 +1694,16 @@ def get_p0_graph_screenshot_fast_capture() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_group_overview_edit_enabled() -> bool:
+    """
+    When True, group overview cards get an **Edit overview** button; Save in DM PATCHes that group message.
+    ``P0_GROUP_OVERVIEW_EDIT_ENABLED=0`` to disable.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GROUP_OVERVIEW_EDIT_ENABLED") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def get_p0_graph_screenshot_interval_min() -> int:
     """
     While any **P0** session is active, repeat screenshot posts every N minutes.

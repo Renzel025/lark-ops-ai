@@ -234,6 +234,9 @@ def _save_preview(
     source_incident_chat_id: str = "",
     zh_issue_precomputed: Optional[str] = None,
     zh_impact_precomputed: Optional[str] = None,
+    group_chat_id: str = "",
+    group_message_id: str = "",
+    group_edit_only: bool = False,
 ) -> str:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
@@ -267,8 +270,11 @@ def _save_preview(
             "awaiting_edit_input": awaiting_edit_input,
             "updated_at": int(time.time()),
             "source_incident_chat_id": (source_incident_chat_id or "").strip(),
+            "group_chat_id": (group_chat_id or "").strip(),
+            "group_message_id": (group_message_id or "").strip(),
+            "group_edit_only": bool(group_edit_only),
         }
-        if old_mid:
+        if old_mid and not group_edit_only:
             row["preview_message_id"] = old_mid
         if old_edit_mid:
             row["edit_message_id"] = old_edit_mid
@@ -539,6 +545,9 @@ def save_preview(
     source_incident_chat_id: str = "",
     zh_issue_precomputed: Optional[str] = None,
     zh_impact_precomputed: Optional[str] = None,
+    group_chat_id: str = "",
+    group_message_id: str = "",
+    group_edit_only: bool = False,
 ) -> None:
     """Persist preview state for the sender."""
     _save_preview(
@@ -555,6 +564,28 @@ def save_preview(
         source_incident_chat_id=source_incident_chat_id,
         zh_issue_precomputed=zh_issue_precomputed,
         zh_impact_precomputed=zh_impact_precomputed,
+        group_chat_id=group_chat_id,
+        group_message_id=group_message_id,
+        group_edit_only=group_edit_only,
+    )
+
+
+def load_group_overview_edit_session(sender_open_id: str, state: Dict[str, Any]) -> None:
+    """Open DM edit flow for an overview already posted in a group."""
+    _save_preview(
+        sender_open_id=sender_open_id,
+        target_chat=str(state.get("target_chat") or "").strip(),
+        start_epoch=int(state.get("start_epoch") or 0),
+        combined_text=str(state.get("combined_text") or "").strip(),
+        mention_names=list(state.get("mention_names") or []),
+        issue=str(state.get("issue") or "Not specified").strip(),
+        impact=str(state.get("impact") or "Not specified").strip(),
+        support=str(state.get("support") or "Not specified").strip(),
+        priority=str(state.get("priority") or "P0").strip(),
+        source_incident_chat_id=str(state.get("source_incident_chat_id") or "").strip(),
+        group_chat_id=str(state.get("group_chat_id") or "").strip(),
+        group_message_id=str(state.get("group_message_id") or "").strip(),
+        group_edit_only=True,
     )
 
 

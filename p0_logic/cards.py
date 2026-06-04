@@ -795,7 +795,32 @@ def _dm_button_value(action: str, **scope: Any) -> Dict[str, Any]:
             draft_priority=str(scope.get("draft_priority") or ""),
         )
     )
+    gcid = str(scope.get("group_chat_id") or "").strip()
+    gmid = str(scope.get("group_message_id") or "").strip()
+    if gcid.startswith("oc_"):
+        v["group_chat_id"] = gcid
+    if gmid:
+        v["group_message_id"] = gmid
     return v
+
+
+def _group_overview_button_value(
+    action: str,
+    *,
+    group_chat_id: str,
+    group_message_id: str,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
+    draft_priority: str = "P0",
+) -> Dict[str, Any]:
+    return _dm_button_value(
+        action,
+        group_chat_id=group_chat_id,
+        group_message_id=group_message_id,
+        target_chat=target_chat,
+        source_incident_chat_id=source_incident_chat_id,
+        draft_priority=draft_priority,
+    )
 
 
 def _help_commands_md() -> str:
@@ -964,15 +989,68 @@ def build_dm_instruction_card(
     }
 
 
-def build_overview_result_card(md: str, priority: str = "P0", source_chat_label: str = "") -> Dict[str, Any]:
+def build_overview_result_card(
+    md: str,
+    priority: str = "P0",
+    source_chat_label: str = "",
+    *,
+    group_chat_id: str = "",
+    group_message_id: str = "",
+    allow_group_edit: bool = False,
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
+) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     if prio not in ("P0", "P1"):
         prio = "P0"
+    safe_md = (md or "").strip()[:3500]
+    cfg: Dict[str, Any] = {"enable_forward": True, "update_multi": True}
+    elements: List[Dict[str, Any]] = [{"tag": "div", "text": {"tag": "lark_md", "content": safe_md}}]
+    gcid = (group_chat_id or "").strip()
+    gmid = (group_message_id or "").strip()
+    if allow_group_edit and gcid.startswith("oc_") and gmid:
+        elements.append({"tag": "hr"})
+        sc = dict(
+            target_chat=target_chat,
+            source_incident_chat_id=source_incident_chat_id,
+            draft_priority=prio,
+        )
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Edit overview"},
+                                "type": "default",
+                                "value": _group_overview_button_value(
+                                    "edit_group_overview",
+                                    group_chat_id=gcid,
+                                    group_message_id=gmid,
+                                    **sc,
+                                ),
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"📝 {prio} Overview{_title_group_suffix(source_chat_label)}"}},
-        "body": {"elements": [{"tag": "div", "text": {"tag": "lark_md", "content": md}}]},
+        "config": cfg,
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": f"📝 {prio} Overview{_title_group_suffix(source_chat_label)}"},
+        },
+        "body": {"elements": elements},
     }
 
 
@@ -1079,6 +1157,7 @@ def build_edit_overview_card(
     *,
     update_multi: bool = True,
     start_epoch: int = 0,
+    editing_group_overview: bool = False,
 ) -> Dict[str, Any]:
     """Single card to edit Issue, Impact Scope, and Support Request."""
     prio = (priority or "P0").strip().upper()
@@ -1187,7 +1266,11 @@ def build_edit_overview_card(
                                 "tag": "button",
                                 "text": {"tag": "plain_text", "content": "Back"},
                                 "type": "default",
-                                "value": {"action": "back_to_preview"},
+                                "value": {
+                                    "action": "back_group_edit"
+                                    if editing_group_overview
+                                    else "back_to_preview"
+                                },
                             },
                         ],
                     },
