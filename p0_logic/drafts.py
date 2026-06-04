@@ -254,9 +254,11 @@ def _save_preview(
         old_mid = ""
         old_edit_mid = ""
         old = tx.get()
+        old_warn_mid = ""
         if old:
             old_mid = str(old.get("preview_message_id") or "").strip()
             old_edit_mid = str(old.get("edit_message_id") or "").strip()
+            old_warn_mid = str(old.get("send_block_warning_message_id") or "").strip()
         row: Dict[str, Any] = {
             "target_chat": target_chat,
             "start_epoch": start_epoch,
@@ -278,6 +280,8 @@ def _save_preview(
             row["preview_message_id"] = old_mid
         if old_edit_mid:
             row["edit_message_id"] = old_edit_mid
+        if old_warn_mid:
+            row["send_block_warning_message_id"] = old_warn_mid
         tx.set(row)
     return str(md or "").strip()
 
@@ -382,6 +386,34 @@ def take_edit_message_id(sender_open_id: str) -> str:
             p["updated_at"] = int(time.time())
         tx.set(p)
         return mid
+
+
+def take_send_block_warning_message_id(sender_open_id: str) -> str:
+    """Remove and return the DM text warning shown when Send to group was blocked."""
+    sender_open_id = (sender_open_id or "").strip()
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
+        if not p:
+            return ""
+        mid = str(p.pop("send_block_warning_message_id", None) or "").strip()
+        if mid:
+            p["updated_at"] = int(time.time())
+        tx.set(p)
+        return mid
+
+
+def set_send_block_warning_message_id(sender_open_id: str, message_id: str) -> None:
+    sender_open_id = (sender_open_id or "").strip()
+    message_id = (message_id or "").strip()
+    if not sender_open_id or not message_id:
+        return
+    with _store.preview_transaction(sender_open_id) as tx:
+        p = tx.get()
+        if not p:
+            return
+        p["send_block_warning_message_id"] = message_id
+        p["updated_at"] = int(time.time())
+        tx.set(p)
 
 
 def _draft_priority_for_preview(draft: Dict[str, Any], target_chat: str) -> str:

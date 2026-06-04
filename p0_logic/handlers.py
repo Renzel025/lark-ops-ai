@@ -683,6 +683,37 @@ def _finalize_group_overview_for_edit(
         log.info("group_overview_edit: group overview stored for DM Edit chat_id=%s message_id=%s", cid, mid)
 
 
+def _recall_send_block_warning_dm(sender_open_id: str, tenant_token: str) -> None:
+    """Delete the stale 'Cannot send to group' text after fields are fixed or send succeeds."""
+    warn_mid = _drafts.take_send_block_warning_message_id(sender_open_id)
+    if not warn_mid:
+        return
+    st, body = _lark.recall_im_message(tenant_token, warn_mid)
+    if st != 200:
+        log.warning(
+            "recall send-block warning failed HTTP=%s open_id=%s body=%s",
+            st,
+            sender_open_id,
+            (body or "")[:300],
+        )
+
+
+def _post_send_block_warning_dm(sender_open_id: str, tenant_token: str, text: str) -> None:
+    _recall_send_block_warning_dm(sender_open_id, tenant_token)
+    st, body = _lark.post_text_to_open_id(sender_open_id, tenant_token, text)
+    if st != 200:
+        log.warning(
+            "send-block warning POST failed HTTP=%s open_id=%s body=%s",
+            st,
+            sender_open_id,
+            (body or "")[:300],
+        )
+        return
+    mid = _lark.parse_im_message_id_from_response(body)
+    if mid:
+        _drafts.set_send_block_warning_message_id(sender_open_id, mid)
+
+
 def _recall_dm_overview_edit_card(sender_open_id: str, tenant_token: str) -> None:
     """Remove the DM edit form so only the sent-overview card stays visible."""
     edit_mid = _drafts.take_edit_message_id(sender_open_id)
@@ -1145,7 +1176,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             )
             if missing_fields:
                 lines = "\n".join(f"Missing fields - {name}" for name in missing_fields)
-                _lark.post_text_to_open_id(
+                _post_send_block_warning_dm(
                     sender_open_id,
                     tenant_token,
                     "⚠️ Cannot send to group — complete all overview details first:\n"
@@ -1159,6 +1190,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     missing_fields,
                 )
                 return
+            _recall_send_block_warning_dm(sender_open_id, tenant_token)
             edit_mid = str(preview.get("edit_message_id") or "").strip()
             preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
@@ -1429,6 +1461,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
         if action_name == "dismiss_sent_overview":
             prev = _drafts.get_preview(sender_open_id) or {}
+            _recall_send_block_warning_dm(sender_open_id, tenant_token)
             _recall_dm_overview_edit_card(sender_open_id, tenant_token)
             sent_mid = str(prev.get("preview_message_id") or "").strip()
             if sent_mid:
@@ -1569,6 +1602,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, card):
                     _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to refresh preview card.")
                     return
+            if not _missing_overview_fields_for_send(
+                new_issue, new_impact, new_support, combined_text
+            ):
+                _recall_send_block_warning_dm(sender_open_id, tenant_token)
             return
         if action_name == "back_to_preview":
             edit_mid = _drafts.take_edit_message_id(sender_open_id)
