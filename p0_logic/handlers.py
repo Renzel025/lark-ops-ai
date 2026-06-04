@@ -334,6 +334,33 @@ def _show_participants_body_text() -> str:
     return empty_msg if not line.strip() else f"Participants\n{line}"
 
 
+def _try_dm_cancel_standalone_overview(sender_open_id: str, tenant_token: str) -> bool:
+    """Release the ``coe`` / ``cog`` DM slot (typed ``c``). Always consumes the DM line."""
+    sender_open_id = (sender_open_id or "").strip()
+    if not sender_open_id:
+        return True
+    if not _session.is_standalone_overview_active(sender_open_id):
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "ℹ️ No standalone overview in progress.",
+        )
+        return True
+    if _dm_has_open_preview_workflow(sender_open_id):
+        _lark.post_text_to_open_id(sender_open_id, tenant_token, _CLEAR_DRAFT_USE_CANCEL_ON_PREVIEW_MSG)
+        return True
+    _session.release_standalone_overview_cancel(sender_open_id, tenant_token)
+    _drafts.clear_draft(sender_open_id)
+    _drafts.clear_preview(sender_open_id)
+    _drafts.cancel_preview_timer(sender_open_id)
+    _lark.post_text_to_open_id(
+        sender_open_id,
+        tenant_token,
+        "Standalone overview cancelled. Type coe or cog to start again.",
+    )
+    return True
+
+
 def _send_help_commands_card(sender_open_id: str, tenant_token: str) -> None:
     """Post the bilingual command reference card to the operator DM."""
     sender_open_id = (sender_open_id or "").strip()
@@ -945,6 +972,9 @@ def handle_dm_generate_overview(
         cmd = _text.clean_pasted_text(text).strip()
         if _config.HELP_RE.match(cmd):
             _send_help_commands_card(sender_open_id, tenant_token)
+            return
+        if _config.STANDALONE_OVERVIEW_ABORT_RE.match(cmd):
+            _try_dm_cancel_standalone_overview(sender_open_id, tenant_token)
             return
         tag = _config.parse_standalone_overview_dm_command(cmd)
         if tag:

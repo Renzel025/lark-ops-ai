@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from . import config as _config
 from . import groq_client as _groq
+from . import session as _session
 from . import text_processing as _text
 
 PHT = _config.PHT
@@ -864,9 +865,13 @@ def _help_commands_md() -> str:
     """Command reference for DM Help button and typed ``help``."""
     return (
         "commands help for overview automation\n\n"
+        "Typed in DM or incident group\n"
+        '• type "h" or "help" — show this card\n'
+        '• type "commands" — same as help\n\n'
         "Manually create overview\n"
         '• type "coe" — standalone overview, emergency group (no meeting)\n'
-        '• type "cog" — standalone overview, game group (no meeting)\n\n'
+        '• type "cog" — standalone overview, game group (no meeting)\n'
+        '• type "c" — abort coe/cog on the green card; with a preview open, use **Cancel** on the preview card\n\n'
         "Tap — green instruction card (DM) / 私聊绿色卡片按钮\n"
         "• Build overview — generate preview from draft\n"
         "• Clear draft — reset pasted text/images\n"
@@ -937,15 +942,15 @@ def build_dm_instruction_card(
         prio = "P0"
     sc = dict(target_chat=target_chat, source_incident_chat_id=source_incident_chat_id, draft_priority=prio)
     title = f"🧾 Send {prio} incident details (DM){_title_group_suffix(source_chat_label)}"
+    standalone = str(source_incident_chat_id or "").strip() == _session.STANDALONE_DM_SOURCE_CHAT_ID
+    tips = (
+        "Tap Build overview when ready. Clear draft resets input. Participants lists attendees. Help shows all commands."
+    )
+    if standalone:
+        tips += ' Type "c" to abort and switch coe or cog.'
     elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "plain_text", "content": "You may send screenshots and pasted text in any order."}},
-        {
-            "tag": "div",
-            "text": {
-                "tag": "plain_text",
-                "content": "Tap Build overview when ready. Clear draft resets input. Participants lists attendees. Help shows all commands.",
-            },
-        },
+        {"tag": "div", "text": {"tag": "plain_text", "content": tips}},
     ]
     if prio == "P0":
         elements.extend(

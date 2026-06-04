@@ -704,6 +704,8 @@ ID_RE = re.compile(r"\b\d{6,}\b")
 NOT_SPECIFIED_RE = re.compile(r"^\s*(not specified|n/?a|none|unknown|-)?\s*$", re.IGNORECASE)
 
 CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel|cl)\s*$", re.IGNORECASE)
+# Abort standalone ``coe`` / ``cog`` on the green DM card (before preview **Cancel**).
+STANDALONE_OVERVIEW_ABORT_RE = re.compile(r"^\s*c\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check|st)\s*$", re.IGNORECASE)
 HELP_RE = re.compile(r"^\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
 

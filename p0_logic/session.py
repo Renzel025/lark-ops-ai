@@ -65,6 +65,18 @@ def _post_dm_concurrent_meetings_notice(operator_open_id: str, token: str) -> No
         log.warning("concurrent meetings notice exception open_id_tail=%s err=%s", oid[-8:] if len(oid) > 8 else oid, e)
 
 
+def is_standalone_overview_active(operator_open_id: str) -> bool:
+    """True when operator has an active ``coe`` / ``cog`` DM slot (green card or draft, no meeting)."""
+    oid = (operator_open_id or "").strip()
+    if not oid:
+        return False
+    with _DM_INSTR_LOCK:
+        active = _DM_ACTIVE_ITEM.get(oid)
+        if not active:
+            return False
+        return str(active.get("chat_id") or "").strip() == STANDALONE_DM_SOURCE_CHAT_ID
+
+
 def note_if_standalone_create_overview_blocked(operator_open_id: str, tenant_token: str = "") -> str:
     """
     If non-empty, DM this text instead of enqueueing another standalone ``create overview``.
@@ -106,8 +118,8 @@ def note_if_standalone_create_overview_blocked(operator_open_id: str, tenant_tok
             cid = str(active.get("chat_id") or "").strip()
             if cid == STANDALONE_DM_SOURCE_CHAT_ID:
                 return (
-                    "ℹ️ Standalone overview is already active. Finish the first request then proceed to "
-                    "trigger again create overview."
+                    "ℹ️ Standalone overview is already active. Type c to abort, or finish this flow, "
+                    "then type coe or cog again."
                 )
             return "ℹ️ For this incident use the Build overview button on the DM card."
 
