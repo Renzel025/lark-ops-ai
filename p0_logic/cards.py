@@ -1054,6 +1054,101 @@ def build_overview_result_card(
     }
 
 
+def build_dm_overview_sent_card(
+    priority: str = "P0",
+    source_chat_label: str = "",
+    *,
+    group_chat_id: str = "",
+    group_message_id: str = "",
+    target_chat: str = "",
+    source_incident_chat_id: str = "",
+    forwarder_warning: str = "",
+) -> Dict[str, Any]:
+    """
+    DM card after **Send to group** — **Edit overview** stays in the bot DM (no need to open the group).
+    """
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    sc = dict(
+        target_chat=target_chat,
+        source_incident_chat_id=source_incident_chat_id,
+        draft_priority=prio,
+    )
+    label = (source_chat_label or "").strip() or "target group"
+    lines = [
+        f"✅ Overview posted to **{label}**.",
+        "",
+        "Tap **Edit overview** below to change the group message (form opens here in DM).",
+    ]
+    if (forwarder_warning or "").strip():
+        lines.insert(1, forwarder_warning.strip())
+    cfg: Dict[str, Any] = {"enable_forward": True, "update_multi": True}
+    gcid = (group_chat_id or "").strip()
+    gmid = (group_message_id or "").strip()
+    buttons: List[Dict[str, Any]] = []
+    if gcid.startswith("oc_") and gmid:
+        buttons.append(
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "Edit overview"},
+                        "type": "primary",
+                        "value": _group_overview_button_value(
+                            "edit_group_overview",
+                            group_chat_id=gcid,
+                            group_message_id=gmid,
+                            **sc,
+                        ),
+                    },
+                ],
+            }
+        )
+    buttons.append(
+        {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "Done"},
+                    "type": "default",
+                    "value": _dm_button_value("dismiss_sent_overview", **sc),
+                },
+            ],
+        }
+    )
+    return {
+        "schema": "2.0",
+        "config": cfg,
+        "header": {
+            "template": "green",
+            "title": {
+                "tag": "plain_text",
+                "content": f"📤 {prio} Overview sent{_title_group_suffix(source_chat_label)}",
+            },
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {"tag": "hr"},
+                {
+                    "tag": "column_set",
+                    "flex_mode": "none",
+                    "background_style": "default",
+                    "horizontal_spacing": "8px",
+                    "columns": buttons,
+                },
+            ]
+        },
+    }
+
+
 def build_preview_card(
     md: str,
     priority: str = "P0",

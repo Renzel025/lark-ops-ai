@@ -37,6 +37,7 @@ _PREVIEW_WORKFLOW_ACTIONS = frozenset(
         "save_edit",
         "back_to_preview",
         "back_group_edit",
+        "dismiss_sent_overview",
         "cancel_preview",
     }
 )
@@ -639,11 +640,9 @@ def _finalize_group_overview_for_edit(
         md_s,
         priority=pri,
         source_chat_label=lab,
-        group_chat_id=cid,
-        group_message_id=mid,
-        allow_group_edit=True,
         target_chat=tc,
         source_incident_chat_id=src,
+        allow_group_edit=False,
     )
     st, body = _lark.patch_interactive_card(tenant_token, mid, card)
     if st != 200:
@@ -654,7 +653,7 @@ def _finalize_group_overview_for_edit(
             (body or "")[:350],
         )
     else:
-        log.info("group_overview_edit: group card ready for Edit chat_id=%s message_id=%s", cid, mid)
+        log.info("group_overview_edit: group overview stored for DM Edit chat_id=%s message_id=%s", cid, mid)
 
 
 def _handle_edit_group_overview(
@@ -699,7 +698,7 @@ def _handle_edit_group_overview(
     _lark.post_text_to_open_id(
         sender_open_id,
         tenant_token,
-        "✏️ Edit the overview in DM. Tap **Save** to update the message in the group.",
+        "✏️ Edit here in DM. Tap **Save** to update the group overview.",
     )
 
 
@@ -1262,65 +1261,57 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     enqueue_slack_huddle_automation(src_inc, pri)
                 except Exception as e:
                     log.warning("send_preview: Slack huddle automation hook failed: %s", e)
-            # Overlap DM ack + recall edit + recall preview (three independent Lark calls).
-            tasks: List[Tuple[str, Any]] = []
-            max_w = 1 + (1 if edit_mid else 0) + (1 if preview_mid else 0)
-            with ThreadPoolExecutor(max_workers=max(1, max_w)) as ex:
-                if edit_mid:
-                    tasks.append(("edit", ex.submit(_lark.recall_im_message, tenant_token, edit_mid)))
-                if use_forwarder and broadcast_dest and not forwarder_ok:
-                    ack = "⚠️ Overview sent to detection, but broadcast via overview bot failed (see server log)."
-                else:
-                    ack = "✅ Overview sent to the target group chat."
-                tasks.append(
-                    (
-                        "ok",
-                        ex.submit(
-                            _lark.post_text_to_open_id,
-                            sender_open_id,
-                            tenant_token,
-                            ack,
-                        ),
+            fwd_warn = ""
+            if use_forwarder and broadcast_dest and not forwarder_ok:
+                fwd_warn = "⚠️ Broadcast room post via overview bot failed (see server log)."
+            if edit_mid:
+                st_e, body_e = _lark.recall_im_message(tenant_token, edit_mid)
+                if st_e != 200:
+                    log.warning(
+                        "send_preview: edit card recall failed HTTP=%s open_id=%s body=%s",
+                        st_e,
+                        sender_open_id,
+                        (body_e or "")[:400],
                     )
+            _drafts.save_preview(
+                sender_open_id=sender_open_id,
+                target_chat=target_chat,
+                start_epoch=start_epoch,
+                combined_text=combined_text,
+                mention_names=mention_names,
+                issue=issue,
+                impact=impact,
+                support=support,
+                priority=pri,
+                source_incident_chat_id=src_inc,
+                group_chat_id=lark_overview_dest if post_mid else "",
+                group_message_id=post_mid or "",
+                group_edit_only=bool(post_mid),
+            )
+            if post_mid and _group_overview_store.group_overview_edit_enabled():
+                sent_card = _cards.build_dm_overview_sent_card(
+                    pri,
+                    source_chat_label=lab,
+                    group_chat_id=lark_overview_dest,
+                    group_message_id=post_mid,
+                    target_chat=target_chat,
+                    source_incident_chat_id=src_inc,
+                    forwarder_warning=fwd_warn,
                 )
-                if preview_mid:
-                    tasks.append(("pv", ex.submit(_lark.recall_im_message, tenant_token, preview_mid)))
-                for kind, fut in tasks:
-                    r = fut.result()
-                    if kind == "edit":
-                        st_e, body_e = r
-                        if st_e != 200:
-                            log.warning(
-                                "send_preview: edit card recall failed HTTP=%s open_id=%s body=%s",
-                                st_e,
-                                sender_open_id,
-                                (body_e or "")[:400],
-                            )
-                    elif kind == "pv":
-                        st_pv, body_pv = r
-                        if st_pv != 200:
-                            log.warning(
-                                "send_preview: preview card recall failed HTTP=%s open_id=%s body=%s",
-                                st_pv,
-                                sender_open_id,
-                                (body_pv or "")[:400],
-                            )
-                    elif kind == "ok":
-                        st_ok, body_ok = r
-                        if st_ok == 200 and _lark.lark_im_message_create_ok(body_ok)[0]:
-                            log.info(
-                                "send_preview: DM ack posted (\"Overview sent to group\") open_id_tail=%s dest=%s",
-                                sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
-                                lark_overview_dest,
-                            )
-                        else:
-                            log.warning(
-                                "send_preview: DM ack failed HTTP=%s open_id_tail=%s body_head=%s",
-                                st_ok,
-                                sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
-                                (body_ok or "")[:350],
-                            )
-            _drafts.clear_preview(sender_open_id)
+                if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card):
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "✅ Overview sent to the target group chat."
+                        + (f"\n{fwd_warn}" if fwd_warn else ""),
+                    )
+            else:
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "✅ Overview sent to the target group chat."
+                    + (f"\n{fwd_warn}" if fwd_warn else ""),
+                )
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
             _session.release_dm_after_overview_sent(sender_open_id, tenant_token, prev_src)
@@ -1379,6 +1370,19 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_card):
                 log.error("edit_preview failed open_id=%s", sender_open_id)
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to open the edit card.")
+            return
+        if action_name == "dismiss_sent_overview":
+            prev = _drafts.get_preview(sender_open_id) or {}
+            sent_mid = str(prev.get("preview_message_id") or "").strip()
+            if sent_mid:
+                _lark.recall_im_message(tenant_token, sent_mid)
+            _drafts.clear_preview(sender_open_id)
+            _drafts.clear_preview_edit_flags(sender_open_id)
+            if _config.get_dm_repost_instruction_after_reset():
+                lab_d, pr_d = _dm_card_meta(sender_open_id)
+                _send_instruction_card(
+                    sender_open_id, tenant_token, None, priority=pr_d, source_chat_label=lab_d
+                )
             return
         if action_name == "back_group_edit":
             prev = _drafts.get_preview(sender_open_id) or {}
@@ -1445,11 +1449,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     new_md,
                     priority=pri,
                     source_chat_label=lab_g,
-                    group_chat_id=group_cid,
-                    group_message_id=group_mid,
-                    allow_group_edit=True,
                     target_chat=target_chat,
                     source_incident_chat_id=src_g,
+                    allow_group_edit=False,
                 )
                 st_g, body_g = _lark.patch_interactive_card(tenant_token, group_mid, gcard)
                 if st_g != 200:
@@ -1486,10 +1488,19 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 )
                 if str(new_preview.get("edit_message_id") or "").strip():
                     _drafts.post_or_patch_edit_card(sender_open_id, tenant_token, edit_refresh)
+                sent_card = _cards.build_dm_overview_sent_card(
+                    pri,
+                    source_chat_label=lab_g,
+                    group_chat_id=group_cid,
+                    group_message_id=group_mid,
+                    target_chat=target_chat,
+                    source_incident_chat_id=src_g,
+                )
+                _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card)
                 _lark.post_text_to_open_id(
                     sender_open_id,
                     tenant_token,
-                    "✅ Group overview updated.",
+                    "✅ Group overview updated. Tap **Edit overview** again if you need more changes.",
                 )
                 return
             lab = _session.get_source_chat_label_for_target_chat(target_chat)

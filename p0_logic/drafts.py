@@ -274,7 +274,7 @@ def _save_preview(
             "group_message_id": (group_message_id or "").strip(),
             "group_edit_only": bool(group_edit_only),
         }
-        if old_mid and not group_edit_only:
+        if old_mid:
             row["preview_message_id"] = old_mid
         if old_edit_mid:
             row["edit_message_id"] = old_edit_mid
