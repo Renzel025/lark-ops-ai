@@ -583,6 +583,33 @@ def _form_field_left_blank(manual: str) -> bool:
     return (not s) or _text.is_not_specified(s)
 
 
+def _overview_field_complete(value: str) -> bool:
+    s = (value or "").strip()
+    if not s:
+        return False
+    if _text.is_not_specified(s):
+        return False
+    if re.fullmatch(r"[-–—]+", s):
+        return False
+    return True
+
+
+def _missing_overview_fields_for_send(
+    issue: str, impact: str, support: str, combined_text: str = ""
+) -> List[str]:
+    """Human labels for fields that must be filled before **Send to group**."""
+    missing: List[str] = []
+    if not (combined_text or "").strip():
+        missing.append("Incident details (paste text or screenshots in DM, then **Build overview**)")
+    if not _overview_field_complete(issue):
+        missing.append("Issue")
+    if not _overview_field_complete(impact):
+        missing.append("Impact scope")
+    if not _overview_field_complete(support):
+        missing.append("Support request")
+    return missing
+
+
 def _preview_priority(preview: Dict[str, Any]) -> str:
     pr = str((preview or {}).get("priority") or "P0").strip().upper()
     return pr if pr in ("P0", "P1") else "P0"
@@ -1102,6 +1129,25 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if action_name == "send_preview":
             if not target_chat or not md:
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Preview is incomplete.")
+                return
+            missing_fields = _missing_overview_fields_for_send(
+                issue, impact, support, combined_text
+            )
+            if missing_fields:
+                bullets = "\n".join(f"• **{name}**" for name in missing_fields)
+                _lark.post_text_to_open_id(
+                    sender_open_id,
+                    tenant_token,
+                    "⚠️ **Cannot send to group** — complete all overview details first:\n"
+                    f"{bullets}\n\n"
+                    "Tap **Edit** on the preview card → fill every field → **Save**, "
+                    "then tap **Send to group** again.",
+                )
+                log.info(
+                    "send_preview blocked incomplete fields open_id_tail=%s missing=%s",
+                    sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
+                    missing_fields,
+                )
                 return
             edit_mid = str(preview.get("edit_message_id") or "").strip()
             preview_mid = str(preview.get("preview_message_id") or "").strip()
