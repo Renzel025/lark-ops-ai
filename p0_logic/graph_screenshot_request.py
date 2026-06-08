@@ -216,22 +216,6 @@ def parse_graph_screenshot_on_demand_range(text: str) -> Optional[str]:
     return parse_time_range_key(raw)
 
 
-def _estimate_on_demand_wait_label() -> str:
-    """Human ETA for the on-demand ack (actual time varies with Grafana load)."""
-    has_profile = bool(_config.get_p0_graph_screenshot_playwright_user_data_dir())
-    fast = _config.get_p0_graph_screenshot_on_demand_fast()
-    pooled = _config.get_p0_graph_screenshot_browser_pool_enabled() and has_profile
-    if pooled and fast:
-        return "30–60 sec"
-    if fast and has_profile:
-        return "45–90 sec"
-    if fast:
-        return "1–2 min"
-    if has_profile:
-        return "2–3 min"
-    return "3–5 min"
-
-
 def _post_on_demand_reply(chat_id: str, token: str, text: str) -> None:
     cid = (chat_id or "").strip()
     tok = (token or "").strip()
@@ -365,19 +349,14 @@ def try_handle_graph_screenshot_request(
         )
         return True
 
-    from .graph_screenshot import is_graph_capture_busy, schedule_on_demand_graph_screenshot
+    from .graph_screenshot import schedule_on_demand_graph_screenshot
 
     label = (source_chat_label or "").strip()
     range_disp = _config.get_p0_graph_screenshot_range_display(range_key)
-    eta = _estimate_on_demand_wait_label()
-    busy_note = ""
-    if is_graph_capture_busy():
-        busy_note = " Another capture is running — yours is queued."
     _post_on_demand_reply(
         cid,
         tok,
-        f"📊 On it — capturing Grafana dashboard (last {range_disp}). "
-        f"Usually takes **{eta}**.{busy_note} Please wait.",
+        f"📊 On it — capturing Grafana dashboard (last {range_disp}). Please wait.",
     )
     _react_to_request_message(tok, message_id, _config.get_p0_graph_screenshot_react_queued_emoji())
     try:
