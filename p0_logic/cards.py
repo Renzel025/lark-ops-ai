@@ -1480,3 +1480,68 @@ def build_bilingual_overview_md(
         f"🎯 **影响范围**: {zh_impact}\n"
         f"👥 **支援请求**: {zh_support}"
     )
+
+
+def build_issue_watch_alert_card(
+    *,
+    group_label: str,
+    categories_md: str,
+    summary: str,
+    concern: str,
+    alert_time: str,
+) -> Dict[str, Any]:
+    """DM card when Claude/keyword detects a player-facing issue in a detection group."""
+    title_group = (group_label or "").strip() or "detection group"
+    if len(title_group) > 40:
+        title_group = title_group[:39] + "…"
+    elements: List[Dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**Category:**\n{(categories_md or '• (unspecified)').strip()}",
+            },
+        },
+    ]
+    if (summary or "").strip():
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": f"**Summary:** {(summary or '').strip()}"},
+            }
+        )
+    elements.extend(
+        [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "plain_text",
+                    "content": f"Concern: 「{(concern or '').strip()}」",
+                },
+            },
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": f"**Time:** {(alert_time or '').strip()}"},
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "*Issue might be P0 — please declare in the group if needed.*",
+                },
+            },
+        ]
+    )
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "red",
+            "title": {
+                "tag": "plain_text",
+                "content": f"🚨 Major P0 Detection alert — {title_group}",
+            },
+        },
+        "body": {"elements": elements},
+    }

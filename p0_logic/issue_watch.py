@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
+from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
 from .issue_watch_ai import classify_issue_watch_message
@@ -89,17 +90,16 @@ def _set_cooldown(key: str, minutes: int) -> None:
     _COOLDOWN[key] = _now_ts() + max(60, minutes * 60)
 
 
-def _format_categories(keys: List[str], *, include_widespread: bool) -> str:
+def _format_categories(keys: List[str]) -> str:
     lines: List[str] = []
     for key in keys:
+        if key == "widespread_impact":
+            continue
         label, num = _CATEGORY_LABELS.get(key, (key.replace("_", " ").title(), 0))
         if num:
             lines.append(f"{label} (#{num})")
         else:
             lines.append(label)
-    if include_widespread and "widespread_impact" not in keys:
-        label, num = _CATEGORY_LABELS["widespread_impact"]
-        lines.append(f"{label} (#{num})")
     return "\n".join(f"• {x}" for x in lines) if lines else "• (unspecified)"
 
 
@@ -110,53 +110,12 @@ def _quote_excerpt(text: str, limit: int = 320) -> str:
     return t[: limit - 1].rstrip() + "…"
 
 
-def _build_dm_text(
-    *,
-    group_label: str,
-    chat_id: str,
-    categories: List[str],
-    confidence: float,
-    summary: str,
-    excerpt: str,
-    widespread_count: int,
-    widespread_threshold: int,
-    window_min: int,
-) -> str:
-    widespread = widespread_count >= widespread_threshold
-    title_group = (group_label or chat_id).strip()
-    body = [
-        f"🚨 Major P0 Detection alert — {title_group}",
-        "",
-        "Category:",
-        _format_categories(categories, include_widespread=widespread),
-    ]
-    if summary:
-        body.extend(["", f"Summary: {summary}"])
-    if widespread:
-        body.extend(
-            [
-                "",
-                f"Widespread: {widespread_count} players reported the same issue "
-                f"(last {window_min} min)",
-            ]
-        )
-    body.extend(
-        [
-            "",
-            f"Concern: 「{_quote_excerpt(excerpt)}」",
-            "",
-            f"Time: {_format_alert_time()}",
-        ]
-    )
-    return "\n".join(body)
-
-
 def _dm_recipients() -> List[str]:
     """Same route as P0/P1 overview instruction DMs."""
     return list(_config.get_dm_instruction_open_ids())
 
 
-def _send_dm_alerts(token: str, text: str) -> int:
+def _send_dm_alerts(token: str, card: Dict[str, object]) -> int:
     recipients = _dm_recipients()
     if not recipients:
         log.warning("issue_watch: no P0_DM_INSTRUCTION_OPEN_IDS — alert not sent")
@@ -169,11 +128,11 @@ def _send_dm_alerts(token: str, text: str) -> int:
     for oid in recipients:
         if not oid:
             continue
-        st, body = _lark.post_text_to_open_id(oid, tok, text)
+        st, body, _mid = _lark.post_card_to_open_id(oid, tok, card)
         if st == 200:
             sent += 1
         else:
-            log.warning("issue_watch: DM HTTP=%s open_id=%s body=%s", st, oid[:16], (body or "")[:200])
+            log.warning("issue_watch: DM card HTTP=%s open_id=%s body=%s", st, oid[:16], (body or "")[:200])
     return sent
 
 
@@ -274,18 +233,14 @@ def try_handle_issue_watch(
             return True
         _set_cooldown(cd_key, cooldown_min)
 
-    dm_text = _build_dm_text(
-        group_label=(source_chat_name or "").strip(),
-        chat_id=cid,
-        categories=categories,
-        confidence=confidence,
+    alert_card = _cards.build_issue_watch_alert_card(
+        group_label=(source_chat_name or "").strip() or cid,
+        categories_md=_format_categories(categories),
         summary=str(result.get("summary") or ""),
-        excerpt=raw,
-        widespread_count=max(reporter_count, players_mentioned),
-        widespread_threshold=min_reports,
-        window_min=window_min,
+        concern=_quote_excerpt(raw),
+        alert_time=_format_alert_time(),
     )
-    n = _send_dm_alerts(tenant_token, dm_text)
+    n = _send_dm_alerts(tenant_token, alert_card)
     log.info(
         "issue_watch: alert sent=%s chat_id=%s fp=%s reporters=%s conf=%.2f categories=%s",
         n,
