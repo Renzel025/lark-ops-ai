@@ -2290,6 +2290,17 @@ def get_p0_issue_watch_cooldown_min() -> int:
     return max(5, min(n, 180))
 
 
+def get_p0_issue_watch_id_wait_sec() -> int:
+    """When a report mentions players but has no IDs yet, wait this long for an Account/ID follow-up. Default **40** sec."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_ID_WAIT_SEC") or "40").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 40
+    return max(0, min(n, 120))
+
+
 def get_p0_issue_watch_min_text_len() -> int:
     reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_MIN_TEXT_LEN") or "15").strip()

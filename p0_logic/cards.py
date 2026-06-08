@@ -1490,7 +1490,7 @@ def build_issue_watch_alert_card(
     concern: str,
     alert_time: str,
     player_ids_md: str = "",
-    source_chat_link: str = "",
+    source_message_link: str = "",
     source_message_time: str = "",
     supplemental_player_ids: bool = False,
 ) -> Dict[str, Any]:
@@ -1556,22 +1556,22 @@ def build_issue_watch_alert_card(
         }
     )
     src_time = (source_message_time or "").strip()
-    chat_link = (source_chat_link or "").strip()
-    if src_time or chat_link:
-        if chat_link and src_time:
-            source_line = f"**Source message:** [{src_time}]({chat_link})"
-        elif chat_link:
-            source_line = f"**Source:** [Open detection group]({chat_link})"
+    msg_link = (source_message_link or "").strip()
+    if src_time or msg_link:
+        if msg_link and src_time:
+            source_line = f"**Source message:** [{src_time}]({msg_link})"
+        elif msg_link:
+            source_line = "**Source message:** [Open in detection group]({url})".format(url=msg_link)
         else:
             source_line = f"**Source message time:** {src_time}"
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
-    if chat_link:
+    if msg_link:
         elements.append(
             {
                 "tag": "button",
-                "text": {"tag": "plain_text", "content": "Open detection group"},
+                "text": {"tag": "plain_text", "content": "Open source message"},
                 "type": "primary",
-                "multi_url": {"url": chat_link, "pc_url": chat_link},
+                "multi_url": {"url": msg_link, "pc_url": msg_link},
             }
         )
     elements.extend(

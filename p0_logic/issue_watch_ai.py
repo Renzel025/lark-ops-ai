@@ -218,8 +218,20 @@ def _parse_classification(raw: str, provider: str) -> Optional[dict]:
 
 
 def extract_player_ids(text: str) -> List[str]:
-    """Sorted unique 10-digit IDs (common player id format in detection chat)."""
-    return sorted(set(re.findall(r"\b\d{10}\b", (text or "").strip())))
+    """
+    Sorted unique player/account IDs from detection chat.
+
+    - Default: 10-digit IDs.
+    - ``Account:`` / follow-up lists often mix 7–10 digit IDs on separate lines.
+    """
+    t = (text or "").strip()
+    if not t:
+        return []
+    ids_10 = set(re.findall(r"\b\d{10}\b", t))
+    if ids_10 or re.search(r"(?i)\baccount\b", t):
+        loose = set(re.findall(r"\b\d{7,10}\b", t))
+        return sorted(loose, key=lambda x: (len(x), x))
+    return sorted(ids_10)
 
 
 def _extract_player_mentions(text: str) -> int:
@@ -235,7 +247,7 @@ def _extract_player_mentions(text: str) -> int:
         except ValueError:
             pass
     if re.search(r"(?is)\bplayers\b", t):
-        return 1
+        return 0
     if re.search(r"(?is)\bplayer\b", t):
         return 1
     return 0

@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -428,6 +428,21 @@ def build_chat_open_applink(chat_id: str) -> str:
     if not cid.startswith("oc_"):
         return ""
     return f"https://applink.feishu.cn/client/chat/open?openChatId={quote(cid, safe='')}"
+
+
+def build_message_open_applink(chat_id: str, message_id: str) -> str:
+    """
+    Best-effort deep link to a specific group message (scroll/highlight in Lark client).
+
+    Uses ``openChatId`` + ``openMessageId`` on the chat/open AppLink — works on most
+    Feishu/Lark desktop builds; not in the minimal public doc (chat-only).
+    """
+    cid = (chat_id or "").strip()
+    mid = (message_id or "").strip()
+    if not cid.startswith("oc_") or not mid.startswith("om_"):
+        return ""
+    query = urlencode({"openChatId": cid, "openMessageId": mid})
+    return f"https://applink.feishu.cn/client/chat/open?{query}"
 
 
 def get_group_chat_name(chat_id: str, token: str) -> str:

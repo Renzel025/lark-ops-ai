@@ -35,6 +35,9 @@ _MESSAGE_DEDUPE: Dict[str, float] = {}
 _MESSAGE_DEDUPE_LOCK = threading.Lock()
 _MESSAGE_DEDUPE_TTL_SEC = 30.0
 _ALERTED_SOURCE_MESSAGE_IDS: Dict[str, float] = {}
+_DEFERRED_ALERT_LOCK = threading.Lock()
+_DEFERRED_ALERT_TIMERS: Dict[str, threading.Timer] = {}
+_DEFERRED_ALERT_PAYLOADS: Dict[str, Dict[str, object]] = {}
 
 
 def _now_ts() -> float:
@@ -97,14 +100,125 @@ def _mark_alerted_for_message(message_id: str, *, window_min: int) -> None:
 
 
 def _is_player_id_list_message(text: str) -> bool:
-    """Follow-up bubble that is mostly 10-digit player IDs."""
+    """Follow-up bubble that is mostly player/account IDs (incl. ``Account:`` lists)."""
     t = (text or "").strip()
     ids = extract_player_ids(t)
     if len(ids) < 1:
         return False
-    remainder = re.sub(r"\b\d{10}\b", " ", t)
-    remainder = re.sub(r"[\s,;]+", "", remainder)
+    remainder = t
+    for pid in ids:
+        remainder = remainder.replace(pid, " ")
+    remainder = re.sub(r"(?i)\baccount\b", " ", remainder)
+    remainder = re.sub(r"[\s,;:+.\-]+", "", remainder)
     return len(remainder) < 12
+
+
+def _expects_player_id_followup(text: str) -> bool:
+    """Report mentions players but IDs likely come in the next message."""
+    t = (text or "").strip()
+    if extract_player_ids(t):
+        return False
+    return bool(re.search(r"(?is)\bplayers?\b", t))
+
+
+def _defer_alert_key(chat_id: str, sender_open_id: str) -> str:
+    return f"{chat_id}:{sender_open_id}"
+
+
+def _cancel_deferred_alert(chat_id: str, sender_open_id: str) -> bool:
+    key = _defer_alert_key(chat_id, sender_open_id)
+    with _DEFERRED_ALERT_LOCK:
+        timer = _DEFERRED_ALERT_TIMERS.pop(key, None)
+        _DEFERRED_ALERT_PAYLOADS.pop(key, None)
+    if timer:
+        timer.cancel()
+        return True
+    return False
+
+
+def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) -> int:
+    alert_card = _cards.build_issue_watch_alert_card(
+        group_label=str(payload.get("group_label") or ""),
+        categories_md=str(payload.get("categories_md") or ""),
+        summary=str(payload.get("summary") or ""),
+        concern=str(payload.get("concern") or ""),
+        alert_time=str(payload.get("alert_time") or _format_alert_time()),
+        player_ids_md=str(payload.get("player_ids_md") or ""),
+        source_message_link=str(payload.get("source_message_link") or ""),
+        source_message_time=str(payload.get("source_message_time") or ""),
+        supplemental_player_ids=bool(payload.get("supplemental_player_ids")),
+    )
+    return _send_dm_alerts(tenant_token, alert_card)
+
+
+def _fire_deferred_issue_watch_alert(defer_key: str) -> None:
+    with _DEFERRED_ALERT_LOCK:
+        payload = dict(_DEFERRED_ALERT_PAYLOADS.pop(defer_key, {}) or {})
+        _DEFERRED_ALERT_TIMERS.pop(defer_key, None)
+    if not payload:
+        return
+    tok = str(payload.get("tenant_token") or "").strip()
+    cid = str(payload.get("chat_id") or "").strip()
+    sender = str(payload.get("sender_open_id") or "").strip()
+    mid = str(payload.get("message_id") or "").strip()
+    if not tok or not cid:
+        return
+    with _STORE_LOCK:
+        for r in reversed(_REPORTS):
+            if str(r.get("chat_id") or "") != cid:
+                continue
+            if str(r.get("sender_open_id") or "") != sender:
+                continue
+            if r.get("ids_followup_sent"):
+                log.info("issue_watch: deferred alert skipped (IDs card already sent) chat_id=%s", cid)
+                return
+            break
+    n = _send_issue_watch_alert_card(tok, payload)
+    if n > 0:
+        if mid:
+            _mark_alerted_for_message(
+                mid,
+                window_min=int(payload.get("cooldown_min") or _config.get_p0_issue_watch_cooldown_min()),
+            )
+        with _STORE_LOCK:
+            for r in reversed(_REPORTS):
+                if str(r.get("chat_id") or "") != cid:
+                    continue
+                if str(r.get("sender_open_id") or "") != sender:
+                    continue
+                r["alert_sent"] = True
+                break
+    log.info(
+        "issue_watch: deferred alert sent=%s chat_id=%s (no ID follow-up within wait window)",
+        n,
+        cid,
+    )
+
+
+def _schedule_deferred_issue_watch_alert(
+    chat_id: str,
+    sender_open_id: str,
+    payload: Dict[str, object],
+    *,
+    wait_sec: int,
+) -> None:
+    key = _defer_alert_key(chat_id, sender_open_id)
+    _cancel_deferred_alert(chat_id, sender_open_id)
+
+    def _run() -> None:
+        _fire_deferred_issue_watch_alert(key)
+
+    timer = threading.Timer(max(1, wait_sec), _run)
+    timer.daemon = True
+    with _DEFERRED_ALERT_LOCK:
+        _DEFERRED_ALERT_TIMERS[key] = timer
+        _DEFERRED_ALERT_PAYLOADS[key] = dict(payload)
+    timer.start()
+    log.info(
+        "issue_watch: deferred alert %ss — waiting for Account/player ID follow-up chat_id=%s",
+        wait_sec,
+        chat_id,
+    )
 
 
 def _should_skip_noise(text: str) -> bool:
@@ -156,16 +270,20 @@ def _try_player_id_followup(
     message_id: str = "",
     message_create_time: str = "",
 ) -> bool:
-    """Second message with player IDs — attach to recent issue from same sender."""
+    """Second message with player IDs — merge into one alert for the recent report."""
     if not _is_player_id_list_message(raw):
         return False
     ids = extract_player_ids(raw)
     if not ids:
         return False
+    _cancel_deferred_alert(chat_id, sender_open_id)
     with _STORE_LOCK:
         recent = _find_recent_report(chat_id, sender_open_id)
     if not recent:
         log.info("issue_watch: player IDs without recent issue context chat_id=%s", chat_id)
+        return True
+    if recent.get("ids_followup_sent"):
+        log.info("issue_watch: player ID follow-up already sent chat_id=%s", chat_id)
         return True
 
     player_count = len(ids)
@@ -181,46 +299,41 @@ def _try_player_id_followup(
     elif player_count >= 1 and "player" not in summary.lower():
         summary = f"{summary} ({player_count} player(s))"
 
+    fp = str(recent.get("fingerprint") or "generic")
+    cd_key = _cooldown_key(chat_id, "player_ids", fp)
     with _STORE_LOCK:
+        if _cooldown_active(cd_key):
+            log.info("issue_watch: player ID follow-up cooldown chat_id=%s", chat_id)
+            return True
         recent["player_ids"] = ids
         recent["players_count"] = player_count
-
-    concern_cd_key = _cooldown_key_for_issue(
-        chat_id,
-        categories,
-        concern,
-        str(recent.get("fingerprint") or "generic"),
-    )
-    cd_key = _cooldown_key(chat_id, "player_ids", str(recent.get("fingerprint") or "generic"))
-    with _STORE_LOCK:
-        if _cooldown_active(cd_key) or _cooldown_active(concern_cd_key):
-            log.info(
-                "issue_watch: player ID follow-up skipped (recent alert for same issue) chat_id=%s",
-                chat_id,
-            )
-            return True
+        recent["ids_followup_sent"] = True
         _set_cooldown(cd_key, max(5, _config.get_p0_issue_watch_cooldown_min() // 2))
 
     src_mid = str(recent.get("message_id") or "").strip()
     src_time = _format_message_create_time(str(recent.get("message_create_time") or "")) or _format_alert_time()
     group_label = _resolve_group_label(chat_id, source_chat_name, tenant_token)
-    alert_card = _cards.build_issue_watch_alert_card(
-        group_label=group_label,
-        categories_md=_format_categories(categories, players_affected=player_count),
-        summary=summary,
-        concern=_quote_excerpt(concern),
-        alert_time=_format_alert_time(),
-        player_ids_md=_format_player_ids_md(ids),
-        source_chat_link=_lark.build_chat_open_applink(chat_id),
-        source_message_time=src_time,
-        supplemental_player_ids=True,
-    )
-    n = _send_dm_alerts(tenant_token, alert_card)
+    payload = {
+        "group_label": group_label,
+        "categories_md": _format_categories(categories, players_affected=player_count),
+        "summary": summary,
+        "concern": _quote_excerpt(concern),
+        "alert_time": _format_alert_time(),
+        "player_ids_md": _format_player_ids_md(ids),
+        "source_message_link": _lark.build_message_open_applink(chat_id, src_mid)
+        or _lark.build_chat_open_applink(chat_id),
+        "source_message_time": src_time,
+        "supplemental_player_ids": False,
+    }
+    n = _send_issue_watch_alert_card(tenant_token, payload)
+    if n > 0 and src_mid:
+        _mark_alerted_for_message(src_mid, window_min=_config.get_p0_issue_watch_cooldown_min())
     log.info(
-        "issue_watch: player ID follow-up sent=%s chat_id=%s count=%s",
+        "issue_watch: player ID follow-up sent=%s chat_id=%s count=%s ids=%s",
         n,
         chat_id,
         player_count,
+        len(ids),
     )
     return True
 
@@ -311,11 +424,8 @@ def _format_categories(keys: List[str], *, players_affected: int = 0) -> str:
     for key in keys:
         if key == "widespread_impact":
             continue
-        label, num = _CATEGORY_LABELS.get(key, (key.replace("_", " ").title(), 0))
-        if num:
-            lines.append(f"{label} (#{num})")
-        else:
-            lines.append(label)
+        label, _num = _CATEGORY_LABELS.get(key, (key.replace("_", " ").title(), 0))
+        lines.append(label)
     n = int(players_affected or 0)
     if n >= _config.get_p0_issue_watch_min_reports():
         lines.append(f"{n} players are affected")
@@ -452,6 +562,8 @@ def try_handle_issue_watch(
                 "players_count": max(int(result.get("players_mentioned_in_message") or 0), len(player_ids)),
                 "message_id": (message_id or "").strip(),
                 "message_create_time": (message_create_time or "").strip(),
+                "ids_followup_sent": False,
+                "alert_sent": False,
             }
         )
         reporter_count = _count_unique_reporters(cid, fingerprint, window_sec)
@@ -462,7 +574,7 @@ def try_handle_issue_watch(
         players_in_msg = int(result.get("players_mentioned_in_message") or 0)
     except (TypeError, ValueError):
         players_in_msg = 0
-    id_count = len(set(re.findall(r"\b\d{10}\b", raw)))
+    id_count = len(player_ids)
     players_mentioned = max(players_in_msg, id_count)
     if players_mentioned >= min_reports and "widespread_impact" not in categories:
         categories.append("widespread_impact")
@@ -499,19 +611,40 @@ def try_handle_issue_watch(
     id_count = len(player_ids)
     src_time = _format_message_create_time(message_create_time) or _format_alert_time()
     group_label = _resolve_group_label(cid, source_chat_name, tenant_token)
-    alert_card = _cards.build_issue_watch_alert_card(
-        group_label=group_label,
-        categories_md=_format_categories(categories, players_affected=id_count),
-        summary=str(result.get("summary") or ""),
-        concern=_quote_excerpt(raw),
-        alert_time=_format_alert_time(),
-        player_ids_md=_format_player_ids_md(player_ids),
-        source_chat_link=_lark.build_chat_open_applink(cid),
-        source_message_time=src_time,
-    )
-    n = _send_dm_alerts(tenant_token, alert_card)
+    payload: Dict[str, object] = {
+        "tenant_token": tenant_token,
+        "chat_id": cid,
+        "sender_open_id": sender,
+        "message_id": mid,
+        "cooldown_min": cooldown_min,
+        "group_label": group_label,
+        "categories_md": _format_categories(categories, players_affected=id_count),
+        "summary": str(result.get("summary") or ""),
+        "concern": _quote_excerpt(raw),
+        "alert_time": _format_alert_time(),
+        "player_ids_md": _format_player_ids_md(player_ids),
+        "source_message_link": _lark.build_message_open_applink(cid, mid)
+        or _lark.build_chat_open_applink(cid),
+        "source_message_time": src_time,
+        "supplemental_player_ids": False,
+    }
+
+    wait_sec = _config.get_p0_issue_watch_id_wait_sec()
+    if id_count == 0 and _expects_player_id_followup(raw) and wait_sec > 0:
+        _schedule_deferred_issue_watch_alert(cid, sender, payload, wait_sec=wait_sec)
+        return True
+
+    n = _send_issue_watch_alert_card(tenant_token, payload)
     if n > 0 and mid:
         _mark_alerted_for_message(mid, window_min=cooldown_min)
+        with _STORE_LOCK:
+            for r in reversed(_REPORTS):
+                if str(r.get("chat_id") or "") != cid:
+                    continue
+                if str(r.get("sender_open_id") or "") != sender:
+                    continue
+                r["alert_sent"] = True
+                break
     log.info(
         "issue_watch: alert sent=%s chat_id=%s fp=%s reporters=%s conf=%.2f categories=%s",
         n,
