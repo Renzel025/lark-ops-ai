@@ -336,6 +336,13 @@ def groq_classify_priority_keyword(message_text: str) -> Optional[dict]:
     return classify_priority_keyword(message_text)
 
 
+def classify_graph_screenshot_request(message_text: str) -> Optional[dict]:
+    """Natural-language Grafana screenshot triage (Claude preferred, Groq fallback)."""
+    from .graph_screenshot_ai import classify_graph_screenshot_request as _classify
+
+    return _classify(message_text)
+
+
 def _scrub_issue_source_for_model(issue_source: str) -> str:
     src = (issue_source or "").strip()
     if not src:

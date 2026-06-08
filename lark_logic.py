@@ -1101,7 +1101,12 @@ def process_message(
             return
 
         if try_handle_graph_screenshot_request(
-            text_raw, chat_id, tenant_token or token, source_chat_name
+            text_raw,
+            chat_id,
+            tenant_token or token,
+            source_chat_name,
+            mention_names=mention_names,
+            groq_key=groq_key,
         ):
             return
 
@@ -1367,7 +1372,12 @@ def process_message(
     # On-demand Grafana screenshot (hub / allowed chats)
     # ---------------------------------------------------------
     if text_raw and try_handle_graph_screenshot_request(
-        text_raw, chat_id, tenant_token or token, source_chat_name
+        text_raw,
+        chat_id,
+        tenant_token or token,
+        source_chat_name,
+        mention_names=mention_names,
+        groq_key=groq_key,
     ):
         return
 

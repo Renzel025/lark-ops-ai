@@ -1332,6 +1332,7 @@ def get_p0_graph_screenshot_url() -> str:
 _GRAFANA_RANGE_FROM_QUERY = {
     "30m": "now-30m",
     "1h": "now-1h",
+    "2h": "now-2h",
     "3h": "now-3h",
     "6h": "now-6h",
 }
@@ -1343,6 +1344,7 @@ def get_p0_graph_screenshot_range_display(range_key: str) -> str:
     return {
         "30m": "30 minutes",
         "1h": "1 hour",
+        "2h": "2 hours",
         "3h": "3 hours",
         "6h": "6 hours",
     }.get(rk, rk or "dashboard")
@@ -1351,7 +1353,7 @@ def get_p0_graph_screenshot_range_display(range_key: str) -> str:
 def build_p0_graph_screenshot_url_for_range(range_key: str) -> str:
     """
     Build Grafana URL for a time window by setting ``from=`` on ``P0_GRAPH_SCREENSHOT_URL``.
-    Keys: ``30m``, ``1h``, ``3h``, ``6h``.
+    Keys: ``30m``, ``1h``, ``2h``, ``3h``, ``6h``.
     """
     reload_env_runtime()
     base = get_p0_graph_screenshot_url()
@@ -1400,6 +1402,36 @@ def p0_graph_screenshot_on_demand_enabled() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_ai_enabled() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_AI`` — when ``1`` (default) and an AI key is set (``ANTHROPIC_API_KEY`` or
+    ``GROQ_API_KEY``), classifies natural-language requests like ``please give 30 mins`` (OTE-AI style).
+    Provider: ``P0_GRAPH_SCREENSHOT_AI_PROVIDER`` (``auto`` prefers Claude).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_AI") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_ai_provider() -> str:
+    """``claude`` | ``groq`` | ``auto`` — see ``graph_screenshot_ai.resolve_graph_screenshot_ai_provider``."""
+    from .graph_screenshot_ai import resolve_graph_screenshot_ai_provider
+
+    return resolve_graph_screenshot_ai_provider()
+
+
+def get_p0_graph_screenshot_bot_mention_hints() -> Tuple[str, ...]:
+    """
+    Substrings matched against Lark @mention display names to detect a direct bot ping.
+    Env: ``P0_GRAPH_SCREENSHOT_BOT_MENTION_HINTS`` (comma-separated).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BOT_MENTION_HINTS") or "").strip()
+    if raw:
+        return tuple(x.strip() for x in raw.split(",") if x.strip())
+    return ("automation-bot", "p0-automation", "p1/p0", "lark-ops", "p0 bot", "p1 bot")
 
 
 def get_p0_graph_screenshot_on_demand_chat_ids() -> FrozenSet[str]:
