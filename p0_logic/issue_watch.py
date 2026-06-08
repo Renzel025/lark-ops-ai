@@ -159,7 +159,7 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         issue_watch_alert_key=alert_key,
         source_incident_chat_id=src,
         target_chat=tgt,
-        auto_overview_buttons=bool(alert_key),
+        auto_overview_buttons=False,
     )
     return _send_dm_alerts(tenant_token, alert_card)
 

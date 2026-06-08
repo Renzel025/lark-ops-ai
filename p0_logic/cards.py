@@ -1606,65 +1606,12 @@ def build_issue_watch_alert_card(
         else:
             source_line = f"**Source message time:** {src_time}"
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
-    sc = dict(
-        target_chat=(target_chat or "").strip(),
-        source_incident_chat_id=(source_incident_chat_id or "").strip(),
-        draft_priority="P0",
-        issue_watch_alert_key=(issue_watch_alert_key or "").strip(),
-    )
-    if auto_overview_buttons and (issue_watch_alert_key or "").strip() and not supplemental_player_ids:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "**Overview:** use the auto-generated draft or build manually.",
-                },
-            }
-        )
-        elements.append(
-            {
-                "tag": "column_set",
-                "flex_mode": "none",
-                "background_style": "default",
-                "horizontal_spacing": "8px",
-                "columns": [
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "Use suggested overview"},
-                                "type": "primary",
-                                "value": _dm_button_value("issue_watch_use_overview", **sc),
-                            },
-                        ],
-                    },
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "Build overview manually"},
-                                "type": "default",
-                                "value": _dm_button_value("issue_watch_manual_overview", **sc),
-                            },
-                        ],
-                    },
-                ],
-            }
-        )
     if msg_link:
         elements.append(
             {
                 "tag": "button",
                 "text": {"tag": "plain_text", "content": "Open source message"},
-                "type": "default" if auto_overview_buttons else "primary",
+                "type": "primary",
                 "multi_url": {"url": msg_link, "pc_url": msg_link},
             }
         )
@@ -1675,7 +1622,7 @@ def build_issue_watch_alert_card(
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "*Issue might be P0 — declare in the group if a bridge meeting is needed.*",
+                    "content": "*Issue might be P0 — declare in the group if a bridge meeting is needed. After declare, duty gets a suggested overview in DM.*",
                 },
             },
         ]
@@ -1691,4 +1638,46 @@ def build_issue_watch_alert_card(
             },
         },
         "body": {"elements": elements},
+    }
+
+
+def build_issue_watch_declare_manual_card(
+    *,
+    issue_watch_alert_key: str = "",
+    source_incident_chat_id: str = "",
+    target_chat: str = "",
+    source_chat_label: str = "",
+) -> Dict[str, Any]:
+    """DM card after P0 declare — duty can discard suggested preview and build manually."""
+    sc = dict(
+        target_chat=(target_chat or "").strip(),
+        source_incident_chat_id=(source_incident_chat_id or "").strip(),
+        draft_priority="P0",
+        issue_watch_alert_key=(issue_watch_alert_key or "").strip(),
+    )
+    suffix = _title_group_suffix(source_chat_label)
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "green",
+            "title": {"tag": "plain_text", "content": f"📝 Build overview manually{suffix}"},
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": "Prefer to write the overview yourself? This clears the suggested preview and opens the usual **Build overview** flow.",
+                    },
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "Build overview manually"},
+                    "type": "primary",
+                    "value": _dm_button_value("issue_watch_manual_overview", **sc),
+                },
+            ]
+        },
     }

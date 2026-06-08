@@ -191,21 +191,129 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
     if not send_now:
         _post_dm_concurrent_meetings_notice(oid, token)
         return
+    _activate_dm_instruction_slot(
+        oid,
+        token,
+        norm,
+        context="DM instruction",
+    )
+
+
+def _activate_dm_instruction_slot(
+    operator_open_id: str,
+    token: str,
+    item: Dict[str, Any],
+    *,
+    context: str,
+    issue_watch_alert_key: str = "",
+) -> bool:
+    """Clear drafts, register DM slot, then green card or Issue Watch suggested preview."""
+    oid = (operator_open_id or "").strip()
+    tok = (token or "").strip()
+    chat_id = str(item.get("chat_id") or "").strip()
+    target_chat = str(item.get("target_chat") or "").strip()
+    priority = str(item.get("priority") or "P0").strip().upper()
+    if priority not in ("P0", "P1"):
+        priority = "P0"
+    label = str(item.get("label") or "").strip()
+    op_uid = str(item.get("operator_lark_user_id") or "").strip()
+    alert_key = (issue_watch_alert_key or "").strip()
+
     from . import drafts as _drafts
 
     _drafts.clear_draft(oid)
     _drafts.clear_preview(oid)
     _drafts.cancel_preview_timer(oid)
     _drafts.seed_draft_for_incident(oid, target_chat, chat_id, draft_priority=priority)
+
+    if alert_key and priority == "P0" and _config.get_p0_issue_watch_auto_overview_enabled():
+        from . import issue_watch_overview as _iwo
+
+        if _iwo.push_suggested_overview_on_p0_declare(
+            oid,
+            tok,
+            alert_key,
+            source_incident_chat_id=chat_id,
+            target_chat=target_chat,
+            source_chat_label=label,
+        ):
+            log.info(
+                "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
+                context,
+                oid[-8:] if len(oid) > 8 else oid,
+                chat_id,
+                alert_key[:12],
+            )
+            return True
+
     _send_dm_instruction_card_logged(
         oid,
-        token,
+        tok,
         priority,
         label,
-        context="DM instruction",
+        context=context,
         target_chat=target_chat,
         source_incident_chat_id=chat_id,
         operator_lark_user_id=op_uid,
+    )
+    return False
+
+
+def enqueue_dm_issue_watch_overview_if_needed(
+    operator_open_id: str,
+    token: str,
+    item: Dict[str, Any],
+    alert_key: str,
+) -> None:
+    """On P0 declare with a recent Issue Watch alert: DM suggested preview instead of green card."""
+    oid = (operator_open_id or "").strip()
+    token = (token or "").strip()
+    key = (alert_key or "").strip()
+    if not oid or not token or not key:
+        enqueue_dm_instruction_if_needed(operator_open_id, token, item)
+        return
+    chat_id = (item.get("chat_id") or "").strip()
+    target_chat = (item.get("target_chat") or "").strip()
+    priority = (item.get("priority") or "P0").strip().upper()
+    if priority not in ("P0", "P1"):
+        priority = "P0"
+    label = str(item.get("label") or "").strip()
+    op_uid = str(item.get("operator_lark_user_id") or "").strip()
+    norm = {
+        "chat_id": chat_id,
+        "target_chat": target_chat,
+        "priority": priority,
+        "label": label,
+        "operator_lark_user_id": op_uid,
+    }
+    send_now = False
+    with _DM_INSTR_LOCK:
+        if oid not in _DM_ACTIVE_ITEM:
+            _DM_ACTIVE_ITEM[oid] = norm
+            send_now = True
+            log.info(
+                "DM issue-watch overview active (immediate) open_id_tail=%s incident=%s alert_key=%s",
+                oid[-8:] if len(oid) > 8 else oid,
+                chat_id,
+                key[:12],
+            )
+        else:
+            _DM_INSTR_QUEUE.setdefault(oid, []).append(norm)
+            log.info(
+                "DM issue-watch overview queued open_id_tail=%s queue_len=%s incident=%s",
+                oid[-8:] if len(oid) > 8 else oid,
+                len(_DM_INSTR_QUEUE.get(oid) or []),
+                chat_id,
+            )
+    if not send_now:
+        _post_dm_concurrent_meetings_notice(oid, token)
+        return
+    _activate_dm_instruction_slot(
+        oid,
+        token,
+        norm,
+        context="Issue Watch overview on P0 declare",
+        issue_watch_alert_key=key,
     )
 
 
@@ -256,24 +364,7 @@ def release_dm_after_overview_sent(operator_open_id: str, token: str, sent_sourc
     _drafts.clear_preview(oid)
     _drafts.cancel_preview_timer(oid)
     if next_item:
-        tc = str(next_item.get("target_chat") or "").strip()
-        cid = str(next_item.get("chat_id") or "").strip()
-        pr = str(next_item.get("priority") or "P0").strip().upper()
-        if pr not in ("P0", "P1"):
-            pr = "P0"
-        lab = str(next_item.get("label") or "").strip()
-        q_op = str(next_item.get("operator_lark_user_id") or "").strip()
-        _drafts.seed_draft_for_incident(oid, tc, cid, draft_priority=pr)
-        _send_dm_instruction_card_logged(
-            oid,
-            token,
-            pr,
-            lab,
-            context="queued DM instruction",
-            target_chat=tc,
-            source_incident_chat_id=cid,
-            operator_lark_user_id=q_op,
-        )
+        _activate_dm_instruction_slot(oid, token, next_item, context="queued DM instruction")
 
 
 def release_standalone_overview_cancel(operator_open_id: str, token: str) -> None:
@@ -1639,7 +1730,21 @@ def start_p0(
         schedule_p0_graph_screenshot(token, priority, chat_label)
     except Exception as e:
         log.warning("start_p0: graph screenshot hook failed: %s", e)
-    # Primary bot always DM's the green overview card (same declaration as severity bot for P0 when enabled).
+    # Primary bot DM: Issue Watch suggested preview on P0 declare when a recent alert exists; else green card.
+    issue_watch_key = ""
+    if priority == "P0" and _config.get_p0_issue_watch_auto_overview_enabled():
+        try:
+            from . import issue_watch_overview as _iwo
+
+            issue_watch_key = _iwo.find_latest_alert_key_for_chat(chat_id)
+            if issue_watch_key:
+                log.info(
+                    "start_p0: Issue Watch overview will DM on declare chat_id=%s alert_key=%s",
+                    chat_id[:24],
+                    issue_watch_key[:12],
+                )
+        except Exception as e_iw:
+            log.warning("start_p0: Issue Watch overview lookup failed: %s", e_iw)
     for oid in dm_targets:
         if not oid:
             continue
@@ -1651,7 +1756,10 @@ def start_p0(
         }
         if oid == trigger_open_id and trigger_lark_user_id:
             dm_item["operator_lark_user_id"] = trigger_lark_user_id
-        enqueue_dm_instruction_if_needed(oid, token, dm_item)
+        if issue_watch_key:
+            enqueue_dm_issue_watch_overview_if_needed(oid, token, dm_item, issue_watch_key)
+        else:
+            enqueue_dm_instruction_if_needed(oid, token, dm_item)
     try:
         schedule_vc_auto_cancel_if_no_external_joins(chat_id)
     except Exception as e:
