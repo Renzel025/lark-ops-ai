@@ -873,6 +873,9 @@ def _dm_button_value(action: str, **scope: Any) -> Dict[str, Any]:
         v["group_chat_id"] = gcid
     if gmid:
         v["group_message_id"] = gmid
+    alert_key = str(scope.get("issue_watch_alert_key") or "").strip()
+    if alert_key:
+        v["issue_watch_alert_key"] = alert_key
     return v
 
 
@@ -1527,6 +1530,10 @@ def build_issue_watch_alert_card(
     source_message_link: str = "",
     source_message_time: str = "",
     supplemental_player_ids: bool = False,
+    issue_watch_alert_key: str = "",
+    source_incident_chat_id: str = "",
+    target_chat: str = "",
+    auto_overview_buttons: bool = False,
 ) -> Dict[str, Any]:
     """DM card when Claude/keyword detects a player-facing issue in a detection group."""
     title_group = (group_label or "").strip() or "detection group"
@@ -1599,12 +1606,65 @@ def build_issue_watch_alert_card(
         else:
             source_line = f"**Source message time:** {src_time}"
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
+    sc = dict(
+        target_chat=(target_chat or "").strip(),
+        source_incident_chat_id=(source_incident_chat_id or "").strip(),
+        draft_priority="P0",
+        issue_watch_alert_key=(issue_watch_alert_key or "").strip(),
+    )
+    if auto_overview_buttons and (issue_watch_alert_key or "").strip() and not supplemental_player_ids:
+        elements.append({"tag": "hr"})
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**Overview:** use the auto-generated draft or build manually.",
+                },
+            }
+        )
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Use suggested overview"},
+                                "type": "primary",
+                                "value": _dm_button_value("issue_watch_use_overview", **sc),
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Build overview manually"},
+                                "type": "default",
+                                "value": _dm_button_value("issue_watch_manual_overview", **sc),
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
     if msg_link:
         elements.append(
             {
                 "tag": "button",
                 "text": {"tag": "plain_text", "content": "Open source message"},
-                "type": "primary",
+                "type": "default" if auto_overview_buttons else "primary",
                 "multi_url": {"url": msg_link, "pc_url": msg_link},
             }
         )
@@ -1615,7 +1675,7 @@ def build_issue_watch_alert_card(
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "*Issue might be P0 — please declare in the group if needed.*",
+                    "content": "*Issue might be P0 — declare in the group if a bridge meeting is needed.*",
                 },
             },
         ]

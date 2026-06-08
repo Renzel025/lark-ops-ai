@@ -1169,6 +1169,29 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if action_name in ("slack_severity_major", "slack_severity_minor"):
             _handle_slack_severity_choice(payload, tenant_token, action_name == "slack_severity_major")
             return
+        if action_name in ("issue_watch_use_overview", "issue_watch_manual_overview"):
+            from . import issue_watch_overview as _iwo
+
+            val = _card_action_value_dict(payload)
+            alert_key = str(val.get("issue_watch_alert_key") or "").strip()
+            tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
+            if action_name == "issue_watch_use_overview":
+                _iwo.handle_use_suggested_overview(
+                    sender_open_id,
+                    tenant_token,
+                    alert_key=alert_key,
+                    source_incident_chat_id=src_inc,
+                    target_chat=tc,
+                )
+            else:
+                _iwo.handle_manual_overview(
+                    sender_open_id,
+                    tenant_token,
+                    alert_key=alert_key,
+                    source_incident_chat_id=src_inc,
+                    target_chat=tc,
+                )
+            return
         if action_name == "generate_preview":
             _generate_preview_now(sender_open_id, tenant_token)
             return

@@ -137,6 +137,15 @@ def _cancel_deferred_alert(chat_id: str, sender_open_id: str) -> bool:
 
 
 def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) -> int:
+    from . import issue_watch_overview as _iwo
+
+    alert_key = _iwo.prepare_alert_for_overview(payload)
+    src = str(payload.get("source_incident_chat_id") or "").strip()
+    tgt = str(payload.get("target_chat") or "").strip()
+    if not src or not tgt:
+        cid = str(payload.get("chat_id") or "").strip()
+        if cid:
+            src, tgt, _ = _iwo.resolve_overview_routing(cid)
     alert_card = _cards.build_issue_watch_alert_card(
         group_label=str(payload.get("group_label") or ""),
         categories_md=str(payload.get("categories_md") or ""),
@@ -147,6 +156,10 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         source_message_link=str(payload.get("source_message_link") or ""),
         source_message_time=str(payload.get("source_message_time") or ""),
         supplemental_player_ids=bool(payload.get("supplemental_player_ids")),
+        issue_watch_alert_key=alert_key,
+        source_incident_chat_id=src,
+        target_chat=tgt,
+        auto_overview_buttons=bool(alert_key),
     )
     return _send_dm_alerts(tenant_token, alert_card)
 
@@ -320,6 +333,14 @@ def _try_player_id_followup(
     src_time = _format_message_create_time(str(recent.get("message_create_time") or "")) or _format_alert_time()
     group_label = _resolve_group_label(chat_id, source_chat_name, tenant_token)
     payload = {
+        "tenant_token": tenant_token,
+        "chat_id": chat_id,
+        "message_id": src_mid,
+        "fingerprint": fp,
+        "categories": categories,
+        "players_count": player_count,
+        "player_ids": ids,
+        "concern_raw": concern,
         "group_label": group_label,
         "categories_md": _format_categories(categories, players_affected=player_count),
         "summary": summary,
@@ -623,6 +644,11 @@ def try_handle_issue_watch(
         "sender_open_id": sender,
         "message_id": mid,
         "cooldown_min": cooldown_min,
+        "fingerprint": fingerprint,
+        "categories": categories,
+        "players_count": max(players_mentioned, id_count),
+        "player_ids": player_ids,
+        "concern_raw": raw,
         "group_label": group_label,
         "categories_md": _format_categories(categories, players_affected=id_count),
         "summary": str(result.get("summary") or ""),

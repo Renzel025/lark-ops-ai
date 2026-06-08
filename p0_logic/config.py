@@ -2324,3 +2324,13 @@ def get_p0_issue_watch_min_text_len() -> int:
     except ValueError:
         n = 15
     return max(8, min(n, 200))
+
+
+def get_p0_issue_watch_auto_overview_enabled() -> bool:
+    """
+    When true (default), Major detection alert DMs include **Use suggested overview** /
+    **Build overview manually** buttons.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_AUTO_OVERVIEW") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
