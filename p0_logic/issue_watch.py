@@ -480,15 +480,39 @@ def _send_dm_alerts(token: str, card: Dict[str, object]) -> int:
     if not tok:
         log.warning("issue_watch: no tenant token — alert not sent")
         return 0
+    buzz_on = _config.get_p0_issue_watch_buzz_enabled()
+    urgent_mode = _config.get_p0_issue_watch_lark_urgent_mode()
     sent = 0
+    urgent_ok = 0
     for oid in recipients:
         if not oid:
             continue
-        st, body, _mid = _lark.post_card_to_open_id(oid, tok, card)
-        if st == 200:
-            sent += 1
-        else:
+        st, body, mid = _lark.post_card_to_open_id(oid, tok, card)
+        if st != 200:
             log.warning("issue_watch: DM card HTTP=%s open_id=%s body=%s", st, oid[:16], (body or "")[:200])
+            continue
+        sent += 1
+        if buzz_on and urgent_mode != "off" and mid:
+            uok, udetail = _lark.urgent_message_for_users(tok, mid, [oid], mode=urgent_mode)
+            if uok:
+                urgent_ok += 1
+            else:
+                log.warning(
+                    "issue_watch: Lark urgent_%s failed open_id_tail=%s detail=%s "
+                    "(enable im:message.urgent on the bot app?)",
+                    urgent_mode,
+                    oid[-12:] if len(oid) > 12 else oid,
+                    (udetail or "")[:300],
+                )
+    if sent:
+        log.info(
+            "issue_watch: DM alert sent=%s/%s buzz_enabled=%s urgent_%s=%s",
+            sent,
+            len(recipients),
+            buzz_on,
+            urgent_mode,
+            urgent_ok,
+        )
     return sent
 
 

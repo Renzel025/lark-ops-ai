@@ -2334,3 +2334,22 @@ def get_p0_issue_watch_auto_overview_enabled() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_ISSUE_WATCH_AUTO_OVERVIEW") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_buzz_enabled() -> bool:
+    """``P0_ISSUE_WATCH_BUZZ_ENABLED`` — Lark 加急 on Major detection alert DM (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_BUZZ_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_lark_urgent_mode() -> str:
+    """
+    Lark buzz mode for Issue Watch alert DMs: ``app`` | ``phone`` | ``sms`` | ``off``.
+    Falls back to ``P0_ONGOING_LARK_URGENT_MODE`` when unset.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_LARK_URGENT_MODE") or "").strip().lower()
+    if v:
+        return v if v in ("app", "phone", "sms", "off") else "app"
+    return get_p0_ongoing_lark_urgent_mode()
