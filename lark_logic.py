@@ -1366,6 +1366,8 @@ def process_message(
                 user_id,
                 tenant_token or token,
                 source_chat_name=source_chat_name,
+                message_id=message_id,
+                message_create_time=message_create_time,
             ):
                 return
 

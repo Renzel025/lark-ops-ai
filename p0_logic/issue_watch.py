@@ -31,6 +31,9 @@ _CATEGORY_LABELS: Dict[str, Tuple[str, int]] = {
 _STORE_LOCK = threading.Lock()
 _REPORTS: List[Dict[str, object]] = []
 _COOLDOWN: Dict[str, float] = {}
+_MESSAGE_DEDUPE: Dict[str, float] = {}
+_MESSAGE_DEDUPE_LOCK = threading.Lock()
+_MESSAGE_DEDUPE_TTL_SEC = 30.0
 
 
 def _now_ts() -> float:
@@ -177,9 +180,54 @@ def _count_unique_reporters(chat_id: str, fingerprint: str, window_sec: float) -
     return len(seen)
 
 
+def _normalize_concern_key(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())[:180]
+
+
+def _issue_watch_dedupe_key(
+    chat_id: str,
+    sender_open_id: str,
+    message_id: str,
+    message_create_time: str,
+    text: str,
+) -> str:
+    norm = _normalize_concern_key(text)
+    ct = (message_create_time or "").strip()
+    if ct:
+        return f"iw:{chat_id}:{sender_open_id}:{ct}:{norm}"
+    mid = (message_id or "").strip()
+    return f"iw:{chat_id}:{sender_open_id}:mid:{mid}:{norm}"
+
+
+def _try_consume_issue_watch_dedupe(key: str) -> bool:
+    """True = first Lark delivery for this message; False = duplicate webhook."""
+    now = time.monotonic()
+    with _MESSAGE_DEDUPE_LOCK:
+        for k, t in list(_MESSAGE_DEDUPE.items()):
+            if now - t > _MESSAGE_DEDUPE_TTL_SEC:
+                del _MESSAGE_DEDUPE[k]
+        if key in _MESSAGE_DEDUPE:
+            return False
+        _MESSAGE_DEDUPE[key] = now
+        return True
+
+
 def _cooldown_key(chat_id: str, alert_kind: str, fingerprint: str) -> str:
     fp = (fingerprint or "generic")[:60]
     return f"{chat_id}:{alert_kind}:{fp}"
+
+
+def _cooldown_key_for_issue(chat_id: str, categories: List[str], concern_text: str, fingerprint: str) -> str:
+    """Same issue text in the same group should not DM again within cooldown."""
+    primary = ""
+    for cat in categories:
+        if cat != "widespread_impact":
+            primary = cat
+            break
+    if not primary:
+        primary = (fingerprint or "generic")[:40]
+    norm = _normalize_concern_key(concern_text)
+    return f"{chat_id}:issue:{primary}:{norm}"
 
 
 def _cooldown_active(key: str) -> bool:
@@ -244,6 +292,8 @@ def try_handle_issue_watch(
     tenant_token: str,
     *,
     source_chat_name: str = "",
+    message_id: str = "",
+    message_create_time: str = "",
 ) -> bool:
     """
     Classify detection-group chatter and DM overview duty users on incident signals.
@@ -267,6 +317,21 @@ def try_handle_issue_watch(
     ):
         return True
     if _should_skip_noise(raw):
+        return True
+
+    dedupe_key = _issue_watch_dedupe_key(
+        cid,
+        (sender_open_id or "").strip(),
+        message_id,
+        message_create_time,
+        raw,
+    )
+    if not _try_consume_issue_watch_dedupe(dedupe_key):
+        log.info(
+            "issue_watch: skipped duplicate Lark delivery chat_id=%s text_head=%r",
+            cid,
+            raw[:80],
+        )
         return True
 
     recipients = _dm_recipients()
@@ -340,11 +405,14 @@ def try_handle_issue_watch(
         )
         return True
 
-    alert_kind = "widespread" if widespread else "category"
-    cd_key = _cooldown_key(cid, alert_kind, fingerprint)
+    cd_key = _cooldown_key_for_issue(cid, categories, raw, fingerprint)
     with _STORE_LOCK:
         if _cooldown_active(cd_key):
-            log.info("issue_watch: cooldown active key=%s", cd_key)
+            log.info(
+                "issue_watch: cooldown active (same issue recently) chat_id=%s key=%s",
+                cid,
+                cd_key[:80],
+            )
             return True
         _set_cooldown(cd_key, cooldown_min)
 
