@@ -1383,18 +1383,18 @@ def build_p0_graph_screenshot_url_for_range(range_key: str) -> str:
 def get_p0_graph_screenshot_auto_range_keys() -> List[str]:
     """
     Ranges posted automatically on P0 start and on each interval repeat.
-    Default ``6h,3h``. ``1h`` and ``30m`` are on-demand only unless added here.
+    Default ``6h`` only. ``3h``, ``1h``, and ``30m`` are on-demand only unless added here.
 
-    Env: ``P0_GRAPH_SCREENSHOT_AUTO_RANGES=6h,3h``
+    Env: ``P0_GRAPH_SCREENSHOT_AUTO_RANGES=6h``
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_AUTO_RANGES") or "6h,3h").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_AUTO_RANGES") or "6h").strip()
     out: List[str] = []
     for seg in raw.split(","):
         rk = seg.strip().lower()
         if rk in _GRAFANA_RANGE_FROM_QUERY and rk not in out:
             out.append(rk)
-    return out or ["6h", "3h"]
+    return out or ["6h"]
 
 
 def p0_graph_screenshot_on_demand_enabled() -> bool:

@@ -17,7 +17,7 @@ Run the **same** Playwright capture as the P0 bot. By default saves PNG(s) to di
   python3 scripts/grafana_screenshot_run_once.py --range 1h --post-lark
   python3 scripts/grafana_screenshot_run_once.py --range 30m
 
-  # All P0 auto ranges (default 6h, 3h) — same as declaring P0:
+  # All P0 auto ranges (default 6h only) — same as declaring P0:
   python3 scripts/grafana_screenshot_run_once.py --all-auto-ranges --post-lark
 
   # Optional: watch Chromium on VNC
@@ -132,7 +132,7 @@ def main() -> int:
     ap.add_argument(
         "--all-auto-ranges",
         action="store_true",
-        help="Capture each range in P0_GRAPH_SCREENSHOT_AUTO_RANGES (default 6h,3h).",
+        help="Capture each range in P0_GRAPH_SCREENSHOT_AUTO_RANGES (default 6h only).",
     )
     args = ap.parse_args()
 
