@@ -1740,10 +1740,9 @@ def get_p0_graph_screenshot_goto_wait_until() -> str:
 
 def get_p0_graph_screenshot_caption() -> str:
     """
-    Optional text posted before the image (empty = a default line with capture time only).
+    Text posted before the image. Empty env uses code default ``As of: {captured_at} · Last {range}``.
 
-    Placeholders: ``{label}`` = incident source chat display name; ``{captured_at}`` = date/time when
-    the PNG was taken (default zone Malaysia ``Asia/Kuala_Lumpur``; see ``P0_GRAPH_SCREENSHOT_TIMEZONE``).
+    Placeholders: ``{captured_at}``, ``{range}`` (e.g. ``1 hour``), ``{label}``.
     """
     reload_env_runtime()
     return (os.getenv("P0_GRAPH_SCREENSHOT_CAPTION") or "").strip()
