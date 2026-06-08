@@ -947,10 +947,8 @@ def _band_post_capture_settle_ms() -> int:
     from . import config as _config
 
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
-    if _is_on_demand_capture() and _effective_fast_capture():
-        return min(wait_ms, 800)
     if _effective_fast_capture():
-        return min(wait_ms, 1500)
+        return min(wait_ms, 800)
     if _highlight_band_capture_mode():
         if _effective_fast_capture():
             return min(wait_ms, 2000)
@@ -963,12 +961,10 @@ def _post_nav_settle_ms() -> int:
     from . import config as _config
 
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
-    if _is_on_demand_capture() and _effective_fast_capture():
+    if _effective_fast_capture():
         return min(wait_ms, 1200)
     if not _highlight_band_capture_mode():
         return wait_ms
-    if _effective_fast_capture():
-        return min(wait_ms, 2500)
     return min(wait_ms, 5000)
 
 
@@ -1734,7 +1730,7 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 def _band_panel_wait_timeout_ms() -> int:
     from . import config as _config
 
-    if _is_on_demand_capture():
+    if _is_on_demand_capture() or _effective_fast_capture():
         return _config.get_p0_graph_screenshot_on_demand_band_max_wait_ms()
     cap = _config.get_p0_graph_screenshot_band_max_wait_ms()
     t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
@@ -1895,7 +1891,7 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
 def _band_stable_poll_settings() -> Tuple[int, int]:
     from . import config as _config
 
-    if _is_on_demand_capture() and _effective_fast_capture():
+    if _effective_fast_capture():
         return (
             _config.get_p0_graph_screenshot_on_demand_band_stable_polls(),
             min(_config.get_p0_graph_screenshot_band_stable_poll_ms(), 700),
@@ -2045,17 +2041,17 @@ def _screenshot_viewport_at_band_start(
         _scroll_viewport_to_paint_lazy_panels(page, y)
         band_ms = _band_panel_wait_timeout_ms()
         _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
-        if _is_on_demand_capture() and _effective_fast_capture():
+        if _effective_fast_capture():
             stable_ms = 8_000
         else:
-            stable_ms = 14_000 if _effective_fast_capture() else 22_000
+            stable_ms = 22_000
         _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable_ms)
         if is_lower_band:
-            if _is_on_demand_capture() and _effective_fast_capture():
+            if _effective_fast_capture():
                 bottom_ms = min(band_ms, 12_000)
                 stable2_ms = 6_000
             else:
-                bottom_ms = min(band_ms, 45_000) if not _effective_fast_capture() else min(band_ms, 20_000)
+                bottom_ms = min(band_ms, 45_000)
                 stable2_ms = min(stable_ms, 16_000)
             _wait_for_viewport_bottom_row_ready(
                 page,
@@ -2595,21 +2591,51 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
     If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
     until no **P0** session remains (see ``on_p0_session_ended_for_graph_screenshot``).
     """
-    if (priority or "").strip().upper() != "P0":
-        return
     from . import config as _config
 
+    pri = (priority or "").strip().upper()
+    if pri != "P0":
+        log.debug("p0 graph screenshot: skipped — priority=%s (P0 only)", pri or "?")
+        return
     if not _config.p0_graph_screenshot_enabled():
+        log.info("p0 graph screenshot: skipped — set P0_GRAPH_SCREENSHOT_ENABLED=1")
         return
     chat_id = _config.get_p0_graph_screenshot_target_chat_id()
-    if not _config.get_p0_graph_screenshot_url() or not chat_id:
-        log.debug("p0 graph screenshot: disabled or missing URL/target chat")
+    grafana_url = _config.get_p0_graph_screenshot_url()
+    if not grafana_url or not chat_id:
+        missing = []
+        if not grafana_url:
+            missing.append("P0_GRAPH_SCREENSHOT_URL")
+        if not chat_id:
+            missing.append("P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID")
+        log.warning("p0 graph screenshot: skipped — missing %s", ", ".join(missing))
         return
     tok = (tenant_token or "").strip()
     if not tok:
+        log.warning("p0 graph screenshot: skipped — no tenant token")
         return
 
     label = (source_chat_label or "").strip()
+    ranges = _config.get_p0_graph_screenshot_auto_range_keys()
+    log.info(
+        "p0 graph screenshot: scheduling auto capture ranges=%s target_tail=%s label=%r fast=%s pool=%s",
+        ranges,
+        chat_id[-12:] if len(chat_id) > 12 else chat_id,
+        label[:48],
+        _config.get_p0_graph_screenshot_fast_capture(),
+        _config.get_p0_graph_screenshot_browser_pool_enabled(),
+    )
+    range_labels = [
+        _config.get_p0_graph_screenshot_range_display(rk) for rk in ranges if rk
+    ]
+    range_hint = range_labels[0] if len(range_labels) == 1 else ", ".join(range_labels)
+    from . import lark_client as _lark
+
+    _lark.post_text_to_chat(
+        chat_id,
+        tok,
+        f"📊 Capturing Grafana dashboard (last {range_hint})…",
+    )
 
     def _run() -> None:
         _capture_and_post_ranges_thread_body(tok, chat_id, label)
@@ -2734,16 +2760,16 @@ def post_p0_graph_screenshots_to_chat(
             "p0 graph screenshot: all image parts look blank — skipping image upload "
             "(try P0_GRAPH_SCREENSHOT_SWIFTSHADER=1, HEADED=1 on VNC, or VIEWPORT_ONLY / FULL_PAGE+no split)"
         )
-        if _is_on_demand_capture():
-            _post_capture_failure_to_chat(
-                tok,
-                cid,
-                range_label=range_label,
-                reason="Images were blank — try `P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR` + login profile.",
-            )
+        _post_capture_failure_to_chat(
+            tok,
+            cid,
+            range_label=range_label,
+            reason="Images were blank — try `P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR` + login profile.",
+        )
         return
     pngs = pngs_eff
 
+    posted_any = False
     for idx, png in enumerate(pngs):
         fname = "p0-dashboard.png" if len(pngs) == 1 else f"p0-dashboard-part{idx + 1}.png"
         key = _lark.upload_image_bytes_for_im_message(tok, png, fname)
@@ -2759,12 +2785,20 @@ def post_p0_graph_screenshots_to_chat(
                 (body or "")[:400],
             )
         else:
+            posted_any = True
             log.info(
                 "p0 graph screenshot: posted image part=%s/%s to chat_id tail=%s",
                 idx + 1,
                 len(pngs),
                 cid[-12:],
             )
+    if not posted_any:
+        _post_capture_failure_to_chat(
+            tok,
+            cid,
+            range_label=range_label,
+            reason="Lark image upload/post failed — check im:resource scope and bot membership in target chat.",
+        )
 
 
 def _post_capture_failure_to_chat(
@@ -2823,14 +2857,14 @@ def _capture_and_post(
             range_label or "default",
             (url or "")[:80],
         )
+        detail = _get_capture_error() or "Capture returned no images (Playwright/Grafana)."
+        _post_capture_failure_to_chat(
+            token,
+            chat_id,
+            range_label=range_label,
+            reason=detail,
+        )
         if _is_on_demand_capture():
-            detail = _get_capture_error() or "Capture returned no images (Playwright/Grafana)."
-            _post_capture_failure_to_chat(
-                token,
-                chat_id,
-                range_label=range_label,
-                reason=detail,
-            )
             from . import config as _cfg_fail
 
             _react_to_trigger_message(token, _cfg_fail.get_p0_graph_screenshot_react_failed_emoji())
@@ -2907,16 +2941,22 @@ def _capture_and_post_ranges_thread_body(
     )
     completed = threading.Event()
     watchdog: Optional[threading.Timer] = None
+    max_sec = (
+        _config.get_p0_graph_screenshot_on_demand_max_sec()
+        if on_demand
+        else _config.get_p0_graph_screenshot_auto_max_sec()
+    )
 
-    def _on_demand_watchdog() -> None:
+    def _capture_watchdog() -> None:
         global _on_demand_timed_out
         if completed.is_set():
             return
         with _on_demand_timed_out_lock:
             _on_demand_timed_out = True
         log.error(
-            "p0 graph screenshot on-demand: wall-clock timeout after %ss chat_id_tail=%s",
-            _config.get_p0_graph_screenshot_on_demand_max_sec(),
+            "p0 graph screenshot: wall-clock timeout after %ss on_demand=%s chat_id_tail=%s",
+            max_sec,
+            on_demand,
             chat_id[-12:] if chat_id else "",
         )
         _post_capture_failure_to_chat(
@@ -2924,19 +2964,16 @@ def _capture_and_post_ranges_thread_body(
             chat_id,
             range_label=(range_keys or [""])[0] if range_keys else "",
             reason=(
-                f"Timed out after {_config.get_p0_graph_screenshot_on_demand_max_sec()}s — "
-                "Grafana/Playwright may be stuck. Check journalctl -u lark-ops-ai."
+                f"Timed out after {max_sec}s — Grafana/Playwright may be stuck. "
+                "Check journalctl -u lark-ops-ai."
             ),
         )
-        _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
+        if on_demand:
+            _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
 
-    if on_demand:
-        watchdog = threading.Timer(
-            float(_config.get_p0_graph_screenshot_on_demand_max_sec()),
-            _on_demand_watchdog,
-        )
-        watchdog.daemon = True
-        watchdog.start()
+    watchdog = threading.Timer(float(max_sec), _capture_watchdog)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
     except Exception as e:
@@ -3069,11 +3106,11 @@ def _load_grafana_dashboard_for_capture(
 
     nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
     goto_wait = _config.get_p0_graph_screenshot_goto_wait_until()
-    if navigate_only and _is_on_demand_capture() and _effective_fast_capture():
+    if navigate_only and _effective_fast_capture():
         goto_wait = "domcontentloaded"
     _preset_grafana_nav_local_storage(page)
     page.goto(dashboard_url, wait_until=goto_wait, timeout=nav_ms)
-    if navigate_only and _is_on_demand_capture() and _effective_fast_capture():
+    if navigate_only and _effective_fast_capture():
         if not _grafana_on_dashboard_page(page):
             if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
                 raise RuntimeError(
@@ -3224,8 +3261,7 @@ def _browser_pool_acquire(
     from . import config as _config
 
     if not (
-        _is_on_demand_capture()
-        and _config.get_p0_graph_screenshot_browser_pool_enabled()
+        _config.get_p0_graph_screenshot_browser_pool_enabled()
         and user_data
         and not _capture_ctx_force_full()
     ):

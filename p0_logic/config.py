@@ -1849,11 +1849,11 @@ def get_p0_graph_screenshot_band_max_wait_ms() -> int:
 
 def get_p0_graph_screenshot_fast_capture() -> bool:
     """
-    ``P0_GRAPH_SCREENSHOT_FAST_CAPTURE=1`` — shorter scroll settles and post-band sleeps;
-    use with ``TOP_AND_BOTTOM=1``. Accuracy still relies on per-band panel waits.
+    ``P0_GRAPH_SCREENSHOT_FAST_CAPTURE=1`` (default) — shorter scroll settles and post-band sleeps;
+    use with ``TOP_AND_BOTTOM=1``. Set ``0`` for slower, stricter panel waits.
     """
     reload_env_runtime()
-    v = (os.getenv("P0_GRAPH_SCREENSHOT_FAST_CAPTURE") or "0").strip().lower()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_FAST_CAPTURE") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
@@ -1869,13 +1869,17 @@ def get_p0_graph_screenshot_on_demand_fast() -> bool:
 
 def get_p0_graph_screenshot_browser_pool_enabled() -> bool:
     """
-    Keep Chromium open between on-demand captures (~30–60s faster). Default **off** until
-    ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR`` has a logged-in Grafana session.
-    Set ``P0_GRAPH_SCREENSHOT_BROWSER_POOL=1`` after ``grafana_playwright_login_once.py``.
+    Keep Chromium open between captures (~30–60s faster on P0 declare and on-demand).
+    Default **on** when ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR`` is set; else off.
+    Force off: ``P0_GRAPH_SCREENSHOT_BROWSER_POOL=0``.
     """
     reload_env_runtime()
-    v = (os.getenv("P0_GRAPH_SCREENSHOT_BROWSER_POOL") or "0").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BROWSER_POOL") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return bool(get_p0_graph_screenshot_playwright_user_data_dir())
 
 
 def get_p0_graph_screenshot_on_demand_band_max_wait_ms() -> int:
@@ -1901,7 +1905,7 @@ def get_p0_graph_screenshot_on_demand_band_stable_polls() -> int:
 
 
 def get_p0_graph_screenshot_on_demand_max_sec() -> int:
-    """Wall-clock cap for one on-demand capture; posts failure DM if exceeded. Default **360** (6 min)."""
+    """Wall-clock cap for one on-demand capture; posts failure notice if exceeded. Default **360** (6 min)."""
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_MAX_SEC") or "360").strip()
     try:
@@ -1909,6 +1913,17 @@ def get_p0_graph_screenshot_on_demand_max_sec() -> int:
     except ValueError:
         n = 360
     return max(120, min(n, 900))
+
+
+def get_p0_graph_screenshot_auto_max_sec() -> int:
+    """Wall-clock cap for auto P0-start / interval capture; posts failure notice if exceeded. Default **600** (10 min)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_AUTO_MAX_SEC") or "600").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 600
+    return max(180, min(n, 1200))
 
 
 def get_p0_graph_screenshot_band_panel_ready_ratio() -> float:
