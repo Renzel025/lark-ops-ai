@@ -66,7 +66,10 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
     ),
     (
         re.compile(
-            r"(?is)\b(?:cannot|can't|unable\s+to)\s+login\b|"
+            r"(?is)"
+            r"\b(?:cannot|can't|unable\s+to)\s+login\b|"
+            r"\bplayers?\b.{0,100}(?:cannot|can't|unable\s+to)\s+login\b|"
+            r"\blogin\b.{0,80}\b(?:on\s+)?(?:cp\s+)?(?:website|site)\b|"
             r"\blogin\s+(?:fail|error|issue|problem|broken)\b|"
             r"\botp\b.{0,40}\b(?:fail|not\s+received|invalid|error)\b|"
             r"无法登录|登录失败|验证码"
@@ -74,7 +77,7 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
         ["login_issues"],
         "login_failure",
         0.9,
-        "Login or OTP validation issue reported",
+        "Players cannot login on CP website",
     ),
     (
         re.compile(r"(?is)\b(?:cannot|can't|unable\s+to)\s+register\b|注册失败|无法注册"),
@@ -214,16 +217,49 @@ def _parse_classification(raw: str, provider: str) -> Optional[dict]:
     }
 
 
+def extract_player_ids(text: str) -> List[str]:
+    """Sorted unique 10-digit IDs (common player id format in detection chat)."""
+    return sorted(set(re.findall(r"\b\d{10}\b", (text or "").strip())))
+
+
 def _extract_player_mentions(text: str) -> int:
-    """``4 players`` in prose, or count of 10-digit player IDs in the message."""
+    """``4 players`` in prose, ID list count, or plural ``players`` without a number."""
     t = (text or "").strip()
+    ids = extract_player_ids(t)
+    if ids:
+        return len(ids)
     m = re.search(r"(?is)\b(\d+)\s+players?\b", t)
     if m:
         try:
             return max(0, int(m.group(1)))
         except ValueError:
             pass
-    return len(set(re.findall(r"\b\d{10}\b", t)))
+    if re.search(r"(?is)\bplayers\b", t):
+        return 1
+    if re.search(r"(?is)\bplayer\b", t):
+        return 1
+    return 0
+
+
+def _summary_with_players(
+    base_summary: str,
+    categories: List[str],
+    players: int,
+    text: str,
+) -> str:
+    if players >= 1:
+        if "login_issues" in categories:
+            if players == 1:
+                return "1 player cannot login on CP website"
+            return f"{players} players cannot login on CP website"
+        if "withdrawal_issues" in categories:
+            if players == 1:
+                return "1 player cannot withdraw"
+            return f"{players} players cannot withdraw"
+        return f"{base_summary} ({players} player(s))"
+    if re.search(r"(?is)\bplayers\b", text) and "login_issues" in categories:
+        return "Players cannot login on CP website"
+    return base_summary
 
 
 def _keyword_classify(message_text: str) -> Optional[dict]:
@@ -234,13 +270,12 @@ def _keyword_classify(message_text: str) -> Optional[dict]:
         if not pattern.search(t):
             continue
         players = _extract_player_mentions(t)
+        player_ids = extract_player_ids(t)
         cats = list(categories)
         if players >= 4 and "widespread_impact" not in cats:
             cats.append("widespread_impact")
-        summ = summary
-        if players >= 4:
-            summ = f"{summary} ({players} players mentioned)"
-        return {
+        summ = _summary_with_players(summary, cats, players, t)
+        out = {
             "is_incident_signal": True,
             "categories": cats,
             "confidence": confidence,
@@ -250,6 +285,9 @@ def _keyword_classify(message_text: str) -> Optional[dict]:
             "reason": "keyword rule match",
             "provider": "keyword",
         }
+        if player_ids:
+            out["player_ids"] = player_ids
+        return out
     return None
 
 

@@ -1489,6 +1489,8 @@ def build_issue_watch_alert_card(
     summary: str,
     concern: str,
     alert_time: str,
+    players_count: int = 0,
+    player_ids_md: str = "",
 ) -> Dict[str, Any]:
     """DM card when Claude/keyword detects a player-facing issue in a detection group."""
     title_group = (group_label or "").strip() or "detection group"
@@ -1508,6 +1510,26 @@ def build_issue_watch_alert_card(
             {
                 "tag": "div",
                 "text": {"tag": "lark_md", "content": f"**Summary:** {(summary or '').strip()}"},
+            }
+        )
+    if int(players_count or 0) > 0:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**Players affected:** {int(players_count)}",
+                },
+            }
+        )
+    if (player_ids_md or "").strip():
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**Player IDs:**\n{(player_ids_md or '').strip()}",
+                },
             }
         )
     elements.extend(

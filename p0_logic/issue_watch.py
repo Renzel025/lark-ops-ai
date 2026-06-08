@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
-from .issue_watch_ai import classify_issue_watch_message
+from .issue_watch_ai import classify_issue_watch_message, extract_player_ids
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -42,8 +42,21 @@ def _format_alert_time() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+def _is_player_id_list_message(text: str) -> bool:
+    """Follow-up bubble that is mostly 10-digit player IDs."""
+    t = (text or "").strip()
+    ids = extract_player_ids(t)
+    if len(ids) < 1:
+        return False
+    remainder = re.sub(r"\b\d{10}\b", " ", t)
+    remainder = re.sub(r"[\s,;]+", "", remainder)
+    return len(remainder) < 12
+
+
 def _should_skip_noise(text: str) -> bool:
     t = (text or "").strip()
+    if _is_player_id_list_message(t):
+        return False
     if len(t) < _config.get_p0_issue_watch_min_text_len():
         return True
     low = t.lower()
@@ -52,6 +65,94 @@ def _should_skip_noise(text: str) -> bool:
     if re.fullmatch(r"[\d\s,.:;!?+\-*/=]+", t):
         return True
     return False
+
+
+def _find_recent_report(chat_id: str, sender_open_id: str, *, within_sec: float = 600) -> Optional[Dict[str, object]]:
+    cutoff = _now_ts() - within_sec
+    found: Optional[Dict[str, object]] = None
+    for r in reversed(_REPORTS):
+        if str(r.get("chat_id") or "") != chat_id:
+            continue
+        if str(r.get("sender_open_id") or "") != sender_open_id:
+            continue
+        if float(r.get("ts") or 0) < cutoff:
+            continue
+        found = r
+        break
+    return found
+
+
+def _format_player_ids_md(ids: List[str], limit: int = 12) -> str:
+    if not ids:
+        return ""
+    show = ids[:limit]
+    lines = "\n".join(f"• `{pid}`" for pid in show)
+    if len(ids) > limit:
+        lines += f"\n• …and {len(ids) - limit} more"
+    return lines
+
+
+def _try_player_id_followup(
+    raw: str,
+    chat_id: str,
+    sender_open_id: str,
+    tenant_token: str,
+    *,
+    source_chat_name: str = "",
+) -> bool:
+    """Second message with player IDs — attach to recent issue from same sender."""
+    if not _is_player_id_list_message(raw):
+        return False
+    ids = extract_player_ids(raw)
+    if not ids:
+        return False
+    with _STORE_LOCK:
+        recent = _find_recent_report(chat_id, sender_open_id)
+    if not recent:
+        log.info("issue_watch: player IDs without recent issue context chat_id=%s", chat_id)
+        return True
+
+    player_count = len(ids)
+    categories = list(recent.get("categories") or [])
+    summary = str(recent.get("summary") or "").strip()
+    concern = str(recent.get("concern_text") or recent.get("summary") or "").strip()
+    if "login_issues" in categories:
+        summary = (
+            f"{player_count} players cannot login on CP website"
+            if player_count != 1
+            else "1 player cannot login on CP website"
+        )
+    elif player_count >= 1 and "player" not in summary.lower():
+        summary = f"{summary} ({player_count} player(s))"
+
+    with _STORE_LOCK:
+        recent["player_ids"] = ids
+        recent["players_count"] = player_count
+
+    cd_key = _cooldown_key(chat_id, "player_ids", str(recent.get("fingerprint") or "generic"))
+    with _STORE_LOCK:
+        if _cooldown_active(cd_key):
+            log.info("issue_watch: player ID follow-up cooldown key=%s", cd_key)
+            return True
+        _set_cooldown(cd_key, max(5, _config.get_p0_issue_watch_cooldown_min() // 2))
+
+    alert_card = _cards.build_issue_watch_alert_card(
+        group_label=(source_chat_name or "").strip() or chat_id,
+        categories_md=_format_categories(categories),
+        summary=summary,
+        concern=_quote_excerpt(concern),
+        alert_time=_format_alert_time(),
+        players_count=player_count,
+        player_ids_md=_format_player_ids_md(ids),
+    )
+    n = _send_dm_alerts(tenant_token, alert_card)
+    log.info(
+        "issue_watch: player ID follow-up sent=%s chat_id=%s count=%s",
+        n,
+        chat_id,
+        player_count,
+    )
+    return True
 
 
 def _prune_store(window_sec: float) -> None:
@@ -155,7 +256,17 @@ def try_handle_issue_watch(
     if not cid:
         return False
     raw = (text or "").strip()
-    if not raw or _should_skip_noise(raw):
+    if not raw:
+        return True
+    if _try_player_id_followup(
+        raw,
+        cid,
+        (sender_open_id or "").strip(),
+        tenant_token,
+        source_chat_name=source_chat_name,
+    ):
+        return True
+    if _should_skip_noise(raw):
         return True
 
     recipients = _dm_recipients()
@@ -190,6 +301,7 @@ def try_handle_issue_watch(
 
     with _STORE_LOCK:
         _prune_store(window_sec)
+        player_ids = list(result.get("player_ids") or extract_player_ids(raw))
         _REPORTS.append(
             {
                 "chat_id": cid,
@@ -197,7 +309,10 @@ def try_handle_issue_watch(
                 "sender_open_id": sender,
                 "ts": _now_ts(),
                 "summary": result.get("summary") or "",
+                "concern_text": raw,
                 "categories": list(result.get("categories") or []),
+                "player_ids": player_ids,
+                "players_count": max(int(result.get("players_mentioned_in_message") or 0), len(player_ids)),
             }
         )
         reporter_count = _count_unique_reporters(cid, fingerprint, window_sec)
@@ -233,12 +348,16 @@ def try_handle_issue_watch(
             return True
         _set_cooldown(cd_key, cooldown_min)
 
+    player_ids = list(result.get("player_ids") or extract_player_ids(raw))
+    players_count = max(players_mentioned, len(player_ids))
     alert_card = _cards.build_issue_watch_alert_card(
         group_label=(source_chat_name or "").strip() or cid,
         categories_md=_format_categories(categories),
         summary=str(result.get("summary") or ""),
         concern=_quote_excerpt(raw),
         alert_time=_format_alert_time(),
+        players_count=players_count,
+        player_ids_md=_format_player_ids_md(player_ids),
     )
     n = _send_dm_alerts(tenant_token, alert_card)
     log.info(
