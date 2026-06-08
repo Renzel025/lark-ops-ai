@@ -200,6 +200,18 @@ def parse_graph_screenshot_on_demand_range(text: str) -> Optional[str]:
     return parse_time_range_key(raw)
 
 
+def _estimate_on_demand_wait_label() -> str:
+    """Human ETA for the bot reply (warm pool + fast mode ≈ 45–90s)."""
+    if not _config.get_p0_graph_screenshot_on_demand_fast():
+        return "2–3 min"
+    if (
+        _config.get_p0_graph_screenshot_browser_pool_enabled()
+        and _config.get_p0_graph_screenshot_playwright_user_data_dir()
+    ):
+        return "45–90 sec"
+    return "1–2 min"
+
+
 def _post_on_demand_reply(chat_id: str, token: str, text: str) -> None:
     cid = (chat_id or "").strip()
     tok = (token or "").strip()
@@ -318,9 +330,19 @@ def try_handle_graph_screenshot_request(
     _post_on_demand_reply(
         cid,
         tok,
-        f"📊 On it — capturing Grafana dashboard (last **{range_disp}**). Please wait ~2–5 min…",
+        f"📊 On it — capturing Grafana dashboard (last **{range_disp}**). "
+        f"Please wait ~{_estimate_on_demand_wait_label()}…",
     )
-    schedule_on_demand_graph_screenshot(tok, cid, range_key, label, post_chat_id=cid)
+    try:
+        schedule_on_demand_graph_screenshot(tok, cid, range_key, label)
+    except Exception as e:
+        log.warning("graph screenshot on-demand: schedule failed: %s", e, exc_info=True)
+        _post_on_demand_reply(
+            cid,
+            tok,
+            f"📊 Could not start Grafana capture ({e}). Check `journalctl -u lark-ops-ai`.",
+        )
+        return True
     log.info(
         "graph screenshot on-demand: queued range=%s chat_id_tail=%s",
         range_key,

@@ -1858,6 +1858,38 @@ def get_p0_graph_screenshot_fast_capture() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_on_demand_fast() -> bool:
+    """
+    On-demand chat requests (``please give 30 mins``) use shorter waits. Default **on**.
+    ``P0_GRAPH_SCREENSHOT_ON_DEMAND_FAST=0`` to use full P0-quality timing.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_FAST") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_browser_pool_enabled() -> bool:
+    """
+    Keep Chromium open between on-demand captures (~30–60s faster). Default **on**.
+    Requires ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR`` (logged-in Grafana session).
+    ``P0_GRAPH_SCREENSHOT_BROWSER_POOL=0`` to cold-start every capture.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_BROWSER_POOL") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_on_demand_band_max_wait_ms() -> int:
+    """Per-band panel wait cap for on-demand fast mode. Default **10000** (10s)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_MAX_WAIT_MS") or "10000").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 10_000
+    return max(3000, min(n, 30_000))
+
+
 def get_p0_group_overview_edit_enabled() -> bool:
     """
     When True, group overview cards get an **Edit overview** button; Save in DM PATCHes that group message.

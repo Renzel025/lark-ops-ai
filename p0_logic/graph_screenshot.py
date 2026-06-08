@@ -46,9 +46,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Playwright: imported inside ``_capture_png_payloads`` only, so this module loads even when
@@ -66,6 +67,31 @@ _interval_timer: Optional[threading.Timer] = None
 _interval_source_label: str = ""
 _capture_busy_lock = threading.Lock()
 _capture_busy = False
+_capture_ctx = threading.local()
+
+# Reuse Chromium between on-demand captures (avoids ~20–40s cold launch each time).
+_BROWSER_POOL_LOCK = threading.Lock()
+_BROWSER_POOL: Dict[str, Any] = {}
+
+
+def _capture_ctx_set(*, on_demand: bool = False) -> None:
+    _capture_ctx.on_demand = on_demand
+
+
+def _capture_ctx_clear() -> None:
+    _capture_ctx.on_demand = False
+
+
+def _is_on_demand_capture() -> bool:
+    return bool(getattr(_capture_ctx, "on_demand", False))
+
+
+def _effective_fast_capture() -> bool:
+    from . import config as _config
+
+    if _is_on_demand_capture():
+        return _config.get_p0_graph_screenshot_on_demand_fast()
+    return _config.get_p0_graph_screenshot_fast_capture()
 
 
 def _has_active_p0_session() -> bool:
@@ -858,9 +884,7 @@ def _highlight_band_capture_mode() -> bool:
 
 
 def _band_scroll_settle_ms() -> int:
-    from . import config as _config
-
-    return 350 if _config.get_p0_graph_screenshot_fast_capture() else 550
+    return 200 if _effective_fast_capture() else 550
 
 
 def _band_post_capture_settle_ms() -> int:
@@ -868,7 +892,9 @@ def _band_post_capture_settle_ms() -> int:
     from . import config as _config
 
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
-    if _config.get_p0_graph_screenshot_fast_capture():
+    if _is_on_demand_capture() and _effective_fast_capture():
+        return min(wait_ms, 800)
+    if _effective_fast_capture():
         return min(wait_ms, 1500)
     if _highlight_band_capture_mode():
         return min(wait_ms, 3000)
@@ -880,9 +906,11 @@ def _post_nav_settle_ms() -> int:
     from . import config as _config
 
     wait_ms = _config.get_p0_graph_screenshot_wait_ms()
+    if _is_on_demand_capture() and _effective_fast_capture():
+        return min(wait_ms, 1200)
     if not _highlight_band_capture_mode():
         return wait_ms
-    if _config.get_p0_graph_screenshot_fast_capture():
+    if _effective_fast_capture():
         return min(wait_ms, 2500)
     return min(wait_ms, 5000)
 
@@ -1649,6 +1677,8 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 def _band_panel_wait_timeout_ms() -> int:
     from . import config as _config
 
+    if _is_on_demand_capture() and _effective_fast_capture():
+        return _config.get_p0_graph_screenshot_on_demand_band_max_wait_ms()
     cap = _config.get_p0_graph_screenshot_band_max_wait_ms()
     t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
     if t > 0:
@@ -1794,7 +1824,9 @@ def _warm_band_lazy_panels(page, doc_clip: Dict[str, int]) -> None:
         h = int(doc_clip.get("height") or 0)
         vh = _config.get_p0_graph_screenshot_viewport_height()
         end_y = max(y, y + h - vh)
-        warm_ms = 380 if _config.get_p0_graph_screenshot_fast_capture() else 520
+        if _is_on_demand_capture() and _effective_fast_capture():
+            return
+        warm_ms = 280 if _effective_fast_capture() else 520
         for sy in (y, end_y, y):
             page.evaluate("(s) => window.scrollTo(0, Math.max(0, s))", sy)
             page.wait_for_timeout(warm_ms)
@@ -1858,7 +1890,9 @@ def _screenshot_viewport_at_band_start(
         band_ms = _band_panel_wait_timeout_ms()
         _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
         if is_lower_band:
-            bottom_cap = 12_000 if _config.get_p0_graph_screenshot_fast_capture() else 18_000
+            bottom_cap = 5000 if (_is_on_demand_capture() and _effective_fast_capture()) else (
+                12_000 if _effective_fast_capture() else 18_000
+            )
             _wait_for_viewport_bottom_row_ready(
                 page,
                 {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
@@ -2297,7 +2331,7 @@ def schedule_on_demand_graph_screenshot(
     label = (source_chat_label or "").strip()
 
     def _run() -> None:
-        _capture_and_post_ranges_thread_body(tok, cid, label, [rk])
+        _capture_and_post_ranges_thread_body(tok, cid, label, [rk], on_demand=True)
 
     threading.Thread(
         target=_run,
@@ -2453,6 +2487,13 @@ def post_p0_graph_screenshots_to_chat(
             "p0 graph screenshot: all image parts look blank — skipping image upload "
             "(try P0_GRAPH_SCREENSHOT_SWIFTSHADER=1, HEADED=1 on VNC, or VIEWPORT_ONLY / FULL_PAGE+no split)"
         )
+        if _is_on_demand_capture():
+            _post_capture_failure_to_chat(
+                tok,
+                cid,
+                range_label=range_label,
+                reason="Images were blank — try `P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR` + login profile.",
+            )
         return
     pngs = pngs_eff
 
@@ -2479,6 +2520,39 @@ def post_p0_graph_screenshots_to_chat(
             )
 
 
+def _post_capture_failure_to_chat(
+    token: str,
+    chat_id: str,
+    *,
+    range_label: str = "",
+    reason: str = "",
+) -> None:
+    from . import lark_client as _lark
+
+    cid = (chat_id or "").strip()
+    tok = (token or "").strip()
+    if not cid or not tok:
+        return
+    rk = (range_label or "").strip()
+    detail = (reason or "").strip()
+    msg = "📊 Grafana screenshot failed"
+    if rk:
+        from . import config as _config
+
+        msg += f" (last {_config.get_p0_graph_screenshot_range_display(rk)})"
+    msg += "."
+    if detail:
+        msg += f" {detail}"
+    else:
+        msg += (
+            " Check server logs (`journalctl -u lark-ops-ai`) — often Playwright hang, "
+            "Grafana login, or blank capture."
+        )
+    st, _ = _lark.post_text_to_chat(cid, tok, msg)
+    if st != 200:
+        log.warning("p0 graph screenshot: failure notice HTTP=%s", st)
+
+
 def _capture_and_post(
     token: str,
     url: str,
@@ -2486,7 +2560,7 @@ def _capture_and_post(
     source_label: str,
     *,
     range_label: str = "",
-) -> None:
+) -> bool:
     pngs, captured_at = _capture_png_payloads(url)
     if not pngs:
         log.warning(
@@ -2494,10 +2568,18 @@ def _capture_and_post(
             range_label or "default",
             (url or "")[:80],
         )
-        return
+        if _is_on_demand_capture():
+            _post_capture_failure_to_chat(
+                token,
+                chat_id,
+                range_label=range_label,
+                reason="Capture returned no images (Playwright/Grafana).",
+            )
+        return False
     post_p0_graph_screenshots_to_chat(
         token, chat_id, pngs, captured_at, source_label, range_label=range_label
     )
+    return True
 
 
 def _capture_and_post_ranges(
@@ -2532,15 +2614,19 @@ def _capture_and_post_ranges_thread_body(
     chat_id: str,
     source_label: str,
     range_keys: Optional[List[str]] = None,
+    *,
+    on_demand: bool = False,
 ) -> None:
     global _capture_busy
     with _capture_busy_lock:
         _capture_busy = True
+    _capture_ctx_set(on_demand=on_demand)
     try:
         _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
     except Exception as e:
         log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
     finally:
+        _capture_ctx_clear()
         with _capture_busy_lock:
             _capture_busy = False
 
@@ -2642,15 +2728,34 @@ def _wait_for_grafana_chart_content_if_configured(page) -> None:
             pass
 
 
-def _load_grafana_dashboard_for_capture(page, dashboard_url: str) -> None:
+def _load_grafana_dashboard_for_capture(
+    page,
+    dashboard_url: str,
+    *,
+    navigate_only: bool = False,
+) -> None:
     """Goto dashboard, login if configured, wait for panels, apply kiosk/zoom (same as capture)."""
     from . import config as _config
 
     nav_ms = _config.get_p0_graph_screenshot_nav_timeout_ms()
     goto_wait = _config.get_p0_graph_screenshot_goto_wait_until()
-    wait_ms = _config.get_p0_graph_screenshot_wait_ms()
+    if navigate_only and _is_on_demand_capture() and _effective_fast_capture():
+        goto_wait = "domcontentloaded"
     _preset_grafana_nav_local_storage(page)
     page.goto(dashboard_url, wait_until=goto_wait, timeout=nav_ms)
+    if navigate_only and _is_on_demand_capture() and _effective_fast_capture():
+        if not _grafana_on_dashboard_page(page):
+            if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
+                raise RuntimeError("Grafana login failed on pooled navigate")
+        try:
+            page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        settle = _post_nav_settle_ms()
+        if settle > 0:
+            page.wait_for_timeout(settle)
+        _prepare_grafana_dashboard_for_capture(page, dashboard_url)
+        return
     if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
         raise RuntimeError(
             "Grafana login failed — login form still visible. "
@@ -2744,6 +2849,96 @@ def open_grafana_dashboard_for_inspection() -> int:
             finally:
                 browser.close()
     return 0
+
+
+def _browser_pool_ttl_sec() -> int:
+    return 300
+
+
+def _browser_pool_shutdown_state(st: Dict[str, Any]) -> None:
+    try:
+        ctx = st.get("context")
+        if ctx:
+            ctx.close()
+    except Exception as e:
+        log.debug("p0 graph screenshot pool: context close: %s", e)
+    try:
+        pw = st.get("pw")
+        if pw:
+            pw.stop()
+    except Exception as e:
+        log.debug("p0 graph screenshot pool: playwright stop: %s", e)
+
+
+def _browser_pool_close() -> None:
+    with _BROWSER_POOL_LOCK:
+        st = dict(_BROWSER_POOL)
+        _BROWSER_POOL.clear()
+    _browser_pool_shutdown_state(st)
+
+
+def _browser_pool_acquire(
+    *,
+    user_data: str,
+    w: int,
+    h: int,
+    dsf: float,
+    launch_args: List[str],
+    headless: bool,
+) -> Optional[Tuple[Any, Any, Any, bool]]:
+    """Return ``(playwright, context, page, reused)`` from warm pool, or ``None`` to cold-start."""
+    from . import config as _config
+
+    if not (
+        _is_on_demand_capture()
+        and _config.get_p0_graph_screenshot_browser_pool_enabled()
+        and user_data
+    ):
+        return None
+    now = time.time()
+    with _BROWSER_POOL_LOCK:
+        last = float(_BROWSER_POOL.get("last") or 0)
+        if _BROWSER_POOL.get("context") and now - last > _browser_pool_ttl_sec():
+            log.info("p0 graph screenshot pool: idle TTL expired — restarting browser")
+            st_old = dict(_BROWSER_POOL)
+            _BROWSER_POOL.clear()
+            _browser_pool_shutdown_state(st_old)
+        if _BROWSER_POOL.get("page") and _BROWSER_POOL.get("context"):
+            _BROWSER_POOL["last"] = now
+            log.info("p0 graph screenshot pool: reusing warm Chromium (skip cold launch)")
+            return (
+                _BROWSER_POOL.get("pw"),
+                _BROWSER_POOL.get("context"),
+                _BROWSER_POOL.get("page"),
+                True,
+            )
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    try:
+        pw = sync_playwright().start()
+        context = pw.chromium.launch_persistent_context(
+            user_data,
+            headless=headless,
+            viewport={"width": w, "height": h},
+            device_scale_factor=dsf,
+            args=launch_args,
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+        with _BROWSER_POOL_LOCK:
+            _BROWSER_POOL.update(pw=pw, context=context, page=page, last=time.time())
+        log.info("p0 graph screenshot pool: started warm Chromium at %s", user_data)
+        return pw, context, page, False
+    except Exception as e:
+        log.warning("p0 graph screenshot pool: start failed — cold capture fallback: %s", e)
+        return None
+
+
+def _browser_pool_touch() -> None:
+    with _BROWSER_POOL_LOCK:
+        if _BROWSER_POOL.get("context"):
+            _BROWSER_POOL["last"] = time.time()
 
 
 def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
@@ -3012,6 +3207,42 @@ def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes
             zoom_pct,
             dsf,
         )
+    pooled = _browser_pool_acquire(
+        user_data=user_data,
+        w=w,
+        h=h,
+        dsf=dsf,
+        launch_args=launch_args,
+        headless=headless,
+    )
+    if pooled:
+        _pw, _ctx, page, reused = pooled
+        log.info(
+            "p0 graph screenshot: pooled capture viewport=%sx%s reused=%s on_demand_fast=%s",
+            w,
+            h,
+            reused,
+            _is_on_demand_capture() and _effective_fast_capture(),
+        )
+        try:
+            _load_grafana_dashboard_for_capture(page, url, navigate_only=reused)
+        except RuntimeError as e:
+            log.error("p0 graph screenshot: %s", e)
+            _browser_pool_close()
+            return [], ""
+        except Exception as e:
+            log.warning("p0 graph screenshot: pooled navigate failed — reset pool: %s", e)
+            _browser_pool_close()
+            return [], ""
+        try:
+            out = _snap_with_blank_viewport_fallback(page)
+            _browser_pool_touch()
+            return out
+        except Exception as e:
+            log.warning("p0 graph screenshot: pooled snap failed — reset pool: %s", e)
+            _browser_pool_close()
+            return [], ""
+
     with sync_playwright() as p:
         if user_data:
             log.info(
