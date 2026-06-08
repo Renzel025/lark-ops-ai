@@ -43,10 +43,14 @@ _ISSUE_WATCH_SYSTEM = (
     "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
     "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
     "- Staff asking the team to investigate a website/login/deposit/withdrawal/backend/game issue = TRUE (high confidence).\n"
-    "- ``players can't deposit``, ``deposit failed``, ``top up not working``, ``充值失败`` = deposit_issues.\n"
+    "- ``players can't deposit``, ``cant proceed to deposit``, ``deposit on cp website``, ``充值失败`` = deposit_issues (NOT login_issues).\n"
+    "- If message mentions **deposit** / top-up / 充值, use deposit_issues even when **cp website** appears.\n"
     "- issue_fingerprint: stable key (login_otp_failure, website_loading_cp, fpms_backend_down).\n"
     "- Multilingual input (English, Chinese, Tagalog) — classify by meaning.\n"
 )
+
+# Chat often uses ``cant`` without an apostrophe; ``proceed to deposit`` is common OM phrasing.
+_NEGATED = r"(?:cannot|can't|cant|unable\s+to)"
 
 _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] = (
     (
@@ -68,8 +72,26 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
     (
         re.compile(
             r"(?is)"
-            r"\b(?:cannot|can't|unable\s+to)\s+login\b|"
-            r"\bplayers?\b.{0,100}(?:cannot|can't|unable\s+to)\s+login\b|"
+            rf"\b{_NEGATED}\s+(?:proceed\s+to\s+)?deposit\b|"
+            rf"\bplayers?\b.{{0,140}}{_NEGATED}\s+(?:proceed\s+to\s+)?deposit\b|"
+            rf"\bproceed\s+to\s+deposit\b|"
+            rf"\bdeposit\b.{{0,100}}\b(?:on\s+)?(?:cp\s+)?(?:website|site)\b|"
+            rf"\bdeposit\b.{{0,80}}\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|cant|"
+            r"not\s+working|unavailable|stuck|pending|rejected|declined)\b|"
+            rf"\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|cant|not\s+working)\b.{{0,80}}\bdeposit\b|"
+            r"\b(?:top\s*up|topup|recharge|add\s+funds?)\b.{0,80}\b(?:fail|error|issue|cannot|can't|cant|not\s+working|problem)\b|"
+            r"存款失败|无法存款|不能存款|充值失败|无法充值|充值不了|存款问题"
+        ),
+        ["deposit_issues"],
+        "deposit_failure",
+        0.93,
+        "Players cannot deposit on CP website",
+    ),
+    (
+        re.compile(
+            r"(?is)"
+            rf"\b{_NEGATED}\s+login\b|"
+            rf"\bplayers?\b.{{0,140}}{_NEGATED}\s+login\b|"
             r"\blogin\b.{0,80}\b(?:on\s+)?(?:cp\s+)?(?:website|site)\b|"
             r"\blogin\s+(?:fail|error|issue|problem|broken)\b|"
             r"\botp\b.{0,40}\b(?:fail|not\s+received|invalid|error)\b|"
@@ -90,31 +112,16 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
     (
         re.compile(
             r"(?is)"
-            r"\b(?:cannot|can't|unable\s+to)\s+withdraw\b|"
-            r"\bwithdraw(?:al)?\b.{0,60}\b(?:fail|error|issue|cannot|can't|balance|fund|money|problem)\b|"
-            r"\b(\d+)\s+players?\b.{0,120}(?:cannot|can't|unable\s+to)\s+withdraw|"
+            rf"\b{_NEGATED}\s+withdraw\b|"
+            rf"\bplayers?\b.{{0,140}}{_NEGATED}\s+withdraw\b|"
+            r"\bwithdraw(?:al)?\b.{0,60}\b(?:fail|error|issue|cannot|can't|cant|balance|fund|money|problem)\b|"
+            rf"\b(\d+)\s+players?\b.{{0,120}}{_NEGATED}\s+withdraw|"
             r"提款失败|无法提款|不能提款|无法提现"
         ),
         ["withdrawal_issues"],
         "withdrawal_failure",
         0.93,
         "Withdrawal issue reported",
-    ),
-    (
-        re.compile(
-            r"(?is)"
-            r"\b(?:cannot|can't|unable\s+to)\s+deposit\b|"
-            r"\bplayers?\b.{0,100}(?:cannot|can't|unable\s+to)\s+deposit\b|"
-            r"\bdeposit\b.{0,80}\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|"
-            r"not\s+working|unavailable|stuck|pending|rejected|declined)\b|"
-            r"\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|not\s+working)\b.{0,80}\bdeposit\b|"
-            r"\b(?:top\s*up|topup|recharge|add\s+funds?)\b.{0,80}\b(?:fail|error|issue|cannot|can't|not\s+working|problem)\b|"
-            r"存款失败|无法存款|不能存款|充值失败|无法充值|充值不了|存款问题"
-        ),
-        ["deposit_issues"],
-        "deposit_failure",
-        0.92,
-        "Deposit issue reported",
     ),
     (
         re.compile(r"(?is)\b(?:fpms|pms)\b.{0,50}\b(?:down|unreachable|cannot|can't|not\s+working|offline)\b|后台.{0,20}(?:挂|不可用|进不去)"),
@@ -278,6 +285,8 @@ def _summary_with_players(
                 return "1 player cannot deposit"
             return f"{players} players cannot deposit"
         return f"{base_summary} ({players} player(s))"
+    if re.search(r"(?is)\bplayers\b", text) and "deposit_issues" in categories:
+        return "Players cannot deposit on CP website"
     if re.search(r"(?is)\bplayers\b", text) and "login_issues" in categories:
         return "Players cannot login on CP website"
     return base_summary

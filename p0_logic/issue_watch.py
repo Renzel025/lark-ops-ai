@@ -290,7 +290,13 @@ def _try_player_id_followup(
     categories = list(recent.get("categories") or [])
     summary = str(recent.get("summary") or "").strip()
     concern = str(recent.get("concern_text") or recent.get("summary") or "").strip()
-    if "login_issues" in categories:
+    if "deposit_issues" in categories:
+        summary = (
+            f"{player_count} players cannot deposit on CP website"
+            if player_count != 1
+            else "1 player cannot deposit on CP website"
+        )
+    elif "login_issues" in categories:
         summary = (
             f"{player_count} players cannot login on CP website"
             if player_count != 1
