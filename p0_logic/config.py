@@ -1582,8 +1582,8 @@ def get_p0_graph_screenshot_top_and_bottom() -> bool:
 def get_p0_graph_screenshot_include_login_panel() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — ``0`` (recommended): **two** PNGs like manual VNC —
-    pic1 = KPI/FPMS block; pic2 = Login strip + CPMS/IGO/Pulsar. ``1``: **three** PNGs with Login
-    as its own 3rd image (between top and CPMS blocks in post order).
+    pic1 = KPI/FPMS block; pic2 = **CPMS/IGO/Pulsar** (starts at CPMS header, includes Pulsar row).
+    ``1``: **three** PNGs with Login as its own 3rd image.
     """
     reload_env_runtime()
     v = (os.getenv("P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL") or "0").strip().lower()

@@ -1426,8 +1426,8 @@ def _scroll_toolbar_and_apisix_into_view(page) -> None:
 def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = True) -> List[Dict[str, int]]:
     """
     Two bands (``include_login_panel=False``, default VNC-style):
-      Band 1 = Apisix/KPI/FPMS (stops before Login With Password).
-      Band 2 = Login With Password + CPMS/IGO/Pulsar (login strip at top of 2nd PNG).
+      Band 1 = Apisix/KPI/FPMS (stops before Login / CPMS).
+      Band 2 = **CPMS/IGO/Pulsar** only (scroll starts at CPMS header — matches manual refs).
     Three bands (``include_login_panel=True``):
       Band 1 = top block; band 2 = CPMS/IGO/Pulsar; band 3 = Login panel only.
     """
@@ -1543,12 +1543,11 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
               const topPanels = panels.filter(
                 (p) => !isLoginPanel(p) && p.bottom <= band1End + 4
               );
-              const band2Start = includeLogin
-                ? cpmsSplit
-                : ((loginSplit != null && loginSplit < cpmsSplit) ? loginSplit : cpmsSplit);
-              const midPanels = includeLogin
-                ? panels.filter((p) => !isLoginPanel(p) && p.top >= cpmsSplit - 6)
-                : panels.filter((p) => p.top >= band2Start - 6);
+              // VNC 2nd PNG: always anchor at CPMS (not Login) so CPMS→Pulsar fits one viewport at 50% zoom.
+              const band2Start = cpmsSplit;
+              const midPanels = panels.filter(
+                (p) => !isLoginPanel(p) && p.top >= cpmsSplit - 6
+              );
               const loginPanels = panels.filter((p) => isLoginPanel(p));
 
               const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < band2Start));
@@ -1951,7 +1950,7 @@ def _screenshot_highlight_bands(page) -> List[bytes]:
         return []
     pngs: List[bytes] = []
     labels = (
-        ("top KPI/FPMS", "Login+CPMS/IGO/Pulsar")
+        ("top KPI/FPMS", "CPMS/IGO/Pulsar")
         if not include_login
         else ("top KPI/FPMS", "CPMS/IGO/Pulsar", "Login With Password")
     )
