@@ -1879,14 +1879,36 @@ def get_p0_graph_screenshot_browser_pool_enabled() -> bool:
 
 
 def get_p0_graph_screenshot_on_demand_band_max_wait_ms() -> int:
-    """Per-band panel wait cap for on-demand fast mode. Default **45000** (45s)."""
+    """Per-band panel wait cap for on-demand chat captures. Default **28000** (28s)."""
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_MAX_WAIT_MS") or "45000").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_MAX_WAIT_MS") or "28000").strip()
     try:
         n = int(raw)
     except ValueError:
-        n = 45_000
+        n = 28_000
     return max(3000, min(n, 120_000))
+
+
+def get_p0_graph_screenshot_on_demand_band_stable_polls() -> int:
+    """Stability polls for on-demand fast captures. Default **2** (P0 auto still uses ``BAND_STABLE_POLLS``)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_STABLE_POLLS") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(1, min(n, 6))
+
+
+def get_p0_graph_screenshot_on_demand_max_sec() -> int:
+    """Wall-clock cap for one on-demand capture; posts failure DM if exceeded. Default **360** (6 min)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_MAX_SEC") or "360").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 360
+    return max(120, min(n, 900))
 
 
 def get_p0_graph_screenshot_band_panel_ready_ratio() -> float:

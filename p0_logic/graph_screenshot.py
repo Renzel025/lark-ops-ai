@@ -69,6 +69,10 @@ _interval_source_label: str = ""
 _capture_busy_lock = threading.Lock()
 _capture_busy = False
 _capture_ctx = threading.local()
+_ON_DEMAND_PENDING: List[Dict[str, Any]] = []
+_ON_DEMAND_PENDING_LOCK = threading.Lock()
+_on_demand_timed_out = False
+_on_demand_timed_out_lock = threading.Lock()
 
 # Reuse Chromium between on-demand captures (avoids ~20–40s cold launch each time).
 _BROWSER_POOL_LOCK = threading.Lock()
@@ -1730,7 +1734,7 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 def _band_panel_wait_timeout_ms() -> int:
     from . import config as _config
 
-    if _is_on_demand_capture() and _effective_fast_capture():
+    if _is_on_demand_capture():
         return _config.get_p0_graph_screenshot_on_demand_band_max_wait_ms()
     cap = _config.get_p0_graph_screenshot_band_max_wait_ms()
     t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
@@ -1888,12 +1892,23 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
         )
 
 
-def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
-    """Require several consecutive ready checks so Grafana does not capture mid-paint."""
+def _band_stable_poll_settings() -> Tuple[int, int]:
     from . import config as _config
 
-    polls_need = _config.get_p0_graph_screenshot_band_stable_polls()
-    poll_ms = _config.get_p0_graph_screenshot_band_stable_poll_ms()
+    if _is_on_demand_capture() and _effective_fast_capture():
+        return (
+            _config.get_p0_graph_screenshot_on_demand_band_stable_polls(),
+            min(_config.get_p0_graph_screenshot_band_stable_poll_ms(), 700),
+        )
+    return (
+        _config.get_p0_graph_screenshot_band_stable_polls(),
+        _config.get_p0_graph_screenshot_band_stable_poll_ms(),
+    )
+
+
+def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
+    """Require several consecutive ready checks so Grafana does not capture mid-paint."""
+    polls_need, poll_ms = _band_stable_poll_settings()
     if timeout_ms <= 0:
         timeout_ms = min(18_000, max(6000, polls_need * poll_ms * 4))
     deadline = time.time() + (timeout_ms / 1000.0)
@@ -1940,7 +1955,10 @@ def _scroll_viewport_to_paint_lazy_panels(page, band_y: int) -> None:
     vh = _config.get_p0_graph_screenshot_viewport_height()
     step_ms = 320 if _effective_fast_capture() else 620
     base = max(0, int(band_y or 0))
-    offsets = [0, int(vh * 0.28), int(vh * 0.55), int(vh * 0.82), 0]
+    if _is_on_demand_capture() and _effective_fast_capture():
+        offsets = [0, int(vh * 0.55), 0]
+    else:
+        offsets = [0, int(vh * 0.28), int(vh * 0.55), int(vh * 0.82), 0]
     try:
         for off in offsets:
             page.evaluate("(y) => window.scrollTo(0, Math.max(0, y))", base + off)
@@ -2027,10 +2045,18 @@ def _screenshot_viewport_at_band_start(
         _scroll_viewport_to_paint_lazy_panels(page, y)
         band_ms = _band_panel_wait_timeout_ms()
         _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
-        stable_ms = 14_000 if _effective_fast_capture() else 22_000
+        if _is_on_demand_capture() and _effective_fast_capture():
+            stable_ms = 8_000
+        else:
+            stable_ms = 14_000 if _effective_fast_capture() else 22_000
         _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable_ms)
         if is_lower_band:
-            bottom_ms = min(band_ms, 45_000) if not _effective_fast_capture() else min(band_ms, 20_000)
+            if _is_on_demand_capture() and _effective_fast_capture():
+                bottom_ms = min(band_ms, 12_000)
+                stable2_ms = 6_000
+            else:
+                bottom_ms = min(band_ms, 45_000) if not _effective_fast_capture() else min(band_ms, 20_000)
+                stable2_ms = min(stable_ms, 16_000)
             _wait_for_viewport_bottom_row_ready(
                 page,
                 {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
@@ -2039,7 +2065,7 @@ def _screenshot_viewport_at_band_start(
             _wait_for_band_panels_stable(
                 page,
                 vp_band,
-                timeout_ms=min(stable_ms, 16_000),
+                timeout_ms=stable2_ms,
             )
             page.evaluate(
                 "(y) => window.scrollTo(0, Math.max(0, y - 8))",
@@ -2456,23 +2482,22 @@ def _format_captured_at(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def schedule_on_demand_graph_screenshot(
+def is_graph_capture_busy() -> bool:
+    with _capture_busy_lock:
+        return bool(_capture_busy)
+
+
+def _start_on_demand_capture_thread(
     tenant_token: str,
     post_chat_id: str,
     range_key: str,
-    source_chat_label: str = "",
+    source_chat_label: str,
     *,
     trigger_message_id: str = "",
 ) -> None:
-    """On-demand single-range capture (e.g. typed ``screenshot 30 min``)."""
-    from . import config as _config
-
     tok = (tenant_token or "").strip()
     cid = (post_chat_id or "").strip()
     rk = (range_key or "").strip().lower()
-    if not tok or not cid or not _config.build_p0_graph_screenshot_url_for_range(rk):
-        return
-
     label = (source_chat_label or "").strip()
     trig_mid = (trigger_message_id or "").strip()
 
@@ -2491,6 +2516,75 @@ def schedule_on_demand_graph_screenshot(
         name=f"p0-graph-screenshot-{rk}",
         daemon=True,
     ).start()
+
+
+def _drain_on_demand_pending() -> None:
+    with _ON_DEMAND_PENDING_LOCK:
+        if not _ON_DEMAND_PENDING:
+            return
+        job = dict(_ON_DEMAND_PENDING.pop(0))
+    log.info(
+        "p0 graph screenshot on-demand: starting queued job range=%s chat_tail=%s",
+        job.get("range_key"),
+        str(job.get("post_chat_id") or "")[-12:],
+    )
+    _start_on_demand_capture_thread(
+        str(job.get("tenant_token") or ""),
+        str(job.get("post_chat_id") or ""),
+        str(job.get("range_key") or ""),
+        str(job.get("source_chat_label") or ""),
+        trigger_message_id=str(job.get("trigger_message_id") or ""),
+    )
+
+
+def schedule_on_demand_graph_screenshot(
+    tenant_token: str,
+    post_chat_id: str,
+    range_key: str,
+    source_chat_label: str = "",
+    *,
+    trigger_message_id: str = "",
+) -> str:
+    """
+    On-demand single-range capture (e.g. typed ``screenshot 30 min``).
+
+    Returns ``started``, ``queued`` (another capture running), or ``skipped``.
+    """
+    from . import config as _config
+
+    tok = (tenant_token or "").strip()
+    cid = (post_chat_id or "").strip()
+    rk = (range_key or "").strip().lower()
+    if not tok or not cid or not _config.build_p0_graph_screenshot_url_for_range(rk):
+        log.warning(
+            "p0 graph screenshot on-demand: skip schedule tok=%s cid=%s range=%s url=%s",
+            bool(tok),
+            bool(cid),
+            rk,
+            bool(_config.build_p0_graph_screenshot_url_for_range(rk)),
+        )
+        return "skipped"
+
+    label = (source_chat_label or "").strip()
+    trig_mid = (trigger_message_id or "").strip()
+    job = {
+        "tenant_token": tok,
+        "post_chat_id": cid,
+        "range_key": rk,
+        "source_chat_label": label,
+        "trigger_message_id": trig_mid,
+    }
+
+    with _capture_busy_lock:
+        busy = bool(_capture_busy)
+    if busy:
+        with _ON_DEMAND_PENDING_LOCK:
+            _ON_DEMAND_PENDING.append(job)
+        log.info("p0 graph screenshot on-demand: queued (capture busy) range=%s", rk)
+        return "queued"
+
+    _start_on_demand_capture_thread(tok, cid, rk, label, trigger_message_id=trig_mid)
+    return "started"
 
 
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
@@ -2706,6 +2800,11 @@ def _post_capture_failure_to_chat(
         log.warning("p0 graph screenshot: failure notice HTTP=%s", st)
 
 
+def _on_demand_capture_timed_out() -> bool:
+    with _on_demand_timed_out_lock:
+        return bool(_on_demand_timed_out)
+
+
 def _capture_and_post(
     token: str,
     url: str,
@@ -2714,6 +2813,9 @@ def _capture_and_post(
     *,
     range_label: str = "",
 ) -> bool:
+    if _is_on_demand_capture() and _on_demand_capture_timed_out():
+        log.warning("p0 graph screenshot on-demand: skip post (wall-clock timeout already notified)")
+        return False
     pngs, captured_at = _capture_png_payloads(url)
     if not pngs:
         log.warning(
@@ -2756,11 +2858,23 @@ def _capture_and_post_ranges(
     if not keys:
         keys = _config.get_p0_graph_screenshot_auto_range_keys()
     log.info(
-        "p0 graph screenshot: capture started ranges=%s label=%r chat_id_tail=%s",
+        "p0 graph screenshot: capture started ranges=%s label=%r chat_id_tail=%s on_demand=%s fast=%s",
         keys,
         (source_label or "")[:48],
         chat_id[-12:] if chat_id and len(chat_id) > 12 else chat_id,
+        _is_on_demand_capture(),
+        _effective_fast_capture(),
     )
+    if _is_on_demand_capture():
+        log.info(
+            "p0 graph screenshot on-demand timing: band_max_ms=%s stable_polls=%s pool=%s top_bottom=%s",
+            _config.get_p0_graph_screenshot_on_demand_band_max_wait_ms(),
+            _config.get_p0_graph_screenshot_on_demand_band_stable_polls()
+            if _effective_fast_capture()
+            else _config.get_p0_graph_screenshot_band_stable_polls(),
+            _config.get_p0_graph_screenshot_browser_pool_enabled(),
+            _config.get_p0_graph_screenshot_top_and_bottom(),
+        )
     for rk in keys:
         url = _config.build_p0_graph_screenshot_url_for_range(rk)
         if not url:
@@ -2779,7 +2893,11 @@ def _capture_and_post_ranges_thread_body(
     on_demand: bool = False,
     trigger_message_id: str = "",
 ) -> None:
-    global _capture_busy
+    global _capture_busy, _on_demand_timed_out
+    from . import config as _config
+
+    with _on_demand_timed_out_lock:
+        _on_demand_timed_out = False
     with _capture_busy_lock:
         _capture_busy = True
     _capture_ctx_set(
@@ -2787,24 +2905,60 @@ def _capture_and_post_ranges_thread_body(
         force_full=False,
         trigger_message_id=trigger_message_id,
     )
+    completed = threading.Event()
+    watchdog: Optional[threading.Timer] = None
+
+    def _on_demand_watchdog() -> None:
+        global _on_demand_timed_out
+        if completed.is_set():
+            return
+        with _on_demand_timed_out_lock:
+            _on_demand_timed_out = True
+        log.error(
+            "p0 graph screenshot on-demand: wall-clock timeout after %ss chat_id_tail=%s",
+            _config.get_p0_graph_screenshot_on_demand_max_sec(),
+            chat_id[-12:] if chat_id else "",
+        )
+        _post_capture_failure_to_chat(
+            token,
+            chat_id,
+            range_label=(range_keys or [""])[0] if range_keys else "",
+            reason=(
+                f"Timed out after {_config.get_p0_graph_screenshot_on_demand_max_sec()}s — "
+                "Grafana/Playwright may be stuck. Check journalctl -u lark-ops-ai."
+            ),
+        )
+        _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
+
+    if on_demand:
+        watchdog = threading.Timer(
+            float(_config.get_p0_graph_screenshot_on_demand_max_sec()),
+            _on_demand_watchdog,
+        )
+        watchdog.daemon = True
+        watchdog.start()
     try:
         _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
     except Exception as e:
-        _set_capture_error(str(e))
-        log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
-        if on_demand:
-            _post_capture_failure_to_chat(
-                token,
-                chat_id,
-                reason=str(e)[:400],
-            )
-            from . import config as _cfg_ex
-
-            _react_to_trigger_message(token, _cfg_ex.get_p0_graph_screenshot_react_failed_emoji())
+        if not _on_demand_capture_timed_out():
+            _set_capture_error(str(e))
+            log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
+            if on_demand:
+                _post_capture_failure_to_chat(
+                    token,
+                    chat_id,
+                    reason=str(e)[:400],
+                )
+                _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
     finally:
+        completed.set()
+        if watchdog:
+            watchdog.cancel()
         _capture_ctx_clear()
         with _capture_busy_lock:
             _capture_busy = False
+        if on_demand:
+            _drain_on_demand_pending()
 
 
 def _wait_for_grafana_panels_if_configured(page) -> None:
@@ -3127,7 +3281,10 @@ def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
     On-demand: retries once with full cold capture if the first attempt returns empty.
     """
-    attempts = 2 if _is_on_demand_capture() else 1
+    if _is_on_demand_capture() and _effective_fast_capture():
+        attempts = 1
+    else:
+        attempts = 2 if _is_on_demand_capture() else 1
     for attempt in range(attempts):
         if attempt > 0:
             log.info("p0 graph screenshot: on-demand retry — full cold capture (attempt %s)", attempt + 1)
