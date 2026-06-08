@@ -83,6 +83,17 @@ log.info(
     _ig_disp,
 )
 
+from p0_logic.config import get_p0_issue_watch_enabled, get_dm_instruction_open_ids
+
+if get_p0_issue_watch_enabled():
+    _iw_dm = get_dm_instruction_open_ids()
+    log.info(
+        "issue_watch: ENABLED — DM recipients=%s (P0_DM_INSTRUCTION_OPEN_IDS); needs ANTHROPIC_API_KEY",
+        len(_iw_dm),
+    )
+else:
+    log.info("issue_watch: disabled (set P0_ISSUE_WATCH_ENABLED=1)")
+
 app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()

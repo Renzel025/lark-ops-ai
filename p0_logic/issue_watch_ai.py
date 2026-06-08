@@ -1,11 +1,12 @@
 """
-Claude classification for detection-group player issue signals.
+Claude + keyword classification for detection-group issue signals.
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional
+import re
+from typing import List, Optional, Tuple
 
 from . import config as _config
 from .groq_client import _parse_json_object
@@ -13,9 +14,8 @@ from .groq_client import _parse_json_object
 log = logging.getLogger("lark-ops-ai")
 
 _ISSUE_WATCH_SYSTEM = (
-    "You triage Lark incident / player feedback group chat for an on-call ops bot.\n"
-    "Decide if a message reports a **player-facing production issue** (not general chat, jokes, "
-    "meeting invites, P0/P1 bridge declarations, or staff coordination).\n\n"
+    "You triage Lark **detection / emergency feedback** group chat for an on-call ops bot.\n"
+    "Decide if a message reports a **production or player-facing issue** that duty should know about.\n\n"
     "Output ONLY valid JSON:\n"
     "{\n"
     '  "is_incident_signal": true|false,\n'
@@ -27,7 +27,7 @@ _ISSUE_WATCH_SYSTEM = (
     '  "reason": "one short sentence"\n'
     "}\n\n"
     "Categories (use exact keys, one or more):\n"
-    "1 website_downtime — official site cannot be accessed\n"
+    "1 website_downtime — official site cannot be accessed, infinite loading, site down\n"
     "2 login_issues — site loads but login fails, credential errors, OTP send/validate failures\n"
     "3 registration_failures — new users cannot register\n"
     "4 withdrawal_issues — withdraw fails or unavailable\n"
@@ -37,13 +37,83 @@ _ISSUE_WATCH_SYSTEM = (
     "8 widespread_impact — ONLY if this single message itself mentions 4+ distinct players/users "
     "reporting the same issue (rare; bot also counts across messages separately)\n\n"
     "Rules:\n"
-    "- is_incident_signal=false for: greetings, thanks, staff-only notes, questions without a problem, "
-    "status updates with no user impact, screenshot requests, declaring p0/p1 meetings.\n"
-    "- issue_fingerprint: stable key for clustering same root cause (e.g. login_otp_failure, "
-    "website_down_main, fpms_backend_down).\n"
-    "- players_mentioned_in_message: count distinct players/users explicitly mentioned in THIS message.\n"
-    "- confidence: how sure this is a real player-facing incident signal (not noise).\n"
+    "- is_incident_signal=TRUE when OM/duty/staff OR players report a real symptom, e.g. "
+    "\"kindly help check the CP website — continuously loading\", login OTP failing, FPMS down, "
+    "withdrawal failing, all games cannot enter.\n"
+    "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
+    "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
+    "- Staff asking the team to investigate a website/login/backend/game issue = TRUE (high confidence).\n"
+    "- issue_fingerprint: stable key (login_otp_failure, website_loading_cp, fpms_backend_down).\n"
     "- Multilingual input (English, Chinese, Tagalog) — classify by meaning.\n"
+)
+
+_KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] = (
+    (
+        re.compile(
+            r"(?is)"
+            r"(?:\b(?:website|web\s*site|site|cp\s*website|official\s+site)\b.{0,80}"
+            r"(?:loading|load(?:ing)?\s+(?:forever|continuously|non-?stop)|"
+            r"cannot\s+access|can't\s+access|not\s+(?:open|working|loading)|down|unreachable|"
+            r"打不开|无法访问|一直加载|无限加载))"
+            r"|"
+            r"(?:\b(?:loading|load(?:ing)?\s+(?:forever|continuously))\b.{0,80}"
+            r"\b(?:website|web\s*site|site|cp)\b)"
+        ),
+        ["website_downtime"],
+        "website_loading",
+        0.93,
+        "Website continuously loading or inaccessible",
+    ),
+    (
+        re.compile(
+            r"(?is)\b(?:cannot|can't|unable\s+to)\s+login\b|"
+            r"\blogin\s+(?:fail|error|issue|problem|broken)\b|"
+            r"\botp\b.{0,40}\b(?:fail|not\s+received|invalid|error)\b|"
+            r"无法登录|登录失败|验证码"
+        ),
+        ["login_issues"],
+        "login_failure",
+        0.9,
+        "Login or OTP validation issue reported",
+    ),
+    (
+        re.compile(r"(?is)\b(?:cannot|can't|unable\s+to)\s+register\b|注册失败|无法注册"),
+        ["registration_failures"],
+        "registration_failure",
+        0.9,
+        "Registration failure reported",
+    ),
+    (
+        re.compile(r"(?is)\bwithdraw(?:al)?\b.{0,40}\b(?:fail|error|issue|cannot|can't)\b|提款失败|无法提款"),
+        ["withdrawal_issues"],
+        "withdrawal_failure",
+        0.9,
+        "Withdrawal issue reported",
+    ),
+    (
+        re.compile(r"(?is)\bdeposit\b.{0,40}\b(?:fail|error|issue|cannot|can't)\b|存款失败|无法存款|充值失败"),
+        ["deposit_issues"],
+        "deposit_failure",
+        0.9,
+        "Deposit issue reported",
+    ),
+    (
+        re.compile(r"(?is)\b(?:fpms|pms)\b.{0,50}\b(?:down|unreachable|cannot|can't|not\s+working|offline)\b|后台.{0,20}(?:挂|不可用|进不去)"),
+        ["backend_downtime"],
+        "backend_downtime",
+        0.92,
+        "FPMS/PMS backend issue reported",
+    ),
+    (
+        re.compile(
+            r"(?is)\b(?:all|every)\s+games?\b.{0,40}\b(?:down|cannot|can't|unplayable|not\s+working)\b|"
+            r"无法进入游戏|游戏.{0,10}(?:进不去|打不开|全部)"
+        ),
+        ["gameplay_outage"],
+        "gameplay_outage",
+        0.9,
+        "Gameplay outage reported",
+    ),
 )
 
 _ALLOWED_CATEGORIES = frozenset(
@@ -133,18 +203,55 @@ def _parse_classification(raw: str, provider: str) -> Optional[dict]:
     }
 
 
+def _keyword_classify(message_text: str) -> Optional[dict]:
+    t = (message_text or "").strip()
+    if not t:
+        return None
+    for pattern, categories, fingerprint, confidence, summary in _KEYWORD_RULES:
+        if pattern.search(t):
+            return {
+                "is_incident_signal": True,
+                "categories": list(categories),
+                "confidence": confidence,
+                "summary": summary,
+                "issue_fingerprint": fingerprint,
+                "players_mentioned_in_message": 0,
+                "reason": "keyword rule match",
+                "provider": "keyword",
+            }
+    return None
+
+
+def _classify_via_claude(message_text: str) -> Optional[dict]:
+    from .anthropic_client import anthropic_chat_once
+
+    raw = anthropic_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=280)
+    return _parse_classification(raw, "claude")
+
+
 def classify_issue_watch_message(message_text: str) -> Optional[dict]:
     """
-    Claude classifies a detection-group message. Returns None when AI unavailable or parse fails.
+    Keyword fast-path + Claude. Keyword wins when high-confidence; Claude refines otherwise.
     """
     t = (message_text or "").strip()
     if not t:
         return None
+    kw = _keyword_classify(t)
+    if kw and float(kw.get("confidence") or 0) >= 0.88:
+        log.info(
+            "issue_watch_ai: keyword match categories=%s fp=%s",
+            kw.get("categories"),
+            kw.get("issue_fingerprint"),
+        )
+        return kw
     provider = resolve_issue_watch_ai_provider()
-    if provider != "claude":
-        log.warning("issue_watch_ai: no ANTHROPIC_API_KEY — classification skipped")
-        return None
-    from .anthropic_client import anthropic_chat_once
-
-    raw = anthropic_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{t[:4500]}", max_tokens=280)
-    return _parse_classification(raw, "claude")
+    ai: Optional[dict] = None
+    if provider == "claude":
+        ai = _classify_via_claude(t)
+    else:
+        log.warning("issue_watch_ai: no ANTHROPIC_API_KEY — using keyword rules only")
+    if ai and ai.get("is_incident_signal"):
+        return ai
+    if kw and kw.get("is_incident_signal"):
+        return kw
+    return ai if ai is not None else kw
