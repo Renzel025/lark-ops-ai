@@ -922,6 +922,20 @@ def end_p0_session(
         on_p0_session_ended_for_graph_screenshot()
     except Exception as e:
         log.warning("end_p0_session: graph screenshot interval stop failed: %s", e)
+    if token and sess:
+        try:
+            from .vc_recording_fanout import schedule_recording_fanout_from_p0_session
+
+            schedule_recording_fanout_from_p0_session(
+                token,
+                chat_id=chat_id,
+                meeting_id=str(sess.get("meeting_id") or "").strip(),
+                meeting_no=str(sess.get("meeting_no") or "").strip(),
+                emergency_topic=str(sess.get("emergency_topic") or "").strip(),
+                start_epoch=int(sess.get("start_epoch") or 0),
+            )
+        except Exception as e:
+            log.warning("end_p0_session: recording fanout schedule failed: %s", e)
 
 
 def cancel_p0_session(

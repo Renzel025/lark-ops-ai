@@ -139,6 +139,10 @@ def build_recording_available_text(
     url = (recording_url or "").strip()
     if url:
         lines.append(f"Recording · 录制链接: {url}")
+    elif mid:
+        lines.append(
+            "Recording · 录制链接: (pending — Lark is still processing; use meeting_id or check Minutes)"
+        )
     # Machine-parseable footer for downstream bots (boss Minutes pipeline).
     meta: List[str] = ["---", "RECORDING_READY"]
     if mid:

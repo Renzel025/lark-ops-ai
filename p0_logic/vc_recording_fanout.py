@@ -26,8 +26,8 @@ _FANOUT_LOCK = threading.Lock()
 _FANOUT_DONE: Set[str] = set()
 _POLL_ACTIVE: Set[str] = set()
 
-# Seconds to wait after meeting_ended before each poll attempt (total ~3.75 min spread).
-_DEFAULT_POLL_GAPS_SEC = (15, 30, 60, 120)
+# Seconds to wait after meeting_ended before each poll attempt (total ~11 min spread).
+_DEFAULT_POLL_GAPS_SEC = (15, 30, 60, 120, 180, 300)
 
 
 def _usable_recording_url(u: str) -> bool:
@@ -120,21 +120,28 @@ def fanout_recording_to_chats(
     url_hint: str = "",
     duration_ms_raw: str = "",
     source: str = "event",
+    force_notify: bool = False,
 ) -> bool:
     """
     If fan-out targets are set and topic passes filter, notify each chat/DM with topic, ids,
     duration, and the playable recording URL (event url or ``GET .../recording``).
 
     Returns True when at least one Lark post succeeded. Uses ``meeting_id`` for deduplication.
-    Poll attempts return False until a usable URL exists (retry on next poll).
+    Poll attempts return False until a usable URL exists (retry on next poll), unless
+    ``force_notify`` posts meeting ids without URL (last poll / boss Minutes fallback).
     """
     token = (tenant_token or "").strip()
     mid = (meeting_id or "").strip()
     if not token or not mid:
+        log.warning("vc recording fan-out skipped — missing token or meeting_id source=%s", source)
         return False
     targets = _config.get_vc_recording_fanout_chat_ids()
     user_targets = _config.get_vc_recording_fanout_user_open_ids()
     if not targets and not user_targets:
+        log.warning(
+            "vc recording fan-out disabled — set P0_NOTIFICATION_HUB_CHAT_IDS or "
+            "VC_RECORDING_FANOUT_CHAT_IDS (and/or VC_RECORDING_FANOUT_USER_OPEN_IDS)"
+        )
         return False
 
     topic = (topic or "").strip()
@@ -155,13 +162,19 @@ def fanout_recording_to_chats(
             return True
 
     recording_url = _resolve_recording_url(token, mid, url_hint)
-    if not recording_url:
+    if not recording_url and not force_notify:
         log.info(
             "vc recording fan-out deferred (no playable URL yet) source=%s mid=%s",
             source,
             mid[:20],
         )
         return False
+    if not recording_url and force_notify:
+        log.warning(
+            "vc recording fan-out: posting without URL (meeting_id only) source=%s mid=%s",
+            source,
+            mid[:20],
+        )
 
     duration_text = _fmt_duration_ms(duration_ms_raw)
 
@@ -242,7 +255,7 @@ def handle_vc_recording_ready_fanout(evt: Dict[str, Any], tenant_token: str) -> 
     meeting_id = str(meeting.get("id") or "").strip()
     url = str(evt.get("url") or "").strip()
     duration_raw = str(evt.get("duration") or "").strip()
-    fanout_recording_to_chats(
+    if not fanout_recording_to_chats(
         tenant_token,
         meeting_id,
         topic,
@@ -250,7 +263,53 @@ def handle_vc_recording_ready_fanout(evt: Dict[str, Any], tenant_token: str) -> 
         url_hint=url,
         duration_ms_raw=duration_raw,
         source="recording_ready",
+    ):
+        schedule_recording_fanout_poll_after_meeting_end(tenant_token, evt)
+
+
+def schedule_recording_fanout_from_p0_session(
+    tenant_token: str,
+    *,
+    chat_id: str,
+    meeting_id: str = "",
+    meeting_no: str = "",
+    emergency_topic: str = "",
+    start_epoch: int = 0,
+) -> None:
+    """
+    Backup when ``vc.meeting.meeting_ended_v1`` / ``recording_ready_v1`` are delayed or missing.
+    Called from ``end_p0_session`` with the active session's meeting refs.
+    """
+    token = (tenant_token or "").strip()
+    mid = (meeting_id or "").strip()
+    if not token or not mid:
+        log.info(
+            "vc recording: skip p0-session fanout (no token or meeting_id) chat_id=%s meeting_no=%s",
+            (chat_id or "")[:24],
+            (meeting_no or "")[:16],
+        )
+        return
+    topic = (emergency_topic or "").strip()
+    if not topic.lower().startswith("video meeting"):
+        topic = _config.get_vc_meeting_topic_for_source_chat(chat_id)
+    end_sec = int(time.time())
+    start_sec = int(start_epoch or 0)
+    evt: Dict[str, Any] = {
+        "meeting": {
+            "id": mid,
+            "meeting_no": (meeting_no or "").strip(),
+            "topic": topic,
+            "start_time": str(start_sec) if start_sec > 0 else "0",
+            "end_time": str(end_sec),
+        }
+    }
+    log.info(
+        "vc recording: schedule fanout from p0 session chat_id=%s mid=%s topic_head=%r",
+        (chat_id or "")[:24],
+        mid[:20],
+        topic[:80],
     )
+    schedule_recording_fanout_poll_after_meeting_end(token, evt)
 
 
 def schedule_recording_fanout_poll_after_meeting_end(
@@ -293,8 +352,18 @@ def schedule_recording_fanout_poll_after_meeting_end(
 
     gaps = _DEFAULT_POLL_GAPS_SEC
 
+    duration_ms_raw = ""
+    try:
+        st = int(str(meeting.get("start_time") or "0").strip() or "0")
+        en = int(str(meeting.get("end_time") or "0").strip() or "0")
+        if st > 0 and en > st:
+            duration_ms_raw = str((en - st) * 1000)
+    except ValueError:
+        pass
+
     def _worker() -> None:
         try:
+            last_i = len(gaps) - 1
             for i, gap in enumerate(gaps):
                 time.sleep(float(gap))
                 if fanout_recording_to_chats(
@@ -303,8 +372,9 @@ def schedule_recording_fanout_poll_after_meeting_end(
                     topic,
                     meeting_no,
                     url_hint="",
-                    duration_ms_raw="",
+                    duration_ms_raw=duration_ms_raw,
                     source=f"poll#{i + 1}",
+                    force_notify=(i == last_i),
                 ):
                     log.info(
                         "vc recording poll: success on attempt %s/%s meeting_id=%s",
@@ -313,8 +383,9 @@ def schedule_recording_fanout_poll_after_meeting_end(
                         meeting_id[:24],
                     )
                     return
-            log.info(
-                "vc recording poll: no recording URL after %s attempts (too short, disabled, or admin-only?) mid=%s",
+            log.warning(
+                "vc recording poll: gave up after %s attempts mid=%s — check vc:record scope, "
+                "P0_NOTIFICATION_HUB_CHAT_IDS, and meeting length (need ~10s+)",
                 len(gaps),
                 meeting_id[:24],
             )
