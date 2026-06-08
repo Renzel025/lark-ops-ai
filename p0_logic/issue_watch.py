@@ -38,8 +38,7 @@ def _now_ts() -> float:
 
 def _format_alert_time() -> str:
     """Server-local clock (ose-bot is MYT); no zoneinfo import (Python 3.8 safe)."""
-    tz = _config.get_p0_graph_screenshot_timezone_name() or "Asia/Kuala_Lumpur"
-    return f"{datetime.now().strftime('%Y-%m-%d %H:%M')} ({tz})"
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def _should_skip_noise(text: str) -> bool:
@@ -124,12 +123,12 @@ def _build_dm_text(
     window_min: int,
 ) -> str:
     widespread = widespread_count >= widespread_threshold
+    title_group = (group_label or chat_id).strip()
     body = [
-        f"🚨 Detection alert — {group_label or chat_id}",
+        f"🚨 Major P0 Detection alert — {title_group}",
         "",
         "Category:",
         _format_categories(categories, include_widespread=widespread),
-        f"Confidence: {int(round(confidence * 100))}%",
     ]
     if summary:
         body.extend(["", f"Summary: {summary}"])
@@ -141,7 +140,14 @@ def _build_dm_text(
                 f"(last {window_min} min)",
             ]
         )
-    body.extend(["", f"Latest: 「{_quote_excerpt(excerpt)}」", "", f"Time: {_format_alert_time()}"])
+    body.extend(
+        [
+            "",
+            f"Concern: 「{_quote_excerpt(excerpt)}」",
+            "",
+            f"Time: {_format_alert_time()}",
+        ]
+    )
     return "\n".join(body)
 
 
@@ -239,7 +245,15 @@ def try_handle_issue_watch(
 
     categories = list(result.get("categories") or [])
     confidence = float(result.get("confidence") or 0.0)
-    widespread = reporter_count >= min_reports
+    try:
+        players_in_msg = int(result.get("players_mentioned_in_message") or 0)
+    except (TypeError, ValueError):
+        players_in_msg = 0
+    id_count = len(set(re.findall(r"\b\d{10}\b", raw)))
+    players_mentioned = max(players_in_msg, id_count)
+    if players_mentioned >= min_reports and "widespread_impact" not in categories:
+        categories.append("widespread_impact")
+    widespread = reporter_count >= min_reports or players_mentioned >= min_reports
     high_conf = confidence >= min_conf
 
     if not high_conf and not widespread:
@@ -267,7 +281,7 @@ def try_handle_issue_watch(
         confidence=confidence,
         summary=str(result.get("summary") or ""),
         excerpt=raw,
-        widespread_count=reporter_count,
+        widespread_count=max(reporter_count, players_mentioned),
         widespread_threshold=min_reports,
         window_min=window_min,
     )

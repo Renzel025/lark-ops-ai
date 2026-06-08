@@ -84,14 +84,25 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
         "Registration failure reported",
     ),
     (
-        re.compile(r"(?is)\bwithdraw(?:al)?\b.{0,40}\b(?:fail|error|issue|cannot|can't)\b|提款失败|无法提款"),
+        re.compile(
+            r"(?is)"
+            r"\b(?:cannot|can't|unable\s+to)\s+withdraw\b|"
+            r"\bwithdraw(?:al)?\b.{0,60}\b(?:fail|error|issue|cannot|can't|balance|fund|money|problem)\b|"
+            r"\b(\d+)\s+players?\b.{0,120}(?:cannot|can't|unable\s+to)\s+withdraw|"
+            r"提款失败|无法提款|不能提款|无法提现"
+        ),
         ["withdrawal_issues"],
         "withdrawal_failure",
-        0.9,
+        0.93,
         "Withdrawal issue reported",
     ),
     (
-        re.compile(r"(?is)\bdeposit\b.{0,40}\b(?:fail|error|issue|cannot|can't)\b|存款失败|无法存款|充值失败"),
+        re.compile(
+            r"(?is)"
+            r"\b(?:cannot|can't|unable\s+to)\s+deposit\b|"
+            r"\bdeposit\b.{0,60}\b(?:fail|error|issue|cannot|can't|balance|fund|money|problem)\b|"
+            r"存款失败|无法存款|充值失败"
+        ),
         ["deposit_issues"],
         "deposit_failure",
         0.9,
@@ -203,22 +214,42 @@ def _parse_classification(raw: str, provider: str) -> Optional[dict]:
     }
 
 
+def _extract_player_mentions(text: str) -> int:
+    """``4 players`` in prose, or count of 10-digit player IDs in the message."""
+    t = (text or "").strip()
+    m = re.search(r"(?is)\b(\d+)\s+players?\b", t)
+    if m:
+        try:
+            return max(0, int(m.group(1)))
+        except ValueError:
+            pass
+    return len(set(re.findall(r"\b\d{10}\b", t)))
+
+
 def _keyword_classify(message_text: str) -> Optional[dict]:
     t = (message_text or "").strip()
     if not t:
         return None
     for pattern, categories, fingerprint, confidence, summary in _KEYWORD_RULES:
-        if pattern.search(t):
-            return {
-                "is_incident_signal": True,
-                "categories": list(categories),
-                "confidence": confidence,
-                "summary": summary,
-                "issue_fingerprint": fingerprint,
-                "players_mentioned_in_message": 0,
-                "reason": "keyword rule match",
-                "provider": "keyword",
-            }
+        if not pattern.search(t):
+            continue
+        players = _extract_player_mentions(t)
+        cats = list(categories)
+        if players >= 4 and "widespread_impact" not in cats:
+            cats.append("widespread_impact")
+        summ = summary
+        if players >= 4:
+            summ = f"{summary} ({players} players mentioned)"
+        return {
+            "is_incident_signal": True,
+            "categories": cats,
+            "confidence": confidence,
+            "summary": summ,
+            "issue_fingerprint": fingerprint,
+            "players_mentioned_in_message": players,
+            "reason": "keyword rule match",
+            "provider": "keyword",
+        }
     return None
 
 
