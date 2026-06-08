@@ -75,6 +75,29 @@ def _fmt_duration_ms(raw: str) -> str:
     return f"{h}h {m2}m"
 
 
+def _resolve_recording_url(token: str, meeting_id: str, url_hint: str) -> str:
+    """Event ``url`` when playable; else ``GET .../meetings/{id}/recording``."""
+    hint = (url_hint or "").strip()
+    if _usable_recording_url(hint):
+        return hint
+    if hint:
+        log.info(
+            "vc recording: event url unusable head=%r meeting_id=%s — fetching API",
+            hint[:80],
+            meeting_id[:20],
+        )
+    fetched = _lark.fetch_vc_meeting_recording_url(token, meeting_id)
+    if _usable_recording_url(fetched):
+        return fetched
+    if fetched:
+        log.info(
+            "vc recording: API url unusable head=%r meeting_id=%s",
+            fetched[:80],
+            meeting_id[:20],
+        )
+    return ""
+
+
 def _meeting_duration_sec_from_ended_evt(evt: Dict[str, Any]) -> float:
     """Best-effort duration from meeting_ended / join payload (Lark uses second unix timestamps in strings)."""
     meeting = evt.get("meeting") if isinstance(evt.get("meeting"), dict) else {}
@@ -99,10 +122,11 @@ def fanout_recording_to_chats(
     source: str = "event",
 ) -> bool:
     """
-    If ``VC_RECORDING_FANOUT_CHAT_IDS`` is set and topic passes filter, notify each chat that a
-    recording is available (topic + meeting no only — no link or embed).
+    If fan-out targets are set and topic passes filter, notify each chat/DM with topic, ids,
+    duration, and the playable recording URL (event url or ``GET .../recording``).
 
     Returns True when at least one Lark post succeeded. Uses ``meeting_id`` for deduplication.
+    Poll attempts return False until a usable URL exists (retry on next poll).
     """
     token = (tenant_token or "").strip()
     mid = (meeting_id or "").strip()
@@ -130,14 +154,16 @@ def fanout_recording_to_chats(
             log.info("vc recording fan-out skip duplicate meeting_id=%s source=%s", mid[:24], source)
             return True
 
-    url_hint = (url_hint or "").strip()
-    if url_hint and not _usable_recording_url(url_hint):
+    recording_url = _resolve_recording_url(token, mid, url_hint)
+    if not recording_url:
         log.info(
-            "vc recording: event url not posted (non-playable) head=%r source=%s mid=%s",
-            url_hint[:80],
+            "vc recording fan-out deferred (no playable URL yet) source=%s mid=%s",
             source,
             mid[:20],
         )
+        return False
+
+    duration_text = _fmt_duration_ms(duration_ms_raw)
 
     if _config.get_vc_recording_fanout_set_permission_enabled():
         grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
@@ -150,7 +176,13 @@ def fanout_recording_to_chats(
                 topic[:80],
             )
 
-    body = _cards.build_recording_available_text(topic, meeting_no)
+    body = _cards.build_recording_available_text(
+        topic,
+        meeting_no,
+        meeting_id=mid,
+        recording_url=recording_url,
+        duration_text=duration_text,
+    )
 
     ok_any = False
     for oc in targets:

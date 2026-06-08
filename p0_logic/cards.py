@@ -114,15 +114,45 @@ def _strip_video_meeting_prefix(raw: str) -> str:
     return t
 
 
-def build_recording_available_text(topic: str = "", meeting_no: str = "") -> str:
-    """Plain group message when VC cloud recording is ready (no link, no markdown)."""
-    lines = ["☁️ Meeting recording available · 会议录制可用", ""]
+def build_recording_available_text(
+    topic: str = "",
+    meeting_no: str = "",
+    *,
+    meeting_id: str = "",
+    recording_url: str = "",
+    duration_text: str = "",
+) -> str:
+    """Plain group/DM text when VC cloud recording is ready (includes link + ids for Minutes bots)."""
+    lines = ["☁️ Meeting recording ready · 会议录制可用", ""]
     label = _strip_video_meeting_prefix(topic)
     if label:
         lines.append(f"Topic · 主题: {label}")
     no = (meeting_no or "").strip()
     if no:
-        lines.append(f"Meeting ID · 会议号: {no}")
+        lines.append(f"Meeting no · 会议号: {no}")
+    mid = (meeting_id or "").strip()
+    if mid:
+        lines.append(f"Lark meeting_id · 会议ID: {mid}")
+    dur = (duration_text or "").strip()
+    if dur:
+        lines.append(f"Duration · 时长: {dur}")
+    url = (recording_url or "").strip()
+    if url:
+        lines.append(f"Recording · 录制链接: {url}")
+    # Machine-parseable footer for downstream bots (boss Minutes pipeline).
+    meta: List[str] = ["---", "RECORDING_READY"]
+    if mid:
+        meta.append(f"meeting_id={mid}")
+    if no:
+        meta.append(f"meeting_no={no}")
+    if url:
+        meta.append(f"recording_url={url}")
+    if label:
+        meta.append(f"topic={label}")
+    if dur:
+        meta.append(f"duration={dur}")
+    if len(meta) > 2:
+        lines.extend(meta)
     return "\n".join(lines).rstrip()
 
 
