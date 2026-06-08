@@ -13,6 +13,13 @@ Run the **same** Playwright capture as the P0 bot. By default saves PNG(s) to di
   # (needs ``LARK_APP_ID`` / ``LARK_APP_SECRET`` or whatever ``get_tenant_token_primary`` uses in .env)
   python3 scripts/grafana_screenshot_run_once.py --post-lark
 
+  # Specific time window (rewrites ``from=`` on P0_GRAPH_SCREENSHOT_URL):
+  python3 scripts/grafana_screenshot_run_once.py --range 1h --post-lark
+  python3 scripts/grafana_screenshot_run_once.py --range 30m
+
+  # All P0 auto ranges (default 6h, 3h) — same as declaring P0:
+  python3 scripts/grafana_screenshot_run_once.py --all-auto-ranges --post-lark
+
   # Optional: watch Chromium on VNC
   export P0_GRAPH_SCREENSHOT_HEADED=1
 
@@ -117,6 +124,16 @@ def main() -> int:
         default="",
         help="Override ENV_PATH for this run (default: ENV_PATH env var or repo .env).",
     )
+    ap.add_argument(
+        "--range",
+        default="",
+        help="Time window: 30m, 1h, 2h, 3h, or 6h (sets Grafana from= on P0_GRAPH_SCREENSHOT_URL).",
+    )
+    ap.add_argument(
+        "--all-auto-ranges",
+        action="store_true",
+        help="Capture each range in P0_GRAPH_SCREENSHOT_AUTO_RANGES (default 6h,3h).",
+    )
     args = ap.parse_args()
 
     env_path = _bootstrap_env(args.env_path or "")
@@ -127,8 +144,8 @@ def main() -> int:
 
     from p0_logic import config as cfg
 
-    url = cfg.get_p0_graph_screenshot_url()
-    if not url:
+    base_url = cfg.get_p0_graph_screenshot_url()
+    if not base_url:
         print(
             "Set P0_GRAPH_SCREENSHOT_URL in .env (and profile if login is required).",
             file=sys.stderr,
@@ -136,8 +153,19 @@ def main() -> int:
         _diagnose_missing_url(env_path)
         return 1
 
+    range_keys: list[str] = []
+    if args.all_auto_ranges:
+        range_keys = list(cfg.get_p0_graph_screenshot_auto_range_keys())
+    elif (args.range or "").strip():
+        range_keys = [(args.range or "").strip().lower()]
+    else:
+        range_keys = [""]
+
     print(f"env: {env_path}")
-    print(f"url: {url[:72]}{'...' if len(url) > 72 else ''}")
+    if range_keys == [""]:
+        print(f"url: {base_url[:72]}{'...' if len(base_url) > 72 else ''}")
+    else:
+        print(f"ranges: {range_keys}")
     print(
         f"capture: viewport={cfg.get_p0_graph_screenshot_viewport_width()}x"
         f"{cfg.get_p0_graph_screenshot_viewport_height()} "
@@ -150,24 +178,6 @@ def main() -> int:
     )
 
     from p0_logic.graph_screenshot import _capture_png_payloads, post_p0_graph_screenshots_to_chat
-
-    pngs, captured_at = _capture_png_payloads()
-    if not pngs:
-        print("Capture returned no PNG — check logs above (Playwright installed? URL loads?).", file=sys.stderr)
-        return 2
-
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    paths = []
-    for i, blob in enumerate(pngs):
-        name = f"grafana_{stamp}.png" if len(pngs) == 1 else f"grafana_{stamp}_part{i + 1}.png"
-        path = os.path.join(out_dir, name)
-        with open(path, "wb") as f:
-            f.write(blob)
-        paths.append(path)
-
-    print(f"captured_at: {captured_at}")
-    for p in paths:
-        print(p)
 
     if args.post_lark:
         from p0_logic import lark_client as lark
@@ -186,15 +196,63 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 4
-        post_p0_graph_screenshots_to_chat(
-            tok,
-            chat_id,
-            pngs,
-            captured_at,
-            source_label="manual grafana_screenshot_run_once",
-        )
-        print(f"post-lark: sent to chat_id tail={chat_id[-12:]}")
+    else:
+        tok = ""
+        chat_id = ""
 
+    any_ok = False
+    for rk in range_keys:
+        if rk:
+            url = cfg.build_p0_graph_screenshot_url_for_range(rk)
+            if not url:
+                print(f"ERROR: unknown range {rk!r}", file=sys.stderr)
+                return 1
+            range_disp = cfg.get_p0_graph_screenshot_range_display(rk)
+            print(f"capture range={rk} url: {url[:72]}{'...' if len(url) > 72 else ''}")
+        else:
+            url = base_url
+            rk = ""
+            range_disp = ""
+
+        pngs, captured_at = _capture_png_payloads(url)
+        if not pngs:
+            print(
+                f"Capture returned no PNG range={rk or 'default'} — check logs above.",
+                file=sys.stderr,
+            )
+            continue
+        any_ok = True
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        suffix = f"_{rk}" if rk else ""
+        paths = []
+        for i, blob in enumerate(pngs):
+            if len(pngs) == 1:
+                name = f"grafana_{stamp}{suffix}.png"
+            else:
+                name = f"grafana_{stamp}{suffix}_part{i + 1}.png"
+            path = os.path.join(out_dir, name)
+            with open(path, "wb") as f:
+                f.write(blob)
+            paths.append(path)
+
+        print(f"captured_at: {captured_at}" + (f" range={rk}" if rk else ""))
+        for p in paths:
+            print(p)
+
+        if args.post_lark and tok and chat_id:
+            post_p0_graph_screenshots_to_chat(
+                tok,
+                chat_id,
+                pngs,
+                captured_at,
+                source_label="manual grafana_screenshot_run_once",
+                range_label=rk,
+            )
+            print(f"post-lark: sent range={rk or 'default'} to chat_id tail={chat_id[-12:]}")
+
+    if not any_ok:
+        return 2
     return 0
 
 

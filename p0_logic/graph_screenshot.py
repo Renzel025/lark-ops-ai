@@ -2402,7 +2402,7 @@ def schedule_on_demand_graph_screenshot(
 
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
     """
-    Non-blocking: captures Grafana for each auto range (default **6h**, **3h**, **1h**) and posts to
+    Non-blocking: captures Grafana for each auto range (default **6h**, **3h**) and posts to
     ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Only runs for **P0** when env is enabled.
 
     If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
