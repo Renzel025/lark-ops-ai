@@ -185,6 +185,50 @@ def build_overview_fields_from_alert(
     return issue, impact, support, combined_text
 
 
+def _recall_dm_messages(tenant_token: str, *message_ids: str) -> None:
+    tok = (tenant_token or "").strip()
+    if not tok:
+        return
+    seen: set[str] = set()
+    for raw in message_ids:
+        mid = (raw or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        try:
+            st, body = _lark.recall_im_message(tok, mid)
+            if st != 200:
+                log.warning(
+                    "issue_watch_overview: recall failed message_id=%s HTTP=%s body=%s",
+                    mid[:24],
+                    st,
+                    (body or "")[:200],
+                )
+        except Exception as e:
+            log.warning("issue_watch_overview: recall failed message_id=%s err=%s", mid[:24], e)
+
+
+def _recall_issue_watch_declare_dms(
+    operator_open_id: str,
+    tenant_token: str,
+    *,
+    clicked_card_message_id: str = "",
+) -> None:
+    """Remove suggested-preview DM clutter when duty chooses manual overview."""
+    oid = (operator_open_id or "").strip()
+    tok = (tenant_token or "").strip()
+    if not oid:
+        return
+    pv = _drafts.get_preview(oid) or {}
+    _recall_dm_messages(
+        tok,
+        str(pv.get("preview_message_id") or ""),
+        str(pv.get("issue_watch_declare_hint_message_id") or ""),
+        str(pv.get("issue_watch_declare_manual_message_id") or ""),
+        clicked_card_message_id,
+    )
+
+
 def _session_start_epoch(source_incident_chat_id: str, target_chat: str) -> int:
     src = (source_incident_chat_id or "").strip()
     if src and src in _session.P0_SESSIONS:
@@ -259,19 +303,25 @@ def _post_suggested_overview_preview(
         return False
 
     if on_p0_declare:
-        _lark.post_text_to_open_id(
+        st_h, body_h = _lark.post_text_to_open_id(
             oid,
             tok,
             "📝 **P0 declared** — suggested overview from Issue Watch is below. "
             "Tap **Send to group** to keep it, or **Build overview manually** to start fresh.",
         )
+        hint_mid = _lark.parse_im_message_id_from_response(body_h) if st_h == 200 else ""
         manual_card = _cards.build_issue_watch_declare_manual_card(
             issue_watch_alert_key=(alert_key or "").strip(),
             source_incident_chat_id=src,
             target_chat=tgt,
             source_chat_label=lab,
         )
-        _lark.post_card_to_open_id(oid, tok, manual_card)
+        _st_m, _body_m, manual_mid = _lark.post_card_to_open_id(oid, tok, manual_card)
+        _drafts.patch_preview_fields(
+            oid,
+            issue_watch_declare_hint_message_id=hint_mid,
+            issue_watch_declare_manual_message_id=manual_mid,
+        )
     elif not _session.dm_preview_allowed_for_incident(src, tgt):
         _lark.post_text_to_open_id(
             oid,
@@ -359,6 +409,7 @@ def handle_manual_overview(
     alert_key: str = "",
     source_incident_chat_id: str = "",
     target_chat: str = "",
+    clicked_card_message_id: str = "",
 ) -> None:
     oid = (operator_open_id or "").strip()
     tok = (tenant_token or "").strip()
@@ -379,13 +430,7 @@ def handle_manual_overview(
         _lark.post_text_to_open_id(oid, tok, "⚠️ No overview target chat configured for this detection group.")
         return
 
-    pv = _drafts.get_preview(oid) or {}
-    preview_mid = str(pv.get("preview_message_id") or "").strip()
-    if preview_mid:
-        try:
-            _lark.recall_im_message(tok, preview_mid)
-        except Exception as e:
-            log.warning("issue_watch_overview: recall preview on manual failed: %s", e)
+    _recall_issue_watch_declare_dms(oid, tok, clicked_card_message_id=clicked_card_message_id)
     _drafts.clear_preview(oid)
     _drafts.cancel_preview_timer(oid)
     _drafts.seed_draft_for_incident(oid, tgt, src, "P0")
@@ -399,13 +444,8 @@ def handle_manual_overview(
         target_chat=tgt,
         source_incident_chat_id=src,
     )
-    _lark.post_text_to_open_id(
-        oid,
-        tok,
-        "📝 **Manual overview** — paste screenshots or text in any order, then tap **Build overview**.",
-    )
     log.info(
-        "issue_watch_overview: manual flow open_id_tail=%s src=%s tgt_tail=%s",
+        "issue_watch_overview: manual flow (declare DMs recalled) open_id_tail=%s src=%s tgt_tail=%s",
         oid[-8:] if len(oid) > 8 else oid,
         src[:24],
         tgt[-12:] if len(tgt) > 12 else tgt,

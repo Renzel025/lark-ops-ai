@@ -311,6 +311,22 @@ def clear_preview(sender_open_id: str) -> None:
         tx.delete()
 
 
+def patch_preview_fields(sender_open_id: str, **fields: Any) -> None:
+    """Merge auxiliary preview metadata (e.g. Issue Watch declare DM message ids)."""
+    oid = (sender_open_id or "").strip()
+    if not oid or not fields:
+        return
+    with _store.preview_transaction(oid) as tx:
+        p = tx.get()
+        if not p:
+            return
+        for key, val in fields.items():
+            sval = str(val or "").strip()
+            if sval:
+                p[key] = sval
+        tx.set(p)
+
+
 def orphan_incident_draft_if_session_ended(sender_open_id: str) -> bool:
     """
     If the draft is tied to a real incident ``oc_`` but that P0/P1 row is gone, retarget as standalone.

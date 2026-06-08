@@ -562,6 +562,20 @@ def _extract_card_action_open_chat_id(payload: Dict[str, Any]) -> str:
     return _scan_open_chat_id_nested(payload)
 
 
+def _extract_card_action_open_message_id(payload: Dict[str, Any]) -> str:
+    """Message id (om_...) of the card the user clicked — for recalling stale DM cards."""
+    candidates = [
+        _deep_get(payload, "event", "context", "open_message_id"),
+        _deep_get(payload, "event", "message", "message_id"),
+        _deep_get(payload, "event", "open_message_id"),
+        _deep_get(payload, "open_message_id"),
+    ]
+    for x in candidates:
+        if isinstance(x, str) and x.strip():
+            return x.strip()
+    return ""
+
+
 def _extract_form_field(payload: Dict[str, Any], field: str) -> str:
     """Read a form field value, including empty string when the user cleared the field."""
     val_d = _card_action_value_dict(payload)
@@ -1190,6 +1204,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     alert_key=alert_key,
                     source_incident_chat_id=src_inc,
                     target_chat=tc,
+                    clicked_card_message_id=_extract_card_action_open_message_id(payload),
                 )
             return
         if action_name == "generate_preview":
