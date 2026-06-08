@@ -1489,7 +1489,6 @@ def build_issue_watch_alert_card(
     summary: str,
     concern: str,
     alert_time: str,
-    players_count: int = 0,
     player_ids_md: str = "",
     source_chat_link: str = "",
     source_message_time: str = "",
@@ -1518,16 +1517,6 @@ def build_issue_watch_alert_card(
             {
                 "tag": "div",
                 "text": {"tag": "lark_md", "content": f"**Summary:** {(summary or '').strip()}"},
-            }
-        )
-    if int(players_count or 0) > 0:
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**Players affected:** {int(players_count)}",
-                },
             }
         )
     if (player_ids_md or "").strip():

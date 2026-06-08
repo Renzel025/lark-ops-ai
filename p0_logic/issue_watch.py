@@ -206,11 +206,10 @@ def _try_player_id_followup(
     group_label = _resolve_group_label(chat_id, source_chat_name, tenant_token)
     alert_card = _cards.build_issue_watch_alert_card(
         group_label=group_label,
-        categories_md=_format_categories(categories),
+        categories_md=_format_categories(categories, players_affected=player_count),
         summary=summary,
         concern=_quote_excerpt(concern),
         alert_time=_format_alert_time(),
-        players_count=player_count,
         player_ids_md=_format_player_ids_md(ids),
         source_chat_link=_lark.build_chat_open_applink(chat_id),
         source_message_time=src_time,
@@ -307,7 +306,7 @@ def _set_cooldown(key: str, minutes: int) -> None:
     _COOLDOWN[key] = _now_ts() + max(60, minutes * 60)
 
 
-def _format_categories(keys: List[str]) -> str:
+def _format_categories(keys: List[str], *, players_affected: int = 0) -> str:
     lines: List[str] = []
     for key in keys:
         if key == "widespread_impact":
@@ -317,6 +316,9 @@ def _format_categories(keys: List[str]) -> str:
             lines.append(f"{label} (#{num})")
         else:
             lines.append(label)
+    n = int(players_affected or 0)
+    if n >= _config.get_p0_issue_watch_min_reports():
+        lines.append(f"{n} players are affected")
     return "\n".join(f"• {x}" for x in lines) if lines else "• (unspecified)"
 
 
@@ -494,16 +496,15 @@ def try_handle_issue_watch(
         _set_cooldown(cd_key, cooldown_min)
 
     player_ids = list(result.get("player_ids") or extract_player_ids(raw))
-    players_count = max(players_mentioned, len(player_ids))
+    id_count = len(player_ids)
     src_time = _format_message_create_time(message_create_time) or _format_alert_time()
     group_label = _resolve_group_label(cid, source_chat_name, tenant_token)
     alert_card = _cards.build_issue_watch_alert_card(
         group_label=group_label,
-        categories_md=_format_categories(categories),
+        categories_md=_format_categories(categories, players_affected=id_count),
         summary=str(result.get("summary") or ""),
         concern=_quote_excerpt(raw),
         alert_time=_format_alert_time(),
-        players_count=players_count,
         player_ids_md=_format_player_ids_md(player_ids),
         source_chat_link=_lark.build_chat_open_applink(cid),
         source_message_time=src_time,
