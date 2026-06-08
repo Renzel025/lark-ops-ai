@@ -42,7 +42,8 @@ _ISSUE_WATCH_SYSTEM = (
     "withdrawal failing, all games cannot enter.\n"
     "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
     "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
-    "- Staff asking the team to investigate a website/login/backend/game issue = TRUE (high confidence).\n"
+    "- Staff asking the team to investigate a website/login/deposit/withdrawal/backend/game issue = TRUE (high confidence).\n"
+    "- ``players can't deposit``, ``deposit failed``, ``top up not working``, ``充值失败`` = deposit_issues.\n"
     "- issue_fingerprint: stable key (login_otp_failure, website_loading_cp, fpms_backend_down).\n"
     "- Multilingual input (English, Chinese, Tagalog) — classify by meaning.\n"
 )
@@ -103,12 +104,16 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
         re.compile(
             r"(?is)"
             r"\b(?:cannot|can't|unable\s+to)\s+deposit\b|"
-            r"\bdeposit\b.{0,60}\b(?:fail|error|issue|cannot|can't|balance|fund|money|problem)\b|"
-            r"存款失败|无法存款|充值失败"
+            r"\bplayers?\b.{0,100}(?:cannot|can't|unable\s+to)\s+deposit\b|"
+            r"\bdeposit\b.{0,80}\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|"
+            r"not\s+working|unavailable|stuck|pending|rejected|declined)\b|"
+            r"\b(?:fail(?:ed|ure|ing)?|error|issue|issues|problem|cannot|can't|not\s+working)\b.{0,80}\bdeposit\b|"
+            r"\b(?:top\s*up|topup|recharge|add\s+funds?)\b.{0,80}\b(?:fail|error|issue|cannot|can't|not\s+working|problem)\b|"
+            r"存款失败|无法存款|不能存款|充值失败|无法充值|充值不了|存款问题"
         ),
         ["deposit_issues"],
         "deposit_failure",
-        0.9,
+        0.92,
         "Deposit issue reported",
     ),
     (
@@ -268,6 +273,10 @@ def _summary_with_players(
             if players == 1:
                 return "1 player cannot withdraw"
             return f"{players} players cannot withdraw"
+        if "deposit_issues" in categories:
+            if players == 1:
+                return "1 player cannot deposit"
+            return f"{players} players cannot deposit"
         return f"{base_summary} ({players} player(s))"
     if re.search(r"(?is)\bplayers\b", text) and "login_issues" in categories:
         return "Players cannot login on CP website"
