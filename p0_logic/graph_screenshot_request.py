@@ -23,8 +23,15 @@ _SCREENSHOT_INTENT_RE = re.compile(
 
 # Natural “please give / send / show …” without requiring the word screenshot.
 _NATURAL_REQUEST_VERB_RE = re.compile(
-    r"(?i)\b(?:please|pls|kindly)?\s*(?:can\s+you\s+)?"
-    r"(?:give|send|show|share|post|get|pull|grab|need|want|provide)\s+(?:me\s+)?(?:the\s+)?(?:a\s+)?"
+    r"(?i)(?:\b(?:please|pls|kindly)\s+)?(?:can\s+you\s+)?"
+    r"\b(?:give|send|show|share|post|get|pull|grab|need|want|provide)\b"
+    r"(?:\s+(?:me|us))?(?:\s+(?:the|a))?\s+"
+)
+
+# ``apm metrics``, ``core metrics``, etc. — strong ops intent without the word screenshot.
+_OPS_METRICS_CUE_RE = re.compile(
+    r"\b(apm(?:\s+metrics?)?|core\s*metrics?|grafana|dashboard|graph|metrics)\b",
+    re.IGNORECASE,
 )
 
 _RANGE_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = (
@@ -72,14 +79,20 @@ def has_explicit_graph_screenshot_intent(text: str) -> bool:
     )
 
 
+def _has_ops_metrics_cue(text: str) -> bool:
+    return bool(_OPS_METRICS_CUE_RE.search((text or "").strip()))
+
+
 def has_natural_graph_request_cue(text: str) -> bool:
-    """``please give …`` / ``send me …`` style ops requests."""
+    """``please give …`` / ``send me …`` / ``apm metrics`` style ops requests."""
     raw = (text or "").strip()
     if not raw:
         return False
     if has_explicit_graph_screenshot_intent(raw):
         return True
     if _NATURAL_REQUEST_VERB_RE.search(raw):
+        return True
+    if _has_ops_metrics_cue(raw):
         return True
     return bool(_SCREENSHOT_INTENT_RE.search(raw))
 
@@ -172,9 +185,12 @@ def resolve_graph_screenshot_range_key(
         ai_rk = _ai_classify_screenshot(raw)
         return ai_rk
 
-    # Natural: ``please give 30 mins`` — needs @bot, active P0, or Claude/Groq AI.
+    # Natural: ``please give 30 mins``, ``can you send 30 mins apm metrics``, etc.
     if time_key and has_natural_graph_request_cue(raw):
-        if mentions_bot or p0_ctx:
+        if mentions_bot or p0_ctx or _has_ops_metrics_cue(raw):
+            return time_key
+        cid = (chat_id or "").strip()
+        if cid and _chat_allows_on_demand(cid) and _NATURAL_REQUEST_VERB_RE.search(raw):
             return time_key
         ai_rk = _ai_classify_screenshot(raw)
         if ai_rk:
@@ -201,15 +217,17 @@ def parse_graph_screenshot_on_demand_range(text: str) -> Optional[str]:
 
 
 def _estimate_on_demand_wait_label() -> str:
-    """Human ETA for the bot reply (warm pool + fast mode ≈ 45–90s)."""
-    if not _config.get_p0_graph_screenshot_on_demand_fast():
-        return "2–3 min"
-    if (
-        _config.get_p0_graph_screenshot_browser_pool_enabled()
-        and _config.get_p0_graph_screenshot_playwright_user_data_dir()
-    ):
+    """Human ETA for the on-demand ack (actual time varies with Grafana load)."""
+    has_profile = bool(_config.get_p0_graph_screenshot_playwright_user_data_dir())
+    fast = _config.get_p0_graph_screenshot_on_demand_fast()
+    pooled = _config.get_p0_graph_screenshot_browser_pool_enabled() and has_profile
+    if pooled and fast:
         return "45–90 sec"
-    return "1–2 min"
+    if has_profile:
+        return "1–2 min"
+    if fast:
+        return "1–2 min"
+    return "2–3 min"
 
 
 def _post_on_demand_reply(chat_id: str, token: str, text: str) -> None:
