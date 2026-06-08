@@ -31,6 +31,7 @@ from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_con
 from p0_logic.cards import build_help_commands_card, build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic.graph_screenshot_request import try_handle_graph_screenshot_request
+from p0_logic.issue_watch import try_handle_issue_watch
 from p0_logic import (
     start_p0,
     cancel_p0_session,
@@ -1357,6 +1358,15 @@ def process_message(
                 if not request_p1_meeting_confirmation(chat_id, token, user_id):
                     pop_p1_prompt_pending(chat_id)
                     log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
+                return
+
+            if try_handle_issue_watch(
+                text_raw,
+                chat_id,
+                user_id,
+                tenant_token or token,
+                source_chat_name=source_chat_name,
+            ):
                 return
 
             # Ignore non P0/P1 chatter in the incident group to avoid noisy auto replies.

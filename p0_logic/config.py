@@ -1879,14 +1879,62 @@ def get_p0_graph_screenshot_browser_pool_enabled() -> bool:
 
 
 def get_p0_graph_screenshot_on_demand_band_max_wait_ms() -> int:
-    """Per-band panel wait cap for on-demand fast mode. Default **10000** (10s)."""
+    """Per-band panel wait cap for on-demand fast mode. Default **45000** (45s)."""
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_MAX_WAIT_MS") or "10000").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_BAND_MAX_WAIT_MS") or "45000").strip()
     try:
         n = int(raw)
     except ValueError:
-        n = 10_000
-    return max(3000, min(n, 30_000))
+        n = 45_000
+    return max(3000, min(n, 120_000))
+
+
+def get_p0_graph_screenshot_band_panel_ready_ratio() -> float:
+    """
+    Fraction of viewport panels that must show chart / table / stable ``No data`` before capture.
+    Default **0.88** (``0.55`` when ``FAST_CAPTURE`` or on-demand fast — see graph_screenshot).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_PANEL_READY_RATIO") or "0.88").strip()
+    try:
+        r = float(raw)
+    except ValueError:
+        r = 0.88
+    if r > 1.0:
+        r = r / 100.0
+    return max(0.5, min(r, 1.0))
+
+
+def get_p0_graph_screenshot_band_max_blank_panels() -> int:
+    """Max unloaded (black) panels allowed in the viewport before capture. Default **0**."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_MAX_BLANK_PANELS") or "0").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 0
+    return max(0, min(n, 5))
+
+
+def get_p0_graph_screenshot_band_stable_polls() -> int:
+    """Consecutive ready checks required before screenshot. Default **3**."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_STABLE_POLLS") or "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 3
+    return max(1, min(n, 8))
+
+
+def get_p0_graph_screenshot_band_stable_poll_ms() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_STABLE_POLL_MS") or "900").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 900
+    return max(300, min(n, 3000))
 
 
 def get_p0_graph_screenshot_react_enabled() -> bool:
@@ -2166,3 +2214,65 @@ def get_slack_api_channel_id_for_incident_chat(chat_id: str) -> str:
     raw = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
     m = _parse_incident_keyed_url_map(raw)
     return (m.get(cid) or "").strip()
+
+
+def get_p0_issue_watch_enabled() -> bool:
+    """``P0_ISSUE_WATCH_ENABLED=1`` — Claude watches detection groups and DMs duty on player issues."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_min_confidence() -> float:
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.75").strip()
+    try:
+        c = float(raw)
+    except ValueError:
+        c = 0.75
+    if c > 1.0:
+        c = c / 100.0
+    return max(0.5, min(c, 0.99))
+
+
+def get_p0_issue_watch_window_min() -> int:
+    """Sliding window for widespread (#8) reporter counting. Default **60** minutes."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_WINDOW_MIN") or "60").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 60
+    return max(15, min(n, 240))
+
+
+def get_p0_issue_watch_min_reports() -> int:
+    """Unique reporters for same ``issue_fingerprint`` to trigger widespread alert. Default **4**."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_REPORTS") or "4").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 4
+    return max(2, min(n, 20))
+
+
+def get_p0_issue_watch_cooldown_min() -> int:
+    """Per chat + category/fingerprint DM cooldown. Default **20** minutes."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_COOLDOWN_MIN") or "20").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 20
+    return max(5, min(n, 180))
+
+
+def get_p0_issue_watch_min_text_len() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_TEXT_LEN") or "15").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 15
+    return max(8, min(n, 200))

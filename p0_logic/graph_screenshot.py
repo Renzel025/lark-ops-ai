@@ -18,7 +18,8 @@ an enormous, half-empty strip when Grafana’s layout is tall; use only when you
 For **multi-panel Grafana** dashboards: wide viewport (e.g. **1920×1080**), ``GOTO_WAIT_UNTIL=load``, and
 raise ``P0_GRAPH_SCREENSHOT_WAIT_MS`` (e.g. **12000–20000**). Enable
 ``P0_GRAPH_SCREENSHOT_PANEL_READY_TIMEOUT_MS`` (e.g. **25000–35000**) so React mounts before panels;
-content wait can follow from config.
+``P0_GRAPH_SCREENSHOT_BAND_PANEL_READY_RATIO`` (default **0.88**) and ``BAND_MAX_BLANK_PANELS=0``
+block capture while panels are still black/loading.
 
 **Two images (upper / lower half):** ``P0_GRAPH_SCREENSHOT_SPLIT_VERTICAL_HALVES=1`` uses **two**
 ``full_page`` screenshots with vertical **clips** (no Pillow required). Grafana nests several
@@ -947,7 +948,9 @@ def _band_post_capture_settle_ms() -> int:
     if _effective_fast_capture():
         return min(wait_ms, 1500)
     if _highlight_band_capture_mode():
-        return min(wait_ms, 3000)
+        if _effective_fast_capture():
+            return min(wait_ms, 2000)
+        return min(wait_ms, 12000)
     return min(wait_ms, 8000)
 
 
@@ -1739,70 +1742,140 @@ def _band_panel_wait_timeout_ms() -> int:
     return min(35_000, cap)
 
 
+def _band_panel_ready_ratio() -> float:
+    from . import config as _config
+
+    ratio = _config.get_p0_graph_screenshot_band_panel_ready_ratio()
+    if _effective_fast_capture():
+        return min(ratio, 0.72)
+    return ratio
+
+
+def _band_panel_ready_opts(*, bottom_zone_only: bool = False) -> Dict[str, object]:
+    from . import config as _config
+
+    return {
+        "minDoneRatio": _band_panel_ready_ratio(),
+        "maxBlank": _config.get_p0_graph_screenshot_band_max_blank_panels(),
+        "bottomZoneOnly": bottom_zone_only,
+        "bottomZoneFraction": 0.38,
+    }
+
+
+_BAND_PANEL_READY_JS = r"""
+(args) => {
+  const clip = args.clip || {};
+  const opts = args.opts || {};
+  const minRatio = typeof opts.minDoneRatio === 'number' ? opts.minDoneRatio : 0.88;
+  const maxBlank = typeof opts.maxBlank === 'number' ? opts.maxBlank : 0;
+  const bottomOnly = !!opts.bottomZoneOnly;
+  const bottomFrac = typeof opts.bottomZoneFraction === 'number' ? opts.bottomZoneFraction : 0.38;
+  const sy = window.scrollY || 0;
+  const vh = window.innerHeight || 1080;
+  const y0 = clip.y || 0;
+  const y1 = (clip.y || 0) + (clip.height || vh);
+  const viewBot = sy + vh;
+  const bottomZoneTop = sy + Math.floor(vh * (1 - bottomFrac));
+  const nodes = document.querySelectorAll(
+    '[data-panelid], .react-grid-item, [data-panel-id], [data-viz-key]'
+  );
+  let total = 0;
+  let done = 0;
+  let loading = 0;
+  let blank = 0;
+  const panelState = (el) => {
+    if (
+      el.querySelector(
+        '[class*="spinner"], [class*="Spinner"], [class*="loading"], '
+        + '[class*="PanelLoading"], [class*="panel-loading"], '
+        + '[aria-busy="true"], [role="progressbar"], '
+        + '[data-testid*="panel-loader"], [data-testid*="PanelLoading"]'
+      )
+    ) {
+      return 'loading';
+    }
+    const content = el.querySelector(
+      '[class*="panel-content"], [class*="panel-content"]'
+    ) || el;
+    let canv = 0;
+    let svgBig = 0;
+    content.querySelectorAll('canvas').forEach((c) => {
+      const cr = c.getBoundingClientRect();
+      if (cr.width > 48 && cr.height > 24) canv++;
+    });
+    content.querySelectorAll('svg').forEach((s) => {
+      const sr = s.getBoundingClientRect();
+      if (sr.width > 36 && sr.height > 20) svgBig++;
+    });
+    if (canv > 0 || svgBig > 0) return 'chart';
+    const bodyText = (content.innerText || '').trim();
+    if (/no data|无数据|暂无数据|没有数据/i.test(bodyText)) return 'nodata';
+    const rows = content.querySelectorAll(
+      'table tbody tr, [role="rowgroup"] [role="row"]'
+    ).length;
+    if (rows >= 2) return 'table';
+    const cr = content.getBoundingClientRect();
+    if (cr.height > 44 && cr.width > 72) return 'blank';
+    return 'small';
+  };
+  nodes.forEach((el) => {
+    const r = el.getBoundingClientRect();
+    const docTop = sy + r.top;
+    const docBot = sy + r.bottom;
+    if (docBot < y0 + 12 || docTop > y1 - 12) return;
+    if (bottomOnly) {
+      if (docBot < bottomZoneTop || docTop > viewBot) return;
+    }
+    if (r.width < 72 || r.height < 36) return;
+    const st = panelState(el);
+    if (st === 'small') return;
+    total++;
+    if (st === 'loading') loading++;
+    else if (st === 'blank') blank++;
+    else done++;
+  });
+  if (total < 1) return false;
+  if (loading > 0) return false;
+  if (blank > maxBlank) return false;
+  const need = Math.max(1, Math.ceil(total * minRatio));
+  return done >= need;
+}
+"""
+
+
+def _evaluate_band_panels_ready(page, doc_clip: Dict[str, int], *, bottom_zone_only: bool = False) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                _BAND_PANEL_READY_JS,
+                {"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=bottom_zone_only)},
+            )
+        )
+    except Exception:
+        return False
+
+
 def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
     """
-    Wait until most **visible** panels in this band have finished loading (charts painted or stable
-    ``No data``). Does not treat a single ``No data`` panel as “whole page ready”.
+    Wait until viewport panels are loaded: no spinners, no black blanks, and most panels show
+    chart / table / stable ``No data``.
     """
     if timeout_ms <= 0:
         timeout_ms = _band_panel_wait_timeout_ms()
     if timeout_ms <= 0:
         return
+    ratio = _band_panel_ready_ratio()
     log.info(
-        "p0 graph screenshot: waiting for band panels (max %ss) — not stuck, Grafana loading…",
+        "p0 graph screenshot: waiting for band panels (max %ss, need %.0f%% ready, blank=0)…",
         timeout_ms // 1000,
+        ratio * 100,
     )
     try:
         page.wait_for_function(
-            """(clip) => {
-              const sy = window.scrollY || 0;
-              const y0 = clip.y;
-              const y1 = clip.y + clip.height;
-              const nodes = document.querySelectorAll(
-                '[data-panelid], .react-grid-item, [data-panel-id]'
-              );
-              let total = 0;
-              let charts = 0;
-              let nodata = 0;
-              let loading = 0;
-              nodes.forEach((el) => {
-                const r = el.getBoundingClientRect();
-                const docTop = sy + r.top;
-                const docBot = sy + r.bottom;
-                if (docBot < y0 + 16 || docTop > y1 - 16) return;
-                if (r.width < 72 || r.height < 36) return;
-                total++;
-                if (
-                  el.querySelector(
-                    '[class*="spinner"], [class*="Spinner"], [class*="loading"], '
-                    + '[aria-busy="true"]'
-                  )
-                ) {
-                  loading++;
-                  return;
-                }
-                let canv = 0;
-                el.querySelectorAll('canvas').forEach((c) => {
-                  const cr = c.getBoundingClientRect();
-                  if (cr.width > 56 && cr.height > 28) canv++;
-                });
-                if (canv > 0) {
-                  charts++;
-                  return;
-                }
-                const t = (el.innerText || '').trim();
-                if (/no data/i.test(t)) nodata++;
-              });
-              if (total < 2) return false;
-              if (loading > 2) return false;
-              if (loading > 0 && charts < 2) return false;
-              const done = charts + nodata;
-              const need = Math.max(2, Math.ceil(total * 0.5));
-              return done >= need;
-            }""",
-            doc_clip,
+            _BAND_PANEL_READY_JS,
+            {"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=False)},
             timeout=timeout_ms,
-            polling=300,
+            polling=350,
         )
         log.info(
             "p0 graph screenshot: band viewport panels ready (waited up to %sms)",
@@ -1815,8 +1888,33 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
         )
 
 
+def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
+    """Require several consecutive ready checks so Grafana does not capture mid-paint."""
+    from . import config as _config
+
+    polls_need = _config.get_p0_graph_screenshot_band_stable_polls()
+    poll_ms = _config.get_p0_graph_screenshot_band_stable_poll_ms()
+    if timeout_ms <= 0:
+        timeout_ms = min(18_000, max(6000, polls_need * poll_ms * 4))
+    deadline = time.time() + (timeout_ms / 1000.0)
+    streak = 0
+    while time.time() < deadline:
+        if _evaluate_band_panels_ready(page, doc_clip):
+            streak += 1
+            if streak >= polls_need:
+                log.info("p0 graph screenshot: band panels stable (%s checks)", streak)
+                return
+        else:
+            streak = 0
+        page.wait_for_timeout(poll_ms)
+    log.warning(
+        "p0 graph screenshot: band stability wait timed out (needed %s consecutive ready polls)",
+        polls_need,
+    )
+
+
 def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeout_ms: int) -> None:
-    """Band 2: bottom row (Pulsar) loads last — require charts in the lower part of the viewport."""
+    """Band 2: bottom row (Pulsar) loads last — same strict rules in the lower viewport."""
     if timeout_ms <= 0:
         return
     log.info(
@@ -1825,44 +1923,33 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
     )
     try:
         page.wait_for_function(
-            """(clip) => {
-              const sy = window.scrollY || 0;
-              const vh = window.innerHeight || 1080;
-              const bandBot = clip.y + clip.height;
-              const viewBot = sy + vh;
-              const bottomZoneTop = sy + Math.floor(vh * 0.62);
-              const nodes = document.querySelectorAll(
-                '[data-panelid], .react-grid-item, [data-panel-id]'
-              );
-              let need = 0;
-              let ok = 0;
-              nodes.forEach((el) => {
-                const r = el.getBoundingClientRect();
-                const docTop = sy + r.top;
-                const docBot = sy + r.bottom;
-                if (docBot < bottomZoneTop || docTop > viewBot) return;
-                if (r.width < 72 || r.height < 36) return;
-                if (docTop < clip.y || docBot > bandBot + 40) return;
-                need++;
-                if (el.querySelector('[class*="spinner"], [class*="Spinner"], [aria-busy="true"]')) return;
-                let canv = 0;
-                el.querySelectorAll('canvas').forEach((c) => {
-                  const cr = c.getBoundingClientRect();
-                  if (cr.width > 56 && cr.height > 28) canv++;
-                });
-                const t = (el.innerText || '').trim();
-                if (canv > 0 || /no data/i.test(t)) ok++;
-              });
-              if (need < 2) return true;
-              return ok >= Math.max(2, Math.ceil(need * 0.5));
-            }""",
-            doc_clip,
+            _BAND_PANEL_READY_JS,
+            {"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=True)},
             timeout=timeout_ms,
-            polling=300,
+            polling=350,
         )
         log.info("p0 graph screenshot: bottom-row panels ready in viewport")
     except Exception as e:
         log.warning("p0 graph screenshot: bottom-row wait: %s", e)
+
+
+def _scroll_viewport_to_paint_lazy_panels(page, band_y: int) -> None:
+    """Step through the viewport so below-the-fold panels start Grafana queries before we wait."""
+    from . import config as _config
+
+    vh = _config.get_p0_graph_screenshot_viewport_height()
+    step_ms = 320 if _effective_fast_capture() else 620
+    base = max(0, int(band_y or 0))
+    offsets = [0, int(vh * 0.28), int(vh * 0.55), int(vh * 0.82), 0]
+    try:
+        for off in offsets:
+            page.evaluate("(y) => window.scrollTo(0, Math.max(0, y))", base + off)
+            page.wait_for_timeout(step_ms)
+        page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 8))", base)
+        page.wait_for_timeout(step_ms // 2)
+        log.info("p0 graph screenshot: lazy-panel viewport scroll at y=%s", base)
+    except Exception as e:
+        log.debug("p0 graph screenshot: lazy viewport scroll: %s", e)
 
 
 def _warm_band_lazy_panels(page, doc_clip: Dict[str, int]) -> None:
@@ -1937,22 +2024,28 @@ def _screenshot_viewport_at_band_start(
             "width": int(doc_clip.get("width") or 1920),
             "height": vh,
         }
+        _scroll_viewport_to_paint_lazy_panels(page, y)
         band_ms = _band_panel_wait_timeout_ms()
         _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
+        stable_ms = 14_000 if _effective_fast_capture() else 22_000
+        _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable_ms)
         if is_lower_band:
-            bottom_cap = 5000 if (_is_on_demand_capture() and _effective_fast_capture()) else (
-                12_000 if _effective_fast_capture() else 18_000
-            )
+            bottom_ms = min(band_ms, 45_000) if not _effective_fast_capture() else min(band_ms, 20_000)
             _wait_for_viewport_bottom_row_ready(
                 page,
                 {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
-                timeout_ms=min(bottom_cap, max(8000, band_ms // 3)),
+                timeout_ms=bottom_ms,
+            )
+            _wait_for_band_panels_stable(
+                page,
+                vp_band,
+                timeout_ms=min(stable_ms, 16_000),
             )
             page.evaluate(
                 "(y) => window.scrollTo(0, Math.max(0, y - 8))",
                 y,
             )
-            page.wait_for_timeout(280)
+            page.wait_for_timeout(400 if _effective_fast_capture() else 700)
         extra = _band_post_capture_settle_ms()
         if extra > 0:
             page.wait_for_timeout(extra)
