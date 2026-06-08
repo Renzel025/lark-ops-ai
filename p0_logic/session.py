@@ -1743,6 +1743,13 @@ def start_p0(
                     chat_id[:24],
                     issue_watch_key[:12],
                 )
+            else:
+                log.warning(
+                    "start_p0: no Issue Watch alert cache for chat_id=%s — "
+                    "duty gets green Build overview only (set P0_SHARED_STATE_DIR for multi-worker; "
+                    "alert must be within 2h of declare)",
+                    chat_id[:24],
+                )
         except Exception as e_iw:
             log.warning("start_p0: Issue Watch overview lookup failed: %s", e_iw)
     for oid in dm_targets:

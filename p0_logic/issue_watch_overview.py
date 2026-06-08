@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import cards as _cards
 from . import config as _config
 from . import drafts as _drafts
+from . import issue_watch_alert_disk as _iw_disk
 from . import lark_client as _lark
 from . import session as _session
 from . import support as _support
@@ -51,6 +52,7 @@ def store_alert_snapshot(alert_key: str, payload: Dict[str, Any]) -> None:
     cid = str(row.get("chat_id") or "").strip()
     if cid:
         _ALERT_INDEX_BY_CHAT[cid] = (key, float(row["ts"]))
+        _iw_disk.save_alert_snapshot(cid, key, row)
 
 
 def find_latest_alert_key_for_chat(chat_id: str, max_age_sec: float = _CACHE_TTL_SEC) -> str:
@@ -76,6 +78,23 @@ def find_latest_alert_key_for_chat(chat_id: str, max_age_sec: float = _CACHE_TTL
     if best_key and time.time() - best_ts <= max_age_sec:
         _ALERT_INDEX_BY_CHAT[cid] = (best_key, best_ts)
         return best_key
+    disk_row = _iw_disk.load_latest_alert(cid, max_age_sec=max_age_sec)
+    if disk_row:
+        dkey = str(disk_row.get("alert_key") or "").strip()
+        if not dkey:
+            dkey = make_alert_key(
+                cid,
+                str(disk_row.get("message_id") or ""),
+                str(disk_row.get("fingerprint") or "generic"),
+            )
+        _ALERT_CACHE[dkey] = disk_row
+        _ALERT_INDEX_BY_CHAT[cid] = (dkey, float(disk_row.get("ts") or time.time()))
+        log.info(
+            "issue_watch_overview: restored alert from disk chat_id_tail=%s alert_key=%s",
+            cid[-12:] if len(cid) > 12 else cid,
+            dkey[:12],
+        )
+        return dkey
     return ""
 
 

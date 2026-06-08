@@ -2980,12 +2980,13 @@ def _capture_and_post_ranges_thread_body(
         if not _on_demand_capture_timed_out():
             _set_capture_error(str(e))
             log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
+            _post_capture_failure_to_chat(
+                token,
+                chat_id,
+                range_label=(range_keys or [""])[0] if range_keys else "",
+                reason=str(e)[:400],
+            )
             if on_demand:
-                _post_capture_failure_to_chat(
-                    token,
-                    chat_id,
-                    reason=str(e)[:400],
-                )
                 _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
     finally:
         completed.set()
