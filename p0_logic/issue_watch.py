@@ -7,10 +7,8 @@ import logging
 import re
 import threading
 import time
-from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
-from zoneinfo import ZoneInfo
 
 from . import config as _config
 from . import lark_client as _lark
@@ -38,15 +36,10 @@ def _now_ts() -> float:
     return time.time()
 
 
-def _alert_timezone() -> ZoneInfo:
-    try:
-        return ZoneInfo(_config.get_p0_graph_screenshot_timezone_name())
-    except Exception:
-        return ZoneInfo("Asia/Kuala_Lumpur")
-
-
 def _format_alert_time() -> str:
-    return datetime.now(_alert_timezone()).strftime("%Y-%m-%d %H:%M %Z")
+    """Server-local clock (ose-bot is MYT); no zoneinfo import (Python 3.8 safe)."""
+    tz = _config.get_p0_graph_screenshot_timezone_name() or "Asia/Kuala_Lumpur"
+    return f"{datetime.now().strftime('%Y-%m-%d %H:%M')} ({tz})"
 
 
 def _should_skip_noise(text: str) -> bool:
