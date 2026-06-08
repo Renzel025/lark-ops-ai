@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import logging
 
@@ -1326,6 +1327,91 @@ def p0_graph_screenshot_enabled() -> bool:
 def get_p0_graph_screenshot_url() -> str:
     reload_env_runtime()
     return (os.getenv("P0_GRAPH_SCREENSHOT_URL") or "").strip()
+
+
+_GRAFANA_RANGE_FROM_QUERY = {
+    "30m": "now-30m",
+    "1h": "now-1h",
+    "3h": "now-3h",
+    "6h": "now-6h",
+}
+
+
+def get_p0_graph_screenshot_range_display(range_key: str) -> str:
+    """Human label for captions (``6h`` → ``6 hours``)."""
+    rk = (range_key or "").strip().lower()
+    return {
+        "30m": "30 minutes",
+        "1h": "1 hour",
+        "3h": "3 hours",
+        "6h": "6 hours",
+    }.get(rk, rk or "dashboard")
+
+
+def build_p0_graph_screenshot_url_for_range(range_key: str) -> str:
+    """
+    Build Grafana URL for a time window by setting ``from=`` on ``P0_GRAPH_SCREENSHOT_URL``.
+    Keys: ``30m``, ``1h``, ``3h``, ``6h``.
+    """
+    reload_env_runtime()
+    base = get_p0_graph_screenshot_url()
+    if not base:
+        return ""
+    rk = (range_key or "").strip().lower()
+    from_val = _GRAFANA_RANGE_FROM_QUERY.get(rk)
+    if not from_val:
+        return base
+    parsed = urlparse(base)
+    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)]
+    replaced = False
+    out_q: List[Tuple[str, str]] = []
+    for k, v in q:
+        if k.lower() == "from":
+            out_q.append((k, from_val))
+            replaced = True
+        else:
+            out_q.append((k, v))
+    if not replaced:
+        out_q.append(("from", from_val))
+    if not any(k.lower() == "to" for k, _ in out_q):
+        out_q.append(("to", "now"))
+    return urlunparse(parsed._replace(query=urlencode(out_q)))
+
+
+def get_p0_graph_screenshot_auto_range_keys() -> List[str]:
+    """
+    Ranges posted automatically on P0 start and on each interval repeat.
+    Default ``6h,3h,1h``. ``30m`` is **not** included (on-demand only).
+
+    Env: ``P0_GRAPH_SCREENSHOT_AUTO_RANGES=6h,3h,1h``
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_AUTO_RANGES") or "6h,3h,1h").strip()
+    out: List[str] = []
+    for seg in raw.split(","):
+        rk = seg.strip().lower()
+        if rk in _GRAFANA_RANGE_FROM_QUERY and rk not in out:
+            out.append(rk)
+    return out or ["6h", "3h", "1h"]
+
+
+def p0_graph_screenshot_on_demand_enabled() -> bool:
+    """Typed screenshot requests in allowed chats (includes ``30m``). Default on when screenshots enabled."""
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_on_demand_chat_ids() -> FrozenSet[str]:
+    """
+    Chats that may request on-demand screenshots. Empty = incident detection groups +
+    ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``.
+
+    Env: ``P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS`` (comma ``oc_``).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS") or "").strip()
+    return _parse_oc_chat_id_list(raw, warn_prefix="P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS")
 
 
 def get_p0_graph_screenshot_append_kiosk() -> bool:

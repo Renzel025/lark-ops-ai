@@ -112,9 +112,8 @@ def _graph_screenshot_interval_tick() -> None:
         if not _has_active_p0_session():
             log.info("p0 graph screenshot interval: no active P0 — stopped")
             return
-        url = _config.get_p0_graph_screenshot_url()
         chat_id = _config.get_p0_graph_screenshot_target_chat_id()
-        if not url or not chat_id:
+        if not _config.get_p0_graph_screenshot_url() or not chat_id:
             return
         tok = _lark.get_tenant_token_primary()
         if not tok:
@@ -131,7 +130,7 @@ def _graph_screenshot_interval_tick() -> None:
                     "p0 graph screenshot interval: repeat capture (%s min, P0 still active)",
                     mins,
                 )
-                _capture_and_post_thread_body(tok, url, chat_id, label)
+                _capture_and_post_ranges_thread_body(tok, chat_id, label)
     except Exception as e:
         log.warning("p0 graph screenshot interval tick failed: %s", e, exc_info=True)
     finally:
@@ -2280,22 +2279,36 @@ def _format_captured_at(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def _capture_and_post_thread_body(
-    token: str, url: str, chat_id: str, source_label: str
+def schedule_on_demand_graph_screenshot(
+    tenant_token: str,
+    post_chat_id: str,
+    range_key: str,
+    source_chat_label: str = "",
 ) -> None:
-    global _capture_busy
-    with _capture_busy_lock:
-        _capture_busy = True
-    try:
-        _capture_and_post(token, url, chat_id, source_label)
-    finally:
-        with _capture_busy_lock:
-            _capture_busy = False
+    """On-demand single-range capture (e.g. typed ``screenshot 30 min``)."""
+    from . import config as _config
+
+    tok = (tenant_token or "").strip()
+    cid = (post_chat_id or "").strip()
+    rk = (range_key or "").strip().lower()
+    if not tok or not cid or not _config.build_p0_graph_screenshot_url_for_range(rk):
+        return
+
+    label = (source_chat_label or "").strip()
+
+    def _run() -> None:
+        _capture_and_post_ranges_thread_body(tok, cid, label, [rk])
+
+    threading.Thread(
+        target=_run,
+        name=f"p0-graph-screenshot-{rk}",
+        daemon=True,
+    ).start()
 
 
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
     """
-    Non-blocking: starts a daemon thread to screenshot ``P0_GRAPH_SCREENSHOT_URL`` and post to
+    Non-blocking: captures Grafana for each auto range (default **6h**, **3h**, **1h**) and posts to
     ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Only runs for **P0** when env is enabled.
 
     If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
@@ -2307,9 +2320,8 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
 
     if not _config.p0_graph_screenshot_enabled():
         return
-    url = _config.get_p0_graph_screenshot_url()
     chat_id = _config.get_p0_graph_screenshot_target_chat_id()
-    if not url or not chat_id:
+    if not _config.get_p0_graph_screenshot_url() or not chat_id:
         log.debug("p0 graph screenshot: disabled or missing URL/target chat")
         return
     tok = (tenant_token or "").strip()
@@ -2319,13 +2331,9 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
     label = (source_chat_label or "").strip()
 
     def _run() -> None:
-        try:
-            _capture_and_post_thread_body(tok, url, chat_id, label)
-        except Exception as e:
-            log.warning("p0 graph screenshot: thread failed: %s", e, exc_info=True)
+        _capture_and_post_ranges_thread_body(tok, chat_id, label)
 
-    t = threading.Thread(target=_run, name="p0-graph-screenshot", daemon=True)
-    t.start()
+    threading.Thread(target=_run, name="p0-graph-screenshot", daemon=True).start()
     start_p0_graph_screenshot_interval(label)
 
 
@@ -2404,6 +2412,8 @@ def post_p0_graph_screenshots_to_chat(
     pngs: List[bytes],
     captured_at: str,
     source_label: str = "",
+    *,
+    range_label: str = "",
 ) -> None:
     """
     Post the **As of:** line + image part(s) to a Lark group — same as the P0 auto flow.
@@ -2418,9 +2428,13 @@ def post_p0_graph_screenshots_to_chat(
         log.warning("p0 graph screenshot: post skipped — missing token or chat_id")
         return
     cap = _config.get_p0_graph_screenshot_caption()
+    range_disp = _config.get_p0_graph_screenshot_range_display(range_label) if range_label else ""
     if cap:
         text = cap.replace("{captured_at}", captured_at)
         text = text.replace("{label}", (source_label or "").strip())
+        text = text.replace("{range}", range_disp)
+    elif range_disp:
+        text = f"As of: {captured_at} · Last {range_disp}"
     else:
         text = f"As of: {captured_at}"
     st_t, _ = _lark.post_text_to_chat(cid, tok, text)
@@ -2465,12 +2479,70 @@ def post_p0_graph_screenshots_to_chat(
             )
 
 
-def _capture_and_post(token: str, url: str, chat_id: str, source_label: str) -> None:
-    pngs, captured_at = _capture_png_payloads()
+def _capture_and_post(
+    token: str,
+    url: str,
+    chat_id: str,
+    source_label: str,
+    *,
+    range_label: str = "",
+) -> None:
+    pngs, captured_at = _capture_png_payloads(url)
     if not pngs:
-        log.warning("p0 graph screenshot: capture returned empty")
+        log.warning(
+            "p0 graph screenshot: capture returned empty range=%s url_head=%r",
+            range_label or "default",
+            (url or "")[:80],
+        )
         return
-    post_p0_graph_screenshots_to_chat(token, chat_id, pngs, captured_at, source_label)
+    post_p0_graph_screenshots_to_chat(
+        token, chat_id, pngs, captured_at, source_label, range_label=range_label
+    )
+
+
+def _capture_and_post_ranges(
+    token: str,
+    chat_id: str,
+    source_label: str,
+    range_keys: List[str],
+) -> None:
+    """Capture and post each time range sequentially (one Playwright session per range)."""
+    from . import config as _config
+
+    keys = [k for k in (range_keys or []) if k]
+    if not keys:
+        keys = _config.get_p0_graph_screenshot_auto_range_keys()
+    log.info(
+        "p0 graph screenshot: capture started ranges=%s label=%r chat_id_tail=%s",
+        keys,
+        (source_label or "")[:48],
+        chat_id[-12:] if chat_id and len(chat_id) > 12 else chat_id,
+    )
+    for rk in keys:
+        url = _config.build_p0_graph_screenshot_url_for_range(rk)
+        if not url:
+            log.warning("p0 graph screenshot: skip range=%s (no URL)", rk)
+            continue
+        log.info("p0 graph screenshot: capturing range=%s", rk)
+        _capture_and_post(token, url, chat_id, source_label, range_label=rk)
+
+
+def _capture_and_post_ranges_thread_body(
+    token: str,
+    chat_id: str,
+    source_label: str,
+    range_keys: Optional[List[str]] = None,
+) -> None:
+    global _capture_busy
+    with _capture_busy_lock:
+        _capture_busy = True
+    try:
+        _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
+    except Exception as e:
+        log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
+    finally:
+        with _capture_busy_lock:
+            _capture_busy = False
 
 
 def _wait_for_grafana_panels_if_configured(page) -> None:
@@ -2674,7 +2746,7 @@ def open_grafana_dashboard_for_inspection() -> int:
     return 0
 
 
-def _capture_png_payloads() -> Tuple[List[bytes], str]:
+def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
     With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` and ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT`` > 1 (or split
@@ -2688,7 +2760,7 @@ def _capture_png_payloads() -> Tuple[List[bytes], str]:
         log.warning("p0 graph screenshot: playwright not installed (pip install playwright; playwright install chromium)")
         return [], ""
 
-    raw_url = _config.get_p0_graph_screenshot_url()
+    raw_url = (capture_url or "").strip() or _config.get_p0_graph_screenshot_url()
     kiosk_on = _config.get_p0_graph_screenshot_append_kiosk()
     url = _prepare_grafana_capture_url(raw_url, kiosk=kiosk_on)
     if kiosk_on and url != raw_url:

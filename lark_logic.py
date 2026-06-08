@@ -30,6 +30,7 @@ from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_decl
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card, build_no_active_p0_session_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
+from p0_logic.graph_screenshot_request import try_handle_graph_screenshot_request
 from p0_logic import (
     start_p0,
     cancel_p0_session,
@@ -1099,6 +1100,11 @@ def process_message(
                     log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
+        if try_handle_graph_screenshot_request(
+            text_raw, chat_id, tenant_token or token, source_chat_name
+        ):
+            return
+
         # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
         pend = get_p1_prompt_pending(session_source)
         if pend:
@@ -1355,6 +1361,14 @@ def process_message(
             "Prompt/mirror session UX: ignoring message (use detection group to type p0/p1) message_chat=%s",
             chat_id,
         )
+        return
+
+    # ---------------------------------------------------------
+    # On-demand Grafana screenshot (hub / allowed chats)
+    # ---------------------------------------------------------
+    if text_raw and try_handle_graph_screenshot_request(
+        text_raw, chat_id, tenant_token or token, source_chat_name
+    ):
         return
 
     # ---------------------------------------------------------
