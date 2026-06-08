@@ -121,6 +121,47 @@ def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:
     return r.status_code, (r.text or "")
 
 
+def add_message_reaction(message_id: str, token: str, emoji_type: str) -> Tuple[int, str]:
+    """
+    Add an emoji reaction to a message (Lark ``im:v1/messages/:id/reactions``).
+    ``emoji_type`` examples: ``OnIt``, ``OK``, ``DONE``, ``ERROR`` — see Lark emoji docs.
+    Requires ``im:message.reactions:write_only`` (or ``im:message``) on the app.
+    """
+    mid = (message_id or "").strip()
+    tok = (token or "").strip()
+    et = (emoji_type or "").strip()
+    if not mid or not tok or not et:
+        return 0, ""
+    url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}/reactions"
+    payload = {"reaction_type": {"emoji_type": et}}
+    try:
+        r = _lark_http().post(
+            url,
+            headers={"Authorization": f"Bearer {tok}"},
+            json=payload,
+            **_timeout_kw(),
+        )
+        body = r.text or ""
+        if r.status_code != 200:
+            log.warning("add_message_reaction HTTP=%s emoji=%s mid_tail=%s", r.status_code, et, mid[-12:])
+            return r.status_code, body
+        try:
+            jb = r.json()
+            if jb.get("code") != 0:
+                log.warning(
+                    "add_message_reaction code=%s emoji=%s msg=%s",
+                    jb.get("code"),
+                    et,
+                    (jb.get("msg") or "")[:200],
+                )
+        except Exception:
+            pass
+        return r.status_code, body
+    except Exception as e:
+        log.warning("add_message_reaction failed emoji=%s: %s", et, e)
+        return 0, str(e)
+
+
 def upload_image_bytes_for_im_message(token: str, image_bytes: bytes, filename: str = "graph.png") -> str:
     """
     Upload PNG/JPEG bytes for a **chat message** image. Returns ``image_key`` (``img_...``) or "".

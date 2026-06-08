@@ -253,6 +253,19 @@ def _chat_allows_on_demand(chat_id: str) -> bool:
     return cid in _config.get_incident_group_chat_ids()
 
 
+def _react_to_request_message(token: str, message_id: str, emoji_type: str) -> None:
+    if not _config.get_p0_graph_screenshot_react_enabled():
+        return
+    mid = (message_id or "").strip()
+    tok = (token or "").strip()
+    et = (emoji_type or "").strip()
+    if not mid or not tok or not et:
+        return
+    st, _ = _lark.add_message_reaction(mid, tok, et)
+    if st == 200:
+        log.info("graph screenshot on-demand: reaction %s on request msg tail=%s", et, mid[-12:])
+
+
 def try_handle_graph_screenshot_request(
     text: str,
     chat_id: str,
@@ -261,6 +274,7 @@ def try_handle_graph_screenshot_request(
     *,
     mention_names: Optional[List[str]] = None,
     groq_key: str = "",
+    message_id: str = "",
 ) -> bool:
     """
     If ``text`` requests an on-demand Grafana screenshot, start capture and return True.
@@ -351,8 +365,15 @@ def try_handle_graph_screenshot_request(
         f"📊 On it — capturing Grafana dashboard (last **{range_disp}**). "
         f"Please wait ~{_estimate_on_demand_wait_label()}…",
     )
+    _react_to_request_message(tok, message_id, _config.get_p0_graph_screenshot_react_queued_emoji())
     try:
-        schedule_on_demand_graph_screenshot(tok, cid, range_key, label)
+        schedule_on_demand_graph_screenshot(
+            tok,
+            cid,
+            range_key,
+            label,
+            trigger_message_id=message_id,
+        )
     except Exception as e:
         log.warning("graph screenshot on-demand: schedule failed: %s", e, exc_info=True)
         _post_on_demand_reply(

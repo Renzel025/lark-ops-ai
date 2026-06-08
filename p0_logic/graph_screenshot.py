@@ -74,16 +74,48 @@ _BROWSER_POOL_LOCK = threading.Lock()
 _BROWSER_POOL: Dict[str, Any] = {}
 
 
-def _capture_ctx_set(*, on_demand: bool = False, force_full: bool = False) -> None:
+def _capture_ctx_set(
+    *,
+    on_demand: bool = False,
+    force_full: bool = False,
+    trigger_message_id: str = "",
+) -> None:
     _capture_ctx.on_demand = on_demand
     _capture_ctx.force_full = force_full
     _capture_ctx.error = ""
+    _capture_ctx.trigger_message_id = (trigger_message_id or "").strip()
 
 
 def _capture_ctx_clear() -> None:
     _capture_ctx.on_demand = False
     _capture_ctx.force_full = False
     _capture_ctx.error = ""
+    _capture_ctx.trigger_message_id = ""
+
+
+def _get_trigger_message_id() -> str:
+    return str(getattr(_capture_ctx, "trigger_message_id", "") or "").strip()
+
+
+def _react_to_trigger_message(token: str, emoji_type: str) -> None:
+    """Add Lark emoji reaction to the on-demand request message (OTE-AI style)."""
+    from . import config as _config
+    from . import lark_client as _lark
+
+    if not _config.get_p0_graph_screenshot_react_enabled():
+        return
+    if not _is_on_demand_capture():
+        return
+    et = (emoji_type or "").strip()
+    if not et:
+        return
+    mid = _get_trigger_message_id()
+    tok = (token or "").strip()
+    if not mid or not tok:
+        return
+    st, _ = _lark.add_message_reaction(mid, tok, et)
+    if st == 200:
+        log.info("p0 graph screenshot: reaction %s on trigger msg tail=%s", et, mid[-12:])
 
 
 def _set_capture_error(msg: str) -> None:
@@ -2336,6 +2368,8 @@ def schedule_on_demand_graph_screenshot(
     post_chat_id: str,
     range_key: str,
     source_chat_label: str = "",
+    *,
+    trigger_message_id: str = "",
 ) -> None:
     """On-demand single-range capture (e.g. typed ``screenshot 30 min``)."""
     from . import config as _config
@@ -2347,9 +2381,17 @@ def schedule_on_demand_graph_screenshot(
         return
 
     label = (source_chat_label or "").strip()
+    trig_mid = (trigger_message_id or "").strip()
 
     def _run() -> None:
-        _capture_and_post_ranges_thread_body(tok, cid, label, [rk], on_demand=True)
+        _capture_and_post_ranges_thread_body(
+            tok,
+            cid,
+            label,
+            [rk],
+            on_demand=True,
+            trigger_message_id=trig_mid,
+        )
 
     threading.Thread(
         target=_run,
@@ -2594,10 +2636,17 @@ def _capture_and_post(
                 range_label=range_label,
                 reason=detail,
             )
+            from . import config as _cfg_fail
+
+            _react_to_trigger_message(token, _cfg_fail.get_p0_graph_screenshot_react_failed_emoji())
         return False
     post_p0_graph_screenshots_to_chat(
         token, chat_id, pngs, captured_at, source_label, range_label=range_label
     )
+    if _is_on_demand_capture():
+        from . import config as _cfg_ok
+
+        _react_to_trigger_message(token, _cfg_ok.get_p0_graph_screenshot_react_done_emoji())
     return True
 
 
@@ -2635,11 +2684,16 @@ def _capture_and_post_ranges_thread_body(
     range_keys: Optional[List[str]] = None,
     *,
     on_demand: bool = False,
+    trigger_message_id: str = "",
 ) -> None:
     global _capture_busy
     with _capture_busy_lock:
         _capture_busy = True
-    _capture_ctx_set(on_demand=on_demand, force_full=False)
+    _capture_ctx_set(
+        on_demand=on_demand,
+        force_full=False,
+        trigger_message_id=trigger_message_id,
+    )
     try:
         _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
     except Exception as e:
@@ -2651,6 +2705,9 @@ def _capture_and_post_ranges_thread_body(
                 chat_id,
                 reason=str(e)[:400],
             )
+            from . import config as _cfg_ex
+
+            _react_to_trigger_message(token, _cfg_ex.get_p0_graph_screenshot_react_failed_emoji())
     finally:
         _capture_ctx_clear()
         with _capture_busy_lock:

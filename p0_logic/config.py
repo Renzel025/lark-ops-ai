@@ -1890,6 +1890,34 @@ def get_p0_graph_screenshot_on_demand_band_max_wait_ms() -> int:
     return max(3000, min(n, 30_000))
 
 
+def get_p0_graph_screenshot_react_enabled() -> bool:
+    """
+    Emoji reactions on the user's on-demand request message (``OnIt`` → ``DONE``).
+    Default **on**. Requires Lark scope ``im:message.reactions:write_only``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_REACT") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_react_queued_emoji() -> str:
+    """Reaction when capture starts. Default ``OnIt`` (Lark emoji_type)."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_REACT_QUEUED") or "OnIt").strip() or "OnIt"
+
+
+def get_p0_graph_screenshot_react_done_emoji() -> str:
+    """Reaction when screenshots post successfully. Default ``DONE``."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_REACT_DONE") or "DONE").strip() or "DONE"
+
+
+def get_p0_graph_screenshot_react_failed_emoji() -> str:
+    """Reaction when capture fails. Default ``ERROR``. Empty = skip."""
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_REACT_FAILED") or "ERROR").strip()
+
+
 def get_p0_group_overview_edit_enabled() -> bool:
     """
     When True, group overview cards get an **Edit overview** button; Save in DM PATCHes that group message.

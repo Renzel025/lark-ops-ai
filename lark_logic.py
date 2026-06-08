@@ -1107,6 +1107,7 @@ def process_message(
             source_chat_name,
             mention_names=mention_names,
             groq_key=groq_key,
+            message_id=message_id,
         ):
             return
 
@@ -1378,6 +1379,7 @@ def process_message(
         source_chat_name,
         mention_names=mention_names,
         groq_key=groq_key,
+        message_id=message_id,
     ):
         return
 
