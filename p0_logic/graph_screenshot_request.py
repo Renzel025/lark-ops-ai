@@ -358,12 +358,10 @@ def try_handle_graph_screenshot_request(
     from .graph_screenshot import schedule_on_demand_graph_screenshot
 
     label = (source_chat_label or "").strip()
-    range_disp = _config.get_p0_graph_screenshot_range_display(range_key)
     _post_on_demand_reply(
         cid,
         tok,
-        f"📊 On it — capturing Grafana dashboard (last **{range_disp}**). "
-        f"Please wait ~{_estimate_on_demand_wait_label()}…",
+        f"📊 On it — capturing Grafana dashboard. Please wait ~{_estimate_on_demand_wait_label()}…",
     )
     _react_to_request_message(tok, message_id, _config.get_p0_graph_screenshot_react_queued_emoji())
     try:
