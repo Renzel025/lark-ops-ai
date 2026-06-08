@@ -422,6 +422,14 @@ def post_card_to_user_cross_app(
         perf_log("lark post_card_to_user_cross_app", t0)
 
 
+def build_chat_open_applink(chat_id: str) -> str:
+    """AppLink that opens an existing group chat (member must already be in the group)."""
+    cid = (chat_id or "").strip()
+    if not cid.startswith("oc_"):
+        return ""
+    return f"https://applink.feishu.cn/client/chat/open?openChatId={quote(cid, safe='')}"
+
+
 def get_group_chat_name(chat_id: str, token: str) -> str:
     """Resolve a group chat's display name (for card titles)."""
     chat_id = (chat_id or "").strip()

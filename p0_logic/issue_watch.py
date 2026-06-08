@@ -34,6 +34,7 @@ _COOLDOWN: Dict[str, float] = {}
 _MESSAGE_DEDUPE: Dict[str, float] = {}
 _MESSAGE_DEDUPE_LOCK = threading.Lock()
 _MESSAGE_DEDUPE_TTL_SEC = 30.0
+_ALERTED_SOURCE_MESSAGE_IDS: Dict[str, float] = {}
 
 
 def _now_ts() -> float:
@@ -43,6 +44,56 @@ def _now_ts() -> float:
 def _format_alert_time() -> str:
     """Server-local clock (ose-bot is MYT); no zoneinfo import (Python 3.8 safe)."""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _format_message_create_time(create_time_ms: str) -> str:
+    """Lark ``create_time`` is milliseconds since epoch."""
+    raw = (create_time_ms or "").strip()
+    if not raw.isdigit():
+        return ""
+    try:
+        sec = int(raw) / 1000.0
+        return datetime.fromtimestamp(sec).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _resolve_group_label(chat_id: str, source_chat_name: str, token: str) -> str:
+    label = (source_chat_name or "").strip()
+    if label:
+        return label
+    label = _config.get_emergency_topic_for_source_chat(chat_id).strip()
+    if label and not label.startswith("oc_"):
+        return label
+    if token:
+        label = _lark.get_group_chat_name(chat_id, token).strip()
+        if label:
+            return label
+    return chat_id
+
+
+def _prune_alerted_message_ids(window_sec: float) -> None:
+    cutoff = _now_ts() - window_sec
+    global _ALERTED_SOURCE_MESSAGE_IDS
+    _ALERTED_SOURCE_MESSAGE_IDS = {
+        mid: ts for mid, ts in _ALERTED_SOURCE_MESSAGE_IDS.items() if ts >= cutoff
+    }
+
+
+def _already_alerted_for_message(message_id: str) -> bool:
+    mid = (message_id or "").strip()
+    if not mid:
+        return False
+    return mid in _ALERTED_SOURCE_MESSAGE_IDS
+
+
+def _mark_alerted_for_message(message_id: str, *, window_min: int) -> None:
+    mid = (message_id or "").strip()
+    if not mid:
+        return
+    with _STORE_LOCK:
+        _prune_alerted_message_ids(float(max(window_min, 60) * 60 * 2))
+        _ALERTED_SOURCE_MESSAGE_IDS[mid] = _now_ts()
 
 
 def _is_player_id_list_message(text: str) -> bool:
@@ -102,6 +153,8 @@ def _try_player_id_followup(
     tenant_token: str,
     *,
     source_chat_name: str = "",
+    message_id: str = "",
+    message_create_time: str = "",
 ) -> bool:
     """Second message with player IDs — attach to recent issue from same sender."""
     if not _is_player_id_list_message(raw):
@@ -132,21 +185,36 @@ def _try_player_id_followup(
         recent["player_ids"] = ids
         recent["players_count"] = player_count
 
+    concern_cd_key = _cooldown_key_for_issue(
+        chat_id,
+        categories,
+        concern,
+        str(recent.get("fingerprint") or "generic"),
+    )
     cd_key = _cooldown_key(chat_id, "player_ids", str(recent.get("fingerprint") or "generic"))
     with _STORE_LOCK:
-        if _cooldown_active(cd_key):
-            log.info("issue_watch: player ID follow-up cooldown key=%s", cd_key)
+        if _cooldown_active(cd_key) or _cooldown_active(concern_cd_key):
+            log.info(
+                "issue_watch: player ID follow-up skipped (recent alert for same issue) chat_id=%s",
+                chat_id,
+            )
             return True
         _set_cooldown(cd_key, max(5, _config.get_p0_issue_watch_cooldown_min() // 2))
 
+    src_mid = str(recent.get("message_id") or "").strip()
+    src_time = _format_message_create_time(str(recent.get("message_create_time") or "")) or _format_alert_time()
+    group_label = _resolve_group_label(chat_id, source_chat_name, tenant_token)
     alert_card = _cards.build_issue_watch_alert_card(
-        group_label=(source_chat_name or "").strip() or chat_id,
+        group_label=group_label,
         categories_md=_format_categories(categories),
         summary=summary,
         concern=_quote_excerpt(concern),
         alert_time=_format_alert_time(),
         players_count=player_count,
         player_ids_md=_format_player_ids_md(ids),
+        source_chat_link=_lark.build_chat_open_applink(chat_id),
+        source_message_time=src_time,
+        supplemental_player_ids=True,
     )
     n = _send_dm_alerts(tenant_token, alert_card)
     log.info(
@@ -314,6 +382,8 @@ def try_handle_issue_watch(
         (sender_open_id or "").strip(),
         tenant_token,
         source_chat_name=source_chat_name,
+        message_id=message_id,
+        message_create_time=message_create_time,
     ):
         return True
     if _should_skip_noise(raw):
@@ -378,6 +448,8 @@ def try_handle_issue_watch(
                 "categories": list(result.get("categories") or []),
                 "player_ids": player_ids,
                 "players_count": max(int(result.get("players_mentioned_in_message") or 0), len(player_ids)),
+                "message_id": (message_id or "").strip(),
+                "message_create_time": (message_create_time or "").strip(),
             }
         )
         reporter_count = _count_unique_reporters(cid, fingerprint, window_sec)
@@ -405,6 +477,11 @@ def try_handle_issue_watch(
         )
         return True
 
+    mid = (message_id or "").strip()
+    if _already_alerted_for_message(mid):
+        log.info("issue_watch: skipped — alert already sent for message_id=%s", mid[:24])
+        return True
+
     cd_key = _cooldown_key_for_issue(cid, categories, raw, fingerprint)
     with _STORE_LOCK:
         if _cooldown_active(cd_key):
@@ -418,16 +495,22 @@ def try_handle_issue_watch(
 
     player_ids = list(result.get("player_ids") or extract_player_ids(raw))
     players_count = max(players_mentioned, len(player_ids))
+    src_time = _format_message_create_time(message_create_time) or _format_alert_time()
+    group_label = _resolve_group_label(cid, source_chat_name, tenant_token)
     alert_card = _cards.build_issue_watch_alert_card(
-        group_label=(source_chat_name or "").strip() or cid,
+        group_label=group_label,
         categories_md=_format_categories(categories),
         summary=str(result.get("summary") or ""),
         concern=_quote_excerpt(raw),
         alert_time=_format_alert_time(),
         players_count=players_count,
         player_ids_md=_format_player_ids_md(player_ids),
+        source_chat_link=_lark.build_chat_open_applink(cid),
+        source_message_time=src_time,
     )
     n = _send_dm_alerts(tenant_token, alert_card)
+    if n > 0 and mid:
+        _mark_alerted_for_message(mid, window_min=cooldown_min)
     log.info(
         "issue_watch: alert sent=%s chat_id=%s fp=%s reporters=%s conf=%.2f categories=%s",
         n,

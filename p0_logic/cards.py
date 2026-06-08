@@ -1491,11 +1491,19 @@ def build_issue_watch_alert_card(
     alert_time: str,
     players_count: int = 0,
     player_ids_md: str = "",
+    source_chat_link: str = "",
+    source_message_time: str = "",
+    supplemental_player_ids: bool = False,
 ) -> Dict[str, Any]:
     """DM card when Claude/keyword detects a player-facing issue in a detection group."""
     title_group = (group_label or "").strip() or "detection group"
     if len(title_group) > 40:
         title_group = title_group[:39] + "…"
+    header_title = (
+        f"🚨 Player IDs — {title_group}"
+        if supplemental_player_ids
+        else f"🚨 Major P0 Detection alert — {title_group}"
+    )
     elements: List[Dict[str, Any]] = [
         {
             "tag": "div",
@@ -1532,19 +1540,53 @@ def build_issue_watch_alert_card(
                 },
             }
         )
-    elements.extend(
-        [
+    if not supplemental_player_ids:
+        elements.append(
             {
                 "tag": "div",
                 "text": {
                     "tag": "plain_text",
                     "content": f"Concern: 「{(concern or '').strip()}」",
                 },
-            },
+            }
+        )
+    elif (concern or "").strip():
+        elements.append(
             {
                 "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**Time:** {(alert_time or '').strip()}"},
-            },
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**Related report:** {(concern or '').strip()}",
+                },
+            }
+        )
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**Time:** {(alert_time or '').strip()}"},
+        }
+    )
+    src_time = (source_message_time or "").strip()
+    chat_link = (source_chat_link or "").strip()
+    if src_time or chat_link:
+        if chat_link and src_time:
+            source_line = f"**Source message:** [{src_time}]({chat_link})"
+        elif chat_link:
+            source_line = f"**Source:** [Open detection group]({chat_link})"
+        else:
+            source_line = f"**Source message time:** {src_time}"
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
+    if chat_link:
+        elements.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "Open detection group"},
+                "type": "primary",
+                "multi_url": {"url": chat_link, "pc_url": chat_link},
+            }
+        )
+    elements.extend(
+        [
             {"tag": "hr"},
             {
                 "tag": "div",
@@ -1562,7 +1604,7 @@ def build_issue_watch_alert_card(
             "template": "red",
             "title": {
                 "tag": "plain_text",
-                "content": f"🚨 Major P0 Detection alert — {title_group}",
+                "content": header_title,
             },
         },
         "body": {"elements": elements},
