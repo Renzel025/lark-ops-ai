@@ -74,12 +74,28 @@ _BROWSER_POOL_LOCK = threading.Lock()
 _BROWSER_POOL: Dict[str, Any] = {}
 
 
-def _capture_ctx_set(*, on_demand: bool = False) -> None:
+def _capture_ctx_set(*, on_demand: bool = False, force_full: bool = False) -> None:
     _capture_ctx.on_demand = on_demand
+    _capture_ctx.force_full = force_full
+    _capture_ctx.error = ""
 
 
 def _capture_ctx_clear() -> None:
     _capture_ctx.on_demand = False
+    _capture_ctx.force_full = False
+    _capture_ctx.error = ""
+
+
+def _set_capture_error(msg: str) -> None:
+    _capture_ctx.error = (msg or "").strip()[:500]
+
+
+def _get_capture_error() -> str:
+    return str(getattr(_capture_ctx, "error", "") or "").strip()
+
+
+def _capture_ctx_force_full() -> bool:
+    return bool(getattr(_capture_ctx, "force_full", False))
 
 
 def _is_on_demand_capture() -> bool:
@@ -89,6 +105,8 @@ def _is_on_demand_capture() -> bool:
 def _effective_fast_capture() -> bool:
     from . import config as _config
 
+    if _capture_ctx_force_full():
+        return False
     if _is_on_demand_capture():
         return _config.get_p0_graph_screenshot_on_demand_fast()
     return _config.get_p0_graph_screenshot_fast_capture()
@@ -2569,11 +2587,12 @@ def _capture_and_post(
             (url or "")[:80],
         )
         if _is_on_demand_capture():
+            detail = _get_capture_error() or "Capture returned no images (Playwright/Grafana)."
             _post_capture_failure_to_chat(
                 token,
                 chat_id,
                 range_label=range_label,
-                reason="Capture returned no images (Playwright/Grafana).",
+                reason=detail,
             )
         return False
     post_p0_graph_screenshots_to_chat(
@@ -2620,11 +2639,18 @@ def _capture_and_post_ranges_thread_body(
     global _capture_busy
     with _capture_busy_lock:
         _capture_busy = True
-    _capture_ctx_set(on_demand=on_demand)
+    _capture_ctx_set(on_demand=on_demand, force_full=False)
     try:
         _capture_and_post_ranges(token, chat_id, source_label, range_keys or [])
     except Exception as e:
+        _set_capture_error(str(e))
         log.warning("p0 graph screenshot: ranges thread failed: %s", e, exc_info=True)
+        if on_demand:
+            _post_capture_failure_to_chat(
+                token,
+                chat_id,
+                reason=str(e)[:400],
+            )
     finally:
         _capture_ctx_clear()
         with _capture_busy_lock:
@@ -2746,11 +2772,15 @@ def _load_grafana_dashboard_for_capture(
     if navigate_only and _is_on_demand_capture() and _effective_fast_capture():
         if not _grafana_on_dashboard_page(page):
             if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
-                raise RuntimeError("Grafana login failed on pooled navigate")
+                raise RuntimeError(
+                    "Grafana login failed — run scripts/grafana_playwright_login_once.py "
+                    "and set P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
+                )
         try:
             page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass
+        _wait_for_grafana_panels_if_configured(page)
         settle = _post_nav_settle_ms()
         if settle > 0:
             page.wait_for_timeout(settle)
@@ -2759,7 +2789,7 @@ def _load_grafana_dashboard_for_capture(
     if not _grafana_auto_login_if_needed(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait):
         raise RuntimeError(
             "Grafana login failed — login form still visible. "
-            "Use scripts/grafana_playwright_login_once.py + P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
+            "Run scripts/grafana_playwright_login_once.py + P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
         )
     if not _grafana_on_dashboard_page(page):
         log.warning(
@@ -2893,6 +2923,7 @@ def _browser_pool_acquire(
         _is_on_demand_capture()
         and _config.get_p0_graph_screenshot_browser_pool_enabled()
         and user_data
+        and not _capture_ctx_force_full()
     ):
         return None
     now = time.time()
@@ -2944,14 +2975,31 @@ def _browser_pool_touch() -> None:
 def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
-    With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` and ``P0_GRAPH_SCREENSHOT_VIEWPORT_SCROLL_COUNT`` > 1 (or split
-    on with default 2), returns one PNG per scroll step (up to 8).
+    On-demand: retries once with full cold capture if the first attempt returns empty.
+    """
+    attempts = 2 if _is_on_demand_capture() else 1
+    for attempt in range(attempts):
+        if attempt > 0:
+            log.info("p0 graph screenshot: on-demand retry — full cold capture (attempt %s)", attempt + 1)
+            _browser_pool_close()
+            _capture_ctx.force_full = True
+        pngs, captured_at = _capture_png_payloads_once(capture_url)
+        if pngs:
+            return pngs, captured_at
+    return [], ""
+
+
+def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
+    """
+    Single Playwright capture attempt. With ``P0_GRAPH_SCREENSHOT_VIEWPORT_ONLY=1`` and scroll count > 1,
+    returns one PNG per scroll step (up to 8).
     """
     from . import config as _config
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
+        _set_capture_error("Playwright not installed on server.")
         log.warning("p0 graph screenshot: playwright not installed (pip install playwright; playwright install chromium)")
         return [], ""
 
@@ -3226,22 +3274,21 @@ def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes
         )
         try:
             _load_grafana_dashboard_for_capture(page, url, navigate_only=reused)
+            out = _snap_with_blank_viewport_fallback(page)
+            if out[0]:
+                _browser_pool_touch()
+                return out
+            log.warning("p0 graph screenshot: pooled snap returned no images — cold fallback")
+            _set_capture_error("Pooled capture produced no images.")
+            _browser_pool_close()
         except RuntimeError as e:
+            _set_capture_error(str(e))
             log.error("p0 graph screenshot: %s", e)
             _browser_pool_close()
-            return [], ""
         except Exception as e:
-            log.warning("p0 graph screenshot: pooled navigate failed — reset pool: %s", e)
+            _set_capture_error(f"Pooled capture error: {e}")
+            log.warning("p0 graph screenshot: pooled capture failed — cold fallback: %s", e)
             _browser_pool_close()
-            return [], ""
-        try:
-            out = _snap_with_blank_viewport_fallback(page)
-            _browser_pool_touch()
-            return out
-        except Exception as e:
-            log.warning("p0 graph screenshot: pooled snap failed — reset pool: %s", e)
-            _browser_pool_close()
-            return [], ""
 
     with sync_playwright() as p:
         if user_data:
@@ -3272,9 +3319,13 @@ def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes
                 try:
                     _load_grafana_dashboard_for_capture(page, url)
                 except RuntimeError as e:
+                    _set_capture_error(str(e))
                     log.error("p0 graph screenshot: %s", e)
                     return [], ""
-                return _snap_with_blank_viewport_fallback(page)
+                out = _snap_with_blank_viewport_fallback(page)
+                if not out[0]:
+                    _set_capture_error("Cold capture (persistent profile) returned no images.")
+                return out
             finally:
                 context.close()
         browser = p.chromium.launch(headless=headless, args=launch_args)
@@ -3296,8 +3347,12 @@ def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes
             try:
                 _load_grafana_dashboard_for_capture(page, url)
             except RuntimeError as e:
+                _set_capture_error(str(e))
                 log.error("p0 graph screenshot: %s", e)
                 return [], ""
-            return _snap_with_blank_viewport_fallback(page)
+            out = _snap_with_blank_viewport_fallback(page)
+            if not out[0]:
+                _set_capture_error("Cold capture returned no images — check Grafana URL/login.")
+            return out
         finally:
             browser.close()

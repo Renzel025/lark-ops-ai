@@ -1870,12 +1870,12 @@ def get_p0_graph_screenshot_on_demand_fast() -> bool:
 
 def get_p0_graph_screenshot_browser_pool_enabled() -> bool:
     """
-    Keep Chromium open between on-demand captures (~30–60s faster). Default **on**.
-    Requires ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR`` (logged-in Grafana session).
-    ``P0_GRAPH_SCREENSHOT_BROWSER_POOL=0`` to cold-start every capture.
+    Keep Chromium open between on-demand captures (~30–60s faster). Default **off** until
+    ``P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR`` has a logged-in Grafana session.
+    Set ``P0_GRAPH_SCREENSHOT_BROWSER_POOL=1`` after ``grafana_playwright_login_once.py``.
     """
     reload_env_runtime()
-    v = (os.getenv("P0_GRAPH_SCREENSHOT_BROWSER_POOL") or "1").strip().lower()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_BROWSER_POOL") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
