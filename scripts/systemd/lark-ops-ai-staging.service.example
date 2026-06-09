@@ -1,0 +1,22 @@
+[Unit]
+Description=Lark Ops AI — STAGING (dev server, separate from production)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/root/lark-ops-ai
+EnvironmentFile=/root/lark-ops-ai/.env
+Environment=PYTHONUNBUFFERED=1
+# Do NOT set ENV_PROFILE=dev — staging uses one full .env (env.staging.example)
+StandardOutput=journal
+StandardError=journal
+
+ExecStart=/usr/local/bin/python3.8 -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info --access-log --workers 1
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

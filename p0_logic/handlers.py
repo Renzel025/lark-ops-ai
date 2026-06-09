@@ -1751,6 +1751,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             prev = _drafts.get_preview(sender_open_id) or {}
             preview_mid = str(prev.get("preview_message_id") or "").strip()
             edit_mid = str(prev.get("edit_message_id") or "").strip()
+            hint_mid = str(prev.get("issue_watch_declare_hint_message_id") or "").strip()
+            manual_mid = str(prev.get("issue_watch_declare_manual_message_id") or "").strip()
             lab, pr = _dm_card_meta(sender_open_id)
             src_inc = str(prev.get("source_incident_chat_id") or "").strip()
             standalone_cancel = src_inc == _session.STANDALONE_DM_SOURCE_CHAT_ID
@@ -1782,6 +1784,17 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                             sender_open_id,
                             (body or "")[:400],
                         )
+            for extra_mid in (hint_mid, manual_mid):
+                if not extra_mid:
+                    continue
+                st_x, body_x = _lark.recall_im_message(tenant_token, extra_mid)
+                if st_x != 200:
+                    log.warning(
+                        "issue watch declare DM recall on cancel failed HTTP=%s open_id=%s body=%s",
+                        st_x,
+                        sender_open_id,
+                        (body_x or "")[:300],
+                    )
             _drafts.clear_preview(sender_open_id)
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)

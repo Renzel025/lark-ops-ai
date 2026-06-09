@@ -24,9 +24,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def resolve_env_file_path() -> str:
     """
-    Same rule as ``main._load_dotenv_early``: ``ENV_PATH`` if set, else repo ``.env`` if it exists,
-    else legacy default. Avoids ``reload_env_runtime`` reading a *different* file than startup and
-    wiping keys with empty placeholders.
+    Primary env file for logging / legacy single-file mode.
+
+    Dev overlay mode (``ENV_PROFILE=dev``) uses ``resolve_env_layer_paths()`` instead.
     """
     raw = (os.getenv("ENV_PATH") or "").strip()
     if raw:
@@ -37,22 +37,62 @@ def resolve_env_file_path() -> str:
     return "/home/ubuntu/lark-ops-ai/.env"
 
 
+def resolve_env_layer_paths() -> List[str]:
+    """
+    Env files to merge in order (later wins).
+
+    **Dev:** ``ENV_PROFILE=dev`` → ``.env`` (secrets) + ``.env.dev`` (routing overrides).
+    Optional ``ENV_OVERLAY=/path`` adds a second file on top of ``.env`` (any profile).
+
+    **Prod / server:** single file from ``ENV_PATH`` or repo ``.env`` (unchanged).
+    """
+    overlay = (os.getenv("ENV_OVERLAY") or "").strip()
+    profile = (os.getenv("ENV_PROFILE") or "").strip().lower()
+    base = _REPO_ROOT / ".env"
+    if profile == "dev" or overlay:
+        paths: List[str] = []
+        if base.is_file():
+            paths.append(str(base))
+        ov = overlay or str(_REPO_ROOT / ".env.dev")
+        if Path(ov).is_file() and ov not in paths:
+            paths.append(ov)
+        if paths:
+            return paths
+    return [resolve_env_file_path()]
+
+
+def _merge_dotenv_files_into_environ(paths: List[str]) -> None:
+    if not dotenv_values:
+        return
+    merged: Dict[str, str] = {}
+    for path in paths:
+        try:
+            values = dotenv_values(path)
+            for k, v in (values or {}).items():
+                if v is None:
+                    continue
+                sv = str(v).strip()
+                if sv:
+                    merged[k] = sv
+        except Exception as e:
+            log.error("Failed to read env file %s: %s", path, e)
+    for k, v in merged.items():
+        os.environ[k] = v
+
+
+def apply_env_layers() -> List[str]:
+    """Load env file(s) into ``os.environ``. Returns paths applied."""
+    paths = resolve_env_layer_paths()
+    _merge_dotenv_files_into_environ(paths)
+    return paths
+
+
 ENV_PATH = resolve_env_file_path()
 
 
 def reload_env_runtime() -> None:
-    if not dotenv_values:
-        return
     try:
-        path = resolve_env_file_path()
-        values = dotenv_values(path)
-        for k, v in (values or {}).items():
-            if v is None:
-                continue
-            sv = str(v).strip()
-            if not sv:
-                continue  # do not overwrite with blank (common in a second .env file)
-            os.environ[k] = sv
+        apply_env_layers()
     except Exception as e:
         log.error("Failed to reload .env: %s", e)
 

@@ -282,8 +282,8 @@ def _summary_with_players(
             return f"{players} players cannot withdraw"
         if "deposit_issues" in categories:
             if players == 1:
-                return "1 player cannot deposit"
-            return f"{players} players cannot deposit"
+                return "1 player cannot deposit on CP website"
+            return f"{players} players cannot deposit on CP website"
         return f"{base_summary} ({players} player(s))"
     if re.search(r"(?is)\bplayers\b", text) and "deposit_issues" in categories:
         return "Players cannot deposit on CP website"

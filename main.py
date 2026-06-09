@@ -40,25 +40,19 @@ except ImportError:
 
 def _load_dotenv_early() -> None:
     """
-    Load ``ENV_PATH`` (or repo ``.env``) via python-dotenv.
+    Load env via ``p0_logic.config.apply_env_layers``.
 
-    systemd ``EnvironmentFile`` can mis-parse lines with spaces/UTF-8; the Slack token
-    then never reaches the process. ``load_dotenv(..., override=True)`` re-reads the
-    same file with python-dotenv so ``SLACK_BOT_TOKEN`` and maps are present.
+    **Dev:** ``ENV_PROFILE=dev`` merges repo ``.env`` + ``.env.dev`` (secrets once, dev routing in overlay).
+    **Prod:** single ``ENV_PATH`` / ``.env`` (unchanged).
     """
     try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    repo_root = Path(__file__).resolve().parent
-    raw = (os.getenv("ENV_PATH") or "").strip()
-    path = Path(raw) if raw else (repo_root / ".env")
-    if not path.is_file():
-        return
-    try:
-        load_dotenv(path, encoding="utf-8", override=True)
-    except TypeError:
-        load_dotenv(path, override=True)
+        from p0_logic.config import apply_env_layers
+
+        paths = apply_env_layers()
+        if paths:
+            logging.getLogger("lark-ops-ai").info("env layers loaded: %s", " → ".join(paths))
+    except Exception as e:
+        logging.getLogger("lark-ops-ai").warning("env load failed: %s", e)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")

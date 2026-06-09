@@ -163,6 +163,30 @@ def _primary_category_label(categories_md: str) -> str:
     return ""
 
 
+def _category_issue_stem(cat: str) -> str:
+    """Keyword in summary that already implies the category label (skip redundant prefix)."""
+    key = (cat or "").strip().lower()
+    stems = {
+        "deposit issues": "deposit",
+        "login issues": "login",
+        "withdrawal issues": "withdraw",
+        "registration failures": "register",
+        "website downtime": "website",
+        "backend downtime": "backend",
+        "gameplay outage": "game",
+    }
+    return stems.get(key, "")
+
+
+def _strip_account_ids_from_concern(concern: str) -> str:
+    t = (concern or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"(?is)\bAccount:?\s*[\d,\s]+$", "", t).strip()
+    t = re.sub(r"(?is)\b(?:player\s+)?(?:id|ids):?\s*[\d,\s]+$", "", t).strip()
+    return t
+
+
 def build_overview_fields_from_alert(
     snapshot: Dict[str, Any],
     tenant_token: str,
@@ -178,9 +202,15 @@ def build_overview_fields_from_alert(
     except (TypeError, ValueError):
         n = len(player_ids)
 
-    issue = summary or concern
-    if cat and cat.lower() not in (issue or "").lower():
-        issue = f"{cat}: {summary}" if summary else cat
+    concern_issue = _strip_account_ids_from_concern(concern)
+    issue = summary or concern_issue
+    stem = _category_issue_stem(cat)
+    cat_redundant = (
+        (cat and cat.lower() in (issue or "").lower())
+        or (stem and stem in (issue or "").lower())
+    )
+    if cat and not cat_redundant and not summary:
+        issue = cat
     issue = (issue or "").strip() or "Not specified"
 
     id_blob = ", ".join(player_ids[:24])
@@ -326,20 +356,14 @@ def _post_suggested_overview_preview(
             oid,
             tok,
             "📝 **P0 declared** — suggested overview from Issue Watch is below. "
-            "Tap **Send to group** to keep it, or **Build overview manually** to start fresh.",
+            "Tap **Send to group** to keep it. "
+            "Press **Cancel** if you do not need this auto-generated overview — "
+            "then paste text and screenshots in the usual **Build overview** flow.",
         )
         hint_mid = _lark.parse_im_message_id_from_response(body_h) if st_h == 200 else ""
-        manual_card = _cards.build_issue_watch_declare_manual_card(
-            issue_watch_alert_key=(alert_key or "").strip(),
-            source_incident_chat_id=src,
-            target_chat=tgt,
-            source_chat_label=lab,
-        )
-        _st_m, _body_m, manual_mid = _lark.post_card_to_open_id(oid, tok, manual_card)
         _drafts.patch_preview_fields(
             oid,
             issue_watch_declare_hint_message_id=hint_mid,
-            issue_watch_declare_manual_message_id=manual_mid,
         )
     elif not _session.dm_preview_allowed_for_incident(src, tgt):
         _lark.post_text_to_open_id(
