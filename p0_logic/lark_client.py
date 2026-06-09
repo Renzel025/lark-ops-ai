@@ -121,6 +121,45 @@ def post_text_to_chat(chat_id: str, token: str, text: str) -> Tuple[int, str]:
     return r.status_code, (r.text or "")
 
 
+def post_text_reply_in_thread(
+    chat_id: str,
+    token: str,
+    text: str,
+    root_message_id: str,
+) -> Tuple[int, str]:
+    """
+    Reply in the thread rooted at ``root_message_id`` (Lark ``root_id`` on send message).
+    Use the source concern message id when acknowledging Issue Watch detection reports.
+    """
+    cid = (chat_id or "").strip()
+    tok = (token or "").strip()
+    root = (root_message_id or "").strip()
+    body_text = (text or "").strip()
+    if not cid or not tok or not body_text:
+        return 0, ""
+    url = f"{LARK_BASE}/im/v1/messages?receive_id_type=chat_id"
+    payload: Dict[str, Any] = {
+        "receive_id": cid,
+        "msg_type": "text",
+        "content": json.dumps({"text": body_text}, ensure_ascii=False),
+    }
+    if root:
+        payload["root_id"] = root
+    try:
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {tok}"}, json=payload, **_timeout_kw())
+        if r.status_code != 200:
+            log.warning(
+                "post_text_reply_in_thread HTTP=%s chat_tail=%s root_tail=%s",
+                r.status_code,
+                cid[-12:] if len(cid) > 12 else cid,
+                root[-12:] if len(root) > 12 else root,
+            )
+        return r.status_code, (r.text or "")
+    except Exception as e:
+        log.warning("post_text_reply_in_thread failed chat_tail=%s: %s", cid[-12:] if len(cid) > 12 else cid, e)
+        return 0, str(e)
+
+
 def add_message_reaction(message_id: str, token: str, emoji_type: str) -> Tuple[int, str]:
     """
     Add an emoji reaction to a message (Lark ``im:v1/messages/:id/reactions``).

@@ -1207,6 +1207,23 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     clicked_card_message_id=_extract_card_action_open_message_id(payload),
                 )
             return
+        if action_name in ("issue_watch_declare_p0", "issue_watch_declare_p0_dismiss"):
+            from . import issue_watch_declare as _iwd
+
+            val = _card_action_value_dict(payload)
+            if action_name == "issue_watch_declare_p0_dismiss":
+                _iwd.handle_declare_dismiss(sender_open_id, tenant_token)
+            else:
+                tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
+                _iwd.handle_declare_p0(
+                    sender_open_id,
+                    tenant_token,
+                    alert_key=str(val.get("issue_watch_alert_key") or "").strip(),
+                    source_incident_chat_id=src_inc,
+                    source_message_id=str(val.get("issue_watch_source_message_id") or "").strip(),
+                    operator_lark_user_id=_extract_card_action_operator_lark_user_id(payload),
+                )
+            return
         if action_name == "generate_preview":
             _generate_preview_now(sender_open_id, tenant_token)
             return

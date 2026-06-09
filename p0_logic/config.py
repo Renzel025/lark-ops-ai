@@ -2393,3 +2393,24 @@ def get_p0_issue_watch_lark_urgent_mode() -> str:
     if v:
         return v if v in ("app", "phone", "sms", "off") else "app"
     return get_p0_ongoing_lark_urgent_mode()
+
+
+def get_p0_issue_watch_declare_p0_enabled() -> bool:
+    """``P0_ISSUE_WATCH_DECLARE_P0_ENABLED`` — DM alert buttons to declare P0 from duty (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_P0_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_declare_reply_text() -> str:
+    """Plain text reply in the detection group thread when duty declares P0 from the alert DM."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_TEXT") or "").strip()
+    return raw or "We will declare this issue as P0."
+
+
+def get_p0_issue_watch_declare_reaction() -> str:
+    """Lark emoji_type reaction on the source concern message (empty = skip). Default ``OnIt``."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REACTION") or "OnIt").strip()
+    return raw
