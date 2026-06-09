@@ -2414,3 +2414,13 @@ def get_p0_issue_watch_declare_reaction() -> str:
     reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REACTION") or "OnIt").strip()
     return raw
+
+
+def get_p0_issue_watch_declare_reply_in_thread() -> bool:
+    """
+    ``P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD`` — Lark ``reply_in_thread`` on the concern message.
+    Default ``1`` (topic thread on that exact message). Set ``0`` for flat in-feed reply.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")

@@ -3,6 +3,7 @@ Issue Watch — duty declares P0 from the Major detection alert DM (reply + reac
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from . import config as _config
@@ -62,30 +63,53 @@ def handle_declare_p0(
 
     reply_text = _config.get_p0_issue_watch_declare_reply_text()
     if src_mid:
-        st_r, body_r = _lark.post_text_reply_in_thread(detection_chat, tok, reply_text, src_mid)
-        if st_r != 200:
+        st_r, body_r = _lark.post_text_reply_to_message(
+            src_mid,
+            tok,
+            reply_text,
+            reply_in_thread=_config.get_p0_issue_watch_declare_reply_in_thread(),
+        )
+        ok, api_code, api_msg = _lark.lark_im_message_create_ok(body_r)
+        if st_r != 200 or not ok:
             log.warning(
-                "issue_watch_declare: thread reply failed HTTP=%s chat=%s mid_tail=%s body=%s",
+                "issue_watch_declare: reply-on-message failed HTTP=%s code=%s chat=%s parent_tail=%s body=%s",
                 st_r,
+                api_code,
                 detection_chat[:24],
                 src_mid[-12:] if len(src_mid) > 12 else src_mid,
-                (body_r or "")[:200],
+                (api_msg or body_r or "")[:200],
+            )
+            _lark.post_text_to_open_id(
+                oid,
+                tok,
+                "Could not reply on the concern message in the detection group. "
+                "Check bot is in the group and has im:message permission.",
             )
         else:
+            parent_id = ""
+            reply_mid = ""
+            try:
+                data = (json.loads(body_r or "{}").get("data") or {})
+                parent_id = str(data.get("parent_id") or "").strip()
+                reply_mid = str(data.get("message_id") or "").strip()
+            except Exception:
+                pass
             log.info(
-                "issue_watch_declare: thread reply sent chat_tail=%s root_tail=%s",
+                "issue_watch_declare: thread reply sent chat_tail=%s parent_tail=%s "
+                "api_parent_tail=%s reply_tail=%s thread=%s",
                 detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
                 src_mid[-12:] if len(src_mid) > 12 else src_mid,
+                parent_id[-12:] if len(parent_id) > 12 else parent_id,
+                reply_mid[-12:] if len(reply_mid) > 12 else reply_mid,
+                _config.get_p0_issue_watch_declare_reply_in_thread(),
             )
     else:
-        st_r, body_r = _lark.post_text_to_chat(detection_chat, tok, reply_text)
-        if st_r != 200:
-            log.warning(
-                "issue_watch_declare: group reply failed HTTP=%s chat=%s body=%s",
-                st_r,
-                detection_chat[:24],
-                (body_r or "")[:200],
-            )
+        log.warning("issue_watch_declare: no source message_id — skipping group reply chat=%s", detection_chat[:24])
+        _lark.post_text_to_open_id(
+            oid,
+            tok,
+            "Could not find the source concern message to reply on. P0 declare will still proceed.",
+        )
 
     reaction = _config.get_p0_issue_watch_declare_reaction()
     if src_mid and reaction:
