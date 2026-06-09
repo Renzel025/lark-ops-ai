@@ -134,6 +134,22 @@ def handle_declare_p0(
                 reply_mid[-12:] if len(reply_mid) > 12 else reply_mid,
                 _config.get_p0_issue_watch_declare_reply_in_thread(),
             )
+            if _config.get_p0_issue_watch_declare_also_send_to_group():
+                st_g, body_g = _lark.post_text_to_chat(detection_chat, tok, reply_text)
+                ok_g, code_g, msg_g = _lark.lark_im_message_create_ok(body_g)
+                if st_g != 200 or not ok_g:
+                    log.warning(
+                        "issue_watch_declare: also-send-to-group failed HTTP=%s code=%s chat=%s msg=%s",
+                        st_g,
+                        code_g,
+                        detection_chat[:24],
+                        (msg_g or body_g or "")[:200],
+                    )
+                else:
+                    log.info(
+                        "issue_watch_declare: also sent declare reply to main group chat_tail=%s",
+                        detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
+                    )
     else:
         log.warning("issue_watch_declare: no source message_id — skipping group reply chat=%s", detection_chat[:24])
         _lark.post_text_to_open_id(

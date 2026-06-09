@@ -2431,3 +2431,14 @@ def get_p0_issue_watch_declare_reply_in_thread() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_declare_also_send_to_group() -> bool:
+    """
+    ``P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP`` — after thread reply, also post the same text
+    to the main group feed (Lark UI: "Also send to the group"). API has no single flag for this.
+    Default ``1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
