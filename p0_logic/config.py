@@ -2402,8 +2402,15 @@ def get_p0_issue_watch_declare_p0_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_issue_watch_declare_reply_ai_enabled() -> bool:
+    """``P0_ISSUE_WATCH_DECLARE_REPLY_AI`` — Groq contextual declare reply (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_AI") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_issue_watch_declare_reply_text() -> str:
-    """Plain text reply in the detection group thread when duty declares P0 from the alert DM."""
+    """Fallback plain-text reply when Groq declare-reply is off or fails."""
     reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_TEXT") or "").strip()
     return raw or "We will declare this issue as P0."

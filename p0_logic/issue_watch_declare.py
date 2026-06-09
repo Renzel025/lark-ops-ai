@@ -5,13 +5,44 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any, Dict, Optional
 
 from . import config as _config
+from . import groq_client as _groq
 from . import issue_watch_overview as _iwo
 from . import lark_client as _lark
 from . import session as _session
 
 log = logging.getLogger("lark-ops-ai")
+
+
+def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
+    """Groq contextual reply on the concern thread; env fallback if AI off or unavailable."""
+    fallback = _config.get_p0_issue_watch_declare_reply_text()
+    if not snap or not _config.get_p0_issue_watch_declare_reply_ai_enabled():
+        return fallback
+    categories = list(snap.get("categories") or [])
+    widespread = "widespread_impact" in categories
+    try:
+        players = max(
+            len([x for x in (snap.get("player_ids") or []) if str(x).strip()]),
+            int(snap.get("players_count") or 0),
+        )
+    except (TypeError, ValueError):
+        players = 0
+    ai = _groq.groq_issue_watch_declare_group_reply(
+        categories_md=str(snap.get("categories_md") or "").strip(),
+        summary=str(snap.get("summary") or "").strip(),
+        concern_excerpt=str(snap.get("concern_raw") or snap.get("concern") or "").strip(),
+        players_count=players,
+        min_reports_threshold=_config.get_p0_issue_watch_min_reports(),
+        widespread_impact=widespread,
+    )
+    if ai:
+        log.info("issue_watch_declare: Groq declare reply len=%s players=%s widespread=%s", len(ai), players, widespread)
+        return ai
+    log.warning("issue_watch_declare: Groq declare reply failed — using fallback text")
+    return fallback
 
 
 def _duty_operator(operator_open_id: str) -> bool:
@@ -61,7 +92,7 @@ def handle_declare_p0(
         _lark.post_text_to_open_id(oid, tok, "Could not resolve the detection group for this alert.")
         return
 
-    reply_text = _config.get_p0_issue_watch_declare_reply_text()
+    reply_text = _declare_reply_from_alert(snap)
     if src_mid:
         st_r, body_r = _lark.post_text_reply_to_message(
             src_mid,
