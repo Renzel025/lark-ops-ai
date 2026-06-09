@@ -304,19 +304,11 @@ def _try_player_id_followup(
     summary = str(recent.get("summary") or "").strip()
     concern = str(recent.get("concern_text") or recent.get("summary") or "").strip()
     if "deposit_issues" in categories:
-        summary = (
-            f"{player_count} players cannot deposit on CP website"
-            if player_count != 1
-            else "1 player cannot deposit on CP website"
-        )
+        summary = "Players cannot deposit on CP website"
     elif "login_issues" in categories:
-        summary = (
-            f"{player_count} players cannot login on CP website"
-            if player_count != 1
-            else "1 player cannot login on CP website"
-        )
-    elif player_count >= 1 and "player" not in summary.lower():
-        summary = f"{summary} ({player_count} player(s))"
+        summary = "Players cannot login on CP website"
+    elif "withdrawal_issues" in categories:
+        summary = "Players cannot withdraw"
 
     fp = str(recent.get("fingerprint") or "generic")
     cd_key = _cooldown_key(chat_id, "player_ids", fp)
