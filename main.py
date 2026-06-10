@@ -539,15 +539,13 @@ async def lark_oauth_start(open_id: str = ""):
     scope = _cfg.get_p0_vc_oauth_scope()
     if not app_id or not redirect:
         return HTMLResponse("<p>OAuth not configured (LARK_APP_ID / P0_VC_OAUTH_REDIRECT_URI).</p>", status_code=500)
-    import urllib.parse
+    from p0_logic.vc_user_oauth import build_oauth_authorize_redirect_url
 
-    state = urllib.parse.quote(oid, safe="")
-    url = (
-        "https://open.larksuite.com/open-apis/authen/v1/authorize"
-        f"?app_id={urllib.parse.quote(app_id, safe='')}"
-        f"&redirect_uri={urllib.parse.quote(redirect, safe='')}"
-        f"&scope={urllib.parse.quote(scope, safe='')}"
-        f"&state={state}"
+    url = build_oauth_authorize_redirect_url(
+        app_id=app_id,
+        redirect=redirect,
+        scope=scope,
+        state=oid,
     )
     if oid:
         log.info("vc oauth start open_id_tail=%s", oid[-8:])
@@ -555,11 +553,15 @@ async def lark_oauth_start(open_id: str = ""):
 
 
 @app.get("/lark/oauth/callback")
-async def lark_oauth_callback(code: str = "", state: str = ""):
+async def lark_oauth_callback(code: str = "", state: str = "", error: str = ""):
     from p0_logic import lark_client as _lark_client
     from p0_logic.vc_ring import maybe_retry_pending_vc_ring_for_declarer
     from p0_logic.vc_user_oauth import exchange_code_for_tokens
 
+    if (error or "").strip():
+        err = (error or "").strip()
+        log.warning("vc oauth callback denied by Lark error=%s state_tail=%s", err, (state or "")[-8:])
+        return HTMLResponse(f"<p>OAuth denied: {err}</p>", status_code=400)
     hint = (state or "").strip()
     ok, oid, msg = exchange_code_for_tokens((code or "").strip(), open_id_hint=hint)
     if ok:
@@ -578,7 +580,17 @@ async def lark_oauth_callback(code: str = "", state: str = ""):
             f"<p>VC ring authorized for user …{oid[-8:] if oid else ''}."
             f"{retry_note} You can close this tab.</p>"
         )
-    return HTMLResponse(f"<p>OAuth failed: {msg}</p>", status_code=400)
+    log.warning(
+        "vc oauth callback failed state_tail=%s code_len=%s msg=%s",
+        hint[-8:] if hint else "",
+        len((code or "").strip()),
+        (msg or "")[:400],
+    )
+    return HTMLResponse(
+        f"<p>OAuth failed: {msg}</p>"
+        "<p>Start a <b>new</b> authorization from the bot DM link (each code works once).</p>",
+        status_code=400,
+    )
 
 
 @app.post("/lark/webhook")
