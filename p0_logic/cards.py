@@ -876,6 +876,9 @@ def _dm_button_value(action: str, **scope: Any) -> Dict[str, Any]:
     alert_key = str(scope.get("issue_watch_alert_key") or "").strip()
     if alert_key:
         v["issue_watch_alert_key"] = alert_key
+    src_mid = str(scope.get("issue_watch_source_message_id") or "").strip()
+    if src_mid:
+        v["issue_watch_source_message_id"] = src_mid
     return v
 
 
@@ -1533,6 +1536,8 @@ def build_issue_watch_alert_card(
     issue_watch_alert_key: str = "",
     source_incident_chat_id: str = "",
     target_chat: str = "",
+    issue_watch_source_message_id: str = "",
+    declare_p0_buttons: bool = False,
     auto_overview_buttons: bool = False,
 ) -> Dict[str, Any]:
     """DM card when Claude/keyword detects a player-facing issue in a detection group."""
@@ -1615,18 +1620,74 @@ def build_issue_watch_alert_card(
                 "multi_url": {"url": msg_link, "pc_url": msg_link},
             }
         )
-    elements.extend(
-        [
-            {"tag": "hr"},
+    elements.append({"tag": "hr"})
+    if declare_p0_buttons and (source_incident_chat_id or "").strip():
+        sc = dict(
+            target_chat=(target_chat or "").strip(),
+            source_incident_chat_id=(source_incident_chat_id or "").strip(),
+            draft_priority="P0",
+            issue_watch_alert_key=(issue_watch_alert_key or "").strip(),
+            issue_watch_source_message_id=(issue_watch_source_message_id or "").strip(),
+        )
+        elements.append(
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "*Issue might be P0 — declare in the group if a bridge meeting is needed. After declare, duty gets a suggested overview in DM.*",
+                    "content": (
+                        "This may be a major P0. Declare from here to reply on the concern in the "
+                        "detection group, react on that message, start the P0 meeting, and auto-generate "
+                        "the overview preview in DM."
+                    ),
                 },
-            },
-        ]
-    )
+            }
+        )
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Declare as P0"},
+                                "type": "danger",
+                                "value": _dm_button_value("issue_watch_declare_p0", **sc),
+                            },
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Not now"},
+                                "type": "default",
+                                "value": _dm_button_value("issue_watch_declare_p0_dismiss", **sc),
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+    else:
+        footer = (
+            "*Issue might be P0 — declare in the group if a bridge meeting is needed. "
+            "After declare, duty gets a suggested overview in DM.*"
+        )
+        if auto_overview_buttons:
+            footer = (
+                "*After you declare P0 in the detection group, duty gets a suggested overview in DM.*"
+            )
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": footer}})
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},

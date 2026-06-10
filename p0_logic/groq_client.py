@@ -396,3 +396,78 @@ def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> O
         return issue_en, zh_issue, zh_impact
     finally:
         perf_log("groq_overview_issue_zh_one_shot", t0)
+
+
+_DECLARE_REPLY_MAX_CHARS = 320
+
+
+def _scrub_declare_reply_context(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"(?is)\bAccount:?\s*[\d,\s]+$", "", t).strip()
+    t = re.sub(r"\b\d{7,10}\b", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:600]
+
+
+def groq_issue_watch_declare_group_reply(
+    *,
+    categories_md: str,
+    summary: str,
+    concern_excerpt: str,
+    players_count: int,
+    min_reports_threshold: int,
+    widespread_impact: bool,
+) -> Optional[str]:
+    """
+    One Groq call: contextual thread reply when duty declares P0 from an Issue Watch alert.
+    Returns plain English reply text or None (caller uses env fallback).
+    """
+    if not GROQ_API_KEY:
+        return None
+    cats = (categories_md or "").strip() or "(unspecified)"
+    summ = (summary or "").strip() or "(none)"
+    concern = _scrub_declare_reply_context(concern_excerpt) or "(none)"
+    try:
+        n = max(0, int(players_count or 0))
+    except (TypeError, ValueError):
+        n = 0
+    try:
+        thr = max(1, int(min_reports_threshold or 4))
+    except (TypeError, ValueError):
+        thr = 4
+    system_prompt = (
+        "You are an on-call ops bot replying in a Lark detection-group thread after duty declares P0.\n"
+        "Write ONE or TWO short sentences (plain text, no markdown, no bullets) that:\n"
+        "- Confirm we are declaring this as P0.\n"
+        "- Briefly explain WHY using ONLY the facts given (issue category, symptom, player count, widespread flag).\n"
+        "- If players_count >= min_reports_threshold or widespread_impact is true, mention scale (e.g. multiple players / threshold met).\n"
+        "- Sound responsive and professional — not a fixed template; vary wording naturally.\n"
+        "STRICT: Do not invent facts. Do not list account IDs. Do not mention AI or automation. Max ~280 characters.\n"
+        "Output ONLY valid JSON: {\"reply\": \"your text\"}"
+    )
+    user_prompt = (
+        f"Category labels:\n{cats}\n\n"
+        f"Summary: {summ}\n\n"
+        f"Concern (scrubbed): {concern}\n\n"
+        f"Players affected (count): {n}\n"
+        f"Major-alert player threshold: {thr}\n"
+        f"Widespread impact flagged: {'yes' if widespread_impact else 'no'}"
+    )
+    t0 = time.perf_counter()
+    try:
+        raw = groq_chat_once(system_prompt, user_prompt, max_tokens=200)
+        obj = _parse_json_object(raw or "")
+        if not obj:
+            log.warning("groq declare reply: JSON parse failed head=%s", (raw or "")[:200])
+            return None
+        reply = str(obj.get("reply") or "").strip()
+        reply = re.sub(r"\s+", " ", reply).strip(" \"'")
+        if not reply:
+            return None
+        if len(reply) > _DECLARE_REPLY_MAX_CHARS:
+            reply = reply[:_DECLARE_REPLY_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:") + "."
+        return reply
+    finally:
+        perf_log("groq_issue_watch_declare_reply", t0)

@@ -146,6 +146,13 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         cid = str(payload.get("chat_id") or "").strip()
         if cid:
             src, tgt, _ = _iwo.resolve_overview_routing(cid)
+    detection_chat = str(payload.get("chat_id") or src).strip()
+    src_mid = str(payload.get("message_id") or "").strip()
+    declare_btns = (
+        _config.get_p0_issue_watch_declare_p0_enabled()
+        and not bool(payload.get("supplemental_player_ids"))
+        and bool(detection_chat)
+    )
     alert_card = _cards.build_issue_watch_alert_card(
         group_label=str(payload.get("group_label") or ""),
         categories_md=str(payload.get("categories_md") or ""),
@@ -157,8 +164,10 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         source_message_time=str(payload.get("source_message_time") or ""),
         supplemental_player_ids=bool(payload.get("supplemental_player_ids")),
         issue_watch_alert_key=alert_key,
-        source_incident_chat_id=src,
+        source_incident_chat_id=detection_chat,
         target_chat=tgt,
+        issue_watch_source_message_id=src_mid,
+        declare_p0_buttons=declare_btns,
         auto_overview_buttons=False,
     )
     return _send_dm_alerts(tenant_token, alert_card)
@@ -304,19 +313,11 @@ def _try_player_id_followup(
     summary = str(recent.get("summary") or "").strip()
     concern = str(recent.get("concern_text") or recent.get("summary") or "").strip()
     if "deposit_issues" in categories:
-        summary = (
-            f"{player_count} players cannot deposit on CP website"
-            if player_count != 1
-            else "1 player cannot deposit on CP website"
-        )
+        summary = "Players cannot deposit on CP website"
     elif "login_issues" in categories:
-        summary = (
-            f"{player_count} players cannot login on CP website"
-            if player_count != 1
-            else "1 player cannot login on CP website"
-        )
-    elif player_count >= 1 and "player" not in summary.lower():
-        summary = f"{summary} ({player_count} player(s))"
+        summary = "Players cannot login on CP website"
+    elif "withdrawal_issues" in categories:
+        summary = "Players cannot withdraw"
 
     fp = str(recent.get("fingerprint") or "generic")
     cd_key = _cooldown_key(chat_id, "player_ids", fp)

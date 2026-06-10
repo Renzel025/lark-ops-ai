@@ -7,12 +7,15 @@ import hashlib
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
 from . import config as _config
 from . import drafts as _drafts
+from . import groq_client as _groq
 from . import issue_watch_alert_disk as _iw_disk
+from . import issues as _issues
 from . import lark_client as _lark
 from . import session as _session
 from . import support as _support
@@ -163,35 +166,25 @@ def _primary_category_label(categories_md: str) -> str:
     return ""
 
 
-def _category_issue_stem(cat: str) -> str:
-    """Keyword in summary that already implies the category label (skip redundant prefix)."""
-    key = (cat or "").strip().lower()
-    stems = {
-        "deposit issues": "deposit",
-        "login issues": "login",
-        "withdrawal issues": "withdraw",
-        "registration failures": "register",
-        "website downtime": "website",
-        "backend downtime": "backend",
-        "gameplay outage": "game",
-    }
-    return stems.get(key, "")
-
-
-def _strip_account_ids_from_concern(concern: str) -> str:
-    t = (concern or "").strip()
-    if not t:
-        return ""
-    t = re.sub(r"(?is)\bAccount:?\s*[\d,\s]+$", "", t).strip()
-    t = re.sub(r"(?is)\b(?:player\s+)?(?:id|ids):?\s*[\d,\s]+$", "", t).strip()
-    return t
+def _issue_from_groq_triplet(triplet: Tuple[str, str, str]) -> str:
+    issue_en_raw, _zh_issue, _zh_impact = triplet
+    issue = (issue_en_raw or "").strip()
+    issue = re.sub(r"\b\d{6,}\b", "", issue)
+    issue = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", "", issue)
+    issue = re.sub(r"\s+", " ", issue).strip(" ,.")
+    return _issues._truncate_issue_output(issue, _issues.ISSUE_SUMMARY_MAX_CHARS) if issue else "Not specified"
 
 
 def build_overview_fields_from_alert(
     snapshot: Dict[str, Any],
     tenant_token: str,
-) -> Tuple[str, str, str, str]:
-    """``issue``, ``impact``, ``support``, ``combined_text`` for preview / draft."""
+) -> Tuple[str, str, str, str, Optional[str], Optional[str]]:
+    """
+    Build overview fields from an Issue Watch alert snapshot.
+
+    Issue + bilingual zh lines use the same Groq one-shot path as manual **Build overview**.
+    Impact scope stays rule-based (player IDs / counts from the alert).
+    """
     summary = str(snapshot.get("summary") or "").strip()
     concern = str(snapshot.get("concern_raw") or snapshot.get("concern") or "").strip()
     concern = re.sub(r"^[「『]|[」』]$", "", concern).strip()
@@ -201,17 +194,6 @@ def build_overview_fields_from_alert(
         n = max(len(player_ids), int(snapshot.get("players_count") or 0))
     except (TypeError, ValueError):
         n = len(player_ids)
-
-    concern_issue = _strip_account_ids_from_concern(concern)
-    issue = summary or concern_issue
-    stem = _category_issue_stem(cat)
-    cat_redundant = (
-        (cat and cat.lower() in (issue or "").lower())
-        or (stem and stem in (issue or "").lower())
-    )
-    if cat and not cat_redundant and not summary:
-        issue = cat
-    issue = (issue or "").strip() or "Not specified"
 
     id_blob = ", ".join(player_ids[:24])
     combined_parts = [p for p in [concern, f"Account IDs: {id_blob}" if id_blob else ""] if p]
@@ -230,8 +212,31 @@ def build_overview_fields_from_alert(
     if _text.is_not_specified(impact):
         impact = "Not specified"
 
-    support = _support.build_support_request(combined_text, tenant_token)
-    return issue, impact, support, combined_text
+    zh_issue_pc: Optional[str] = None
+    zh_impact_pc: Optional[str] = None
+    triplet: Optional[Tuple[str, str, str]] = None
+
+    def _support_only() -> str:
+        return _support.build_support_request(combined_text, tenant_token)
+
+    def _groq_triplet_only() -> Optional[Tuple[str, str, str]]:
+        if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
+            return _groq.groq_overview_issue_and_zh_bilingual(combined_text, impact)
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_sup = pool.submit(_support_only)
+        f_groq = pool.submit(_groq_triplet_only)
+        support = f_sup.result()
+        triplet = f_groq.result()
+
+    if triplet:
+        issue = _issue_from_groq_triplet(triplet)
+        zh_issue_pc, zh_impact_pc = triplet[1], triplet[2]
+    else:
+        issue = _issues.summarize_issue(combined_text)
+
+    return issue, impact, support, combined_text, zh_issue_pc, zh_impact_pc
 
 
 def _recall_dm_messages(tenant_token: str, *message_ids: str) -> None:
@@ -314,7 +319,7 @@ def _post_suggested_overview_preview(
         _lark.post_text_to_open_id(oid, tok, "⚠️ No overview target chat configured for this detection group.")
         return False
 
-    issue, impact, support, combined = build_overview_fields_from_alert(snap, tok)
+    issue, impact, support, combined, zh_issue, zh_impact = build_overview_fields_from_alert(snap, tok)
     _drafts.seed_draft_for_incident(oid, tgt, src, "P0")
     if combined:
         _drafts.add_text_to_draft(oid, tgt, combined)
@@ -331,6 +336,8 @@ def _post_suggested_overview_preview(
         support=support,
         priority="P0",
         source_incident_chat_id=src,
+        zh_issue_precomputed=zh_issue,
+        zh_impact_precomputed=zh_impact,
     )
     pv = _drafts.get_preview(oid) or {}
     md = str(pv.get("md") or "").strip()
@@ -355,10 +362,10 @@ def _post_suggested_overview_preview(
         st_h, body_h = _lark.post_text_to_open_id(
             oid,
             tok,
-            "📝 **P0 declared** — suggested overview from Issue Watch is below. "
-            "Tap **Send to group** to keep it. "
-            "Press **Cancel** if you do not need this auto-generated overview — "
-            "then paste text and screenshots in the usual **Build overview** flow.",
+            "P0 has been declared. A suggested overview from Issue Watch is shown below. "
+            "Select Send to group to post it to the incident group. "
+            "Select Cancel to skip this auto-generated overview and proceed with the "
+            "standard Build overview flow using your own text and screenshots.",
         )
         hint_mid = _lark.parse_im_message_id_from_response(body_h) if st_h == 200 else ""
         _drafts.patch_preview_fields(

@@ -1476,10 +1476,10 @@ def get_p0_graph_screenshot_bot_mention_hints() -> Tuple[str, ...]:
 
 def get_p0_graph_screenshot_on_demand_chat_ids() -> FrozenSet[str]:
     """
-    Chats that may request on-demand screenshots. Empty = incident detection groups +
-    ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``.
+    Extra chats allowed for on-demand Grafana requests (comma ``oc_``).
 
-    Env: ``P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS`` (comma ``oc_``).
+    When empty, only ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID`` (screenshot hub) is allowed —
+    not all ``INCIDENT_GROUP_IDS``.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS") or "").strip()
@@ -2393,3 +2393,52 @@ def get_p0_issue_watch_lark_urgent_mode() -> str:
     if v:
         return v if v in ("app", "phone", "sms", "off") else "app"
     return get_p0_ongoing_lark_urgent_mode()
+
+
+def get_p0_issue_watch_declare_p0_enabled() -> bool:
+    """``P0_ISSUE_WATCH_DECLARE_P0_ENABLED`` — DM alert buttons to declare P0 from duty (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_P0_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_declare_reply_ai_enabled() -> bool:
+    """``P0_ISSUE_WATCH_DECLARE_REPLY_AI`` — Groq contextual declare reply (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_AI") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_declare_reply_text() -> str:
+    """Fallback plain-text reply when Groq declare-reply is off or fails."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_TEXT") or "").strip()
+    return raw or "We will declare this issue as P0."
+
+
+def get_p0_issue_watch_declare_reaction() -> str:
+    """Lark emoji_type reaction on the source concern message (empty = skip). Default ``OnIt``."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_REACTION") or "OnIt").strip()
+    return raw
+
+
+def get_p0_issue_watch_declare_reply_in_thread() -> bool:
+    """
+    ``P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD`` — Lark ``reply_in_thread`` on the concern message.
+    Default ``1`` (topic thread on that exact message). Set ``0`` for flat in-feed reply.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_declare_also_send_to_group() -> bool:
+    """
+    ``P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP`` — after thread reply, also post the same text
+    to the main group feed (Lark UI: "Also send to the group"). API has no single flag for this.
+    Default ``1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")

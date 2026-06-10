@@ -273,18 +273,13 @@ def _summary_with_players(
 ) -> str:
     if players >= 1:
         if "login_issues" in categories:
-            if players == 1:
-                return "1 player cannot login on CP website"
-            return f"{players} players cannot login on CP website"
+            return "Players cannot login on CP website"
         if "withdrawal_issues" in categories:
-            if players == 1:
-                return "1 player cannot withdraw"
-            return f"{players} players cannot withdraw"
+            return "Players cannot withdraw"
         if "deposit_issues" in categories:
-            if players == 1:
-                return "1 player cannot deposit on CP website"
-            return f"{players} players cannot deposit on CP website"
-        return f"{base_summary} ({players} player(s))"
+            return "Players cannot deposit on CP website"
+        cleaned = re.sub(r"(?i)^\d+\s+players?\s+", "", (base_summary or "").strip())
+        return cleaned or base_summary
     if re.search(r"(?is)\bplayers\b", text) and "deposit_issues" in categories:
         return "Players cannot deposit on CP website"
     if re.search(r"(?is)\bplayers\b", text) and "login_issues" in categories:
