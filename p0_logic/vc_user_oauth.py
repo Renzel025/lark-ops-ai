@@ -466,7 +466,7 @@ def exchange_code_for_tokens(code: str, *, open_id_hint: str = "") -> Tuple[bool
         return False, "", str(e)
 
 
-def get_user_access_token(open_id: str) -> str:
+def get_user_access_token(open_id: str, *, force_refresh: bool = False) -> str:
     """Return a valid user access token, refreshing when needed."""
     oid = (open_id or "").strip()
     if not oid:
@@ -477,7 +477,7 @@ def get_user_access_token(open_id: str) -> str:
     now = int(time.time())
     access = str(row.get("access_token") or "").strip()
     expires_at = int(row.get("expires_at") or 0)
-    if access and expires_at > now:
+    if not force_refresh and access and expires_at > now:
         return access
     refresh = str(row.get("refresh_token") or "").strip()
     if not refresh:

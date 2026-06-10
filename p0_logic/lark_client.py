@@ -680,6 +680,60 @@ def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
     return ""
 
 
+def _patch_recording_set_permission(
+    token: str,
+    meeting_id: str,
+    permission_objects: List[Dict[str, Any]],
+    *,
+    user_id_type_open_id: bool = False,
+    label: str = "",
+) -> Tuple[bool, str]:
+    """One ``set_permission`` PATCH. Split user vs group objects — mixed + ``user_id_type`` → HTTP 400."""
+    tok = (token or "").strip()
+    mid = (meeting_id or "").strip()
+    objs = [o for o in (permission_objects or []) if isinstance(o, dict)]
+    if not tok or not mid or not objs:
+        return False, "missing token, meeting_id, or permission_objects"
+    payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
+    last_err = ""
+    tag = (label or "set_permission").strip()
+    for base in VC_BASES:
+        path = f"{base}/vc/v1/meetings/{quote(mid, safe='')}/recording/set_permission"
+        url = f"{path}?user_id_type=open_id" if user_id_type_open_id else path
+        try:
+            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
+            body_snip = (r.text or "")[:320].replace("\n", " ")
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={body_snip}"
+                log.warning(
+                    "VC recording %s try failed base=%s http=%s body=%s",
+                    tag,
+                    base,
+                    r.status_code,
+                    body_snip,
+                )
+                continue
+            j = r.json() if r.text else {}
+            if isinstance(j, dict) and j.get("code") == 0:
+                log.info("VC recording %s ok meeting_id=%s base=%s count=%s", tag, mid[:24], base, len(objs))
+                return True, ""
+            last_err = (
+                f"code={j.get('code') if isinstance(j, dict) else '?'} "
+                f"msg={j.get('msg') if isinstance(j, dict) else ''} body={body_snip}"
+            )
+            log.warning(
+                "VC recording %s API error base=%s %s",
+                tag,
+                base,
+                last_err[:280],
+            )
+        except Exception as e:
+            last_err = str(e)
+            log.warning("VC recording %s exception base=%s err=%s", tag, base, e)
+    return False, last_err
+
+
 def grant_vc_recording_view_to_chat_groups(
     token: str,
     meeting_id: str,
@@ -694,9 +748,7 @@ def grant_vc_recording_view_to_chat_groups(
 
     Optionally adds **type=3** (tenant-wide view) when ``VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1``.
 
-    Lets notification-group members (and listed users) open the Minutes URL even if they did not join the VC.
-    Requires **vc:record** (update recording) per Feishu docs — Lark docs show **user_access_token** for this
-    API; **tenant** may still work on some tenants.
+    User and group grants are **separate** API calls (Lark returns HTTP 400 if mixed with ``user_id_type=open_id``).
     """
     meeting_id = (meeting_id or "").strip()
     tok = (token or "").strip()
@@ -705,56 +757,72 @@ def grant_vc_recording_view_to_chat_groups(
     users_src = user_open_ids
     if users_src is None:
         users_src = _config.get_vc_recording_fanout_user_open_ids()
-    objs: List[Dict[str, Any]] = []
+    user_objs: List[Dict[str, Any]] = []
+    group_objs: List[Dict[str, Any]] = []
     seen_chat: set[str] = set()
     for raw in chat_ids:
         cid = (raw or "").strip()
         if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
             continue
         seen_chat.add(cid)
-        objs.append({"id": cid, "type": 2, "permission": 1})
+        group_objs.append({"id": cid, "type": 2, "permission": 1})
     seen_user: set[str] = set()
     for raw in users_src or []:
         uid = (raw or "").strip()
         if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
             continue
         seen_user.add(uid)
-        objs.append({"id": uid, "type": 1, "permission": 1})
-    if _config.get_vc_recording_fanout_tenant_wide_view_enabled():
-        objs.append({"type": 3, "permission": 1})
-    if not objs:
+        user_objs.append({"id": uid, "type": 1, "permission": 1})
+    tenant_wide = _config.get_vc_recording_fanout_tenant_wide_view_enabled()
+    if not user_objs and not group_objs and not tenant_wide:
         return False
-    payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
-    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
-    last_err = ""
-    has_user_perm = bool(seen_user)
-    for base in VC_BASES:
-        path = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording/set_permission"
-        url = f"{path}?user_id_type=open_id" if has_user_perm else path
-        try:
-            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
-            log.info("VC recording set_permission try: %s -> HTTP=%s", url, r.status_code)
-            if r.status_code != 200:
-                last_err = f"HTTP={r.status_code} body={(r.text or '')[:240]}"
-                continue
-            j = r.json() if r.text else {}
-            if isinstance(j, dict) and j.get("code") == 0:
-                log.info(
-                    "VC recording set_permission ok meeting_id=%s groups=%s users=%s tenant_wide=%s",
-                    meeting_id[:24],
-                    len(seen_chat),
-                    len(seen_user),
-                    _config.get_vc_recording_fanout_tenant_wide_view_enabled(),
-                )
-                return True
-            last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
-        except Exception as e:
-            last_err = str(e)
+
+    ok_user = ok_group = ok_tenant = True
+    errors: List[str] = []
+    if user_objs:
+        ok_user, err = _patch_recording_set_permission(
+            tok, meeting_id, user_objs, user_id_type_open_id=True, label="set_permission users"
+        )
+        if not ok_user and err:
+            errors.append(f"users: {err}")
+    if group_objs:
+        ok_group, err = _patch_recording_set_permission(
+            tok, meeting_id, group_objs, user_id_type_open_id=False, label="set_permission groups"
+        )
+        if not ok_group and err:
+            errors.append(f"groups: {err}")
+    if tenant_wide:
+        ok_tenant, err = _patch_recording_set_permission(
+            tok, meeting_id, [{"type": 3, "permission": 1}],
+            user_id_type_open_id=False,
+            label="set_permission tenant",
+        )
+        if not ok_tenant and err:
+            errors.append(f"tenant: {err}")
+
+    need_user = bool(user_objs)
+    need_group = bool(group_objs)
+    success = True
+    if need_user and not ok_user:
+        success = False
+    if need_group and not ok_group:
+        success = False
+    if tenant_wide and not ok_tenant:
+        success = False
+
+    if success:
+        log.info(
+            "VC recording set_permission ok meeting_id=%s groups=%s users=%s tenant_wide=%s",
+            meeting_id[:24],
+            len(seen_chat),
+            len(seen_user),
+            tenant_wide,
+        )
+        return True
     log.warning(
-        "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s — "
-        "members may need manual Share on Minutes / user OAuth for vc:record",
+        "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s",
         meeting_id[:24],
-        last_err,
+        "; ".join(errors)[:500],
     )
     return False
 

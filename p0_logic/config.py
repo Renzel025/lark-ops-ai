@@ -2457,7 +2457,7 @@ def get_p0_vc_oauth_public_base_url() -> str:
 
 def get_p0_vc_oauth_scope() -> str:
     reload_env_runtime()
-    return (os.getenv("P0_VC_OAUTH_SCOPE") or "vc:meeting offline_access").strip()
+    return (os.getenv("P0_VC_OAUTH_SCOPE") or "vc:meeting offline_access vc:record").strip()
 
 
 def get_p0_vc_ring_fallback_open_ids() -> List[str]:

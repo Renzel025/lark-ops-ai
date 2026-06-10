@@ -30,6 +30,73 @@ _POLL_ACTIVE: Set[str] = set()
 _DEFAULT_POLL_GAPS_SEC = (15, 30, 60, 120, 180, 300)
 
 
+def _duty_open_id_for_recording_permission(meeting_id: str) -> str:
+    """Meeting host / P0 declarer — ``set_permission`` must use their user_access_token."""
+    from . import session as _session
+
+    mid = (meeting_id or "").strip()
+    if mid:
+        _, sess = _session.find_session_by_meeting_ref(mid)
+        trigger = str((sess or {}).get("trigger_open_id") or "").strip()
+        if trigger:
+            return trigger
+    owners = _config.get_owner_ids()
+    return (owners[0] if owners else "").strip()
+
+
+def _token_for_recording_set_permission(
+    meeting_id: str,
+    *,
+    force_refresh: bool = False,
+) -> str:
+    """
+    Lark ``set_permission`` requires **user_access_token** (meeting owner), not tenant token.
+    Tenant token always returns HTTP 400 / code 99991663.
+    """
+    from . import vc_user_oauth as _oauth
+
+    trigger = _duty_open_id_for_recording_permission(meeting_id)
+    if not trigger:
+        log.warning(
+            "vc recording set_permission: no duty open_id for meeting_id=%s — "
+            "complete VC OAuth (P0_VC_RING) on duty phone first",
+            (meeting_id or "")[:24],
+        )
+        return ""
+    user_tok = _oauth.get_user_access_token(trigger, force_refresh=force_refresh)
+    if user_tok:
+        log.info(
+            "vc recording set_permission: duty user token open_id_tail=%s refreshed=%s",
+            trigger[-8:] if len(trigger) > 8 else trigger,
+            force_refresh,
+        )
+        return user_tok
+    log.warning(
+        "vc recording set_permission: no user token for open_id_tail=%s — "
+        "duty must open VC OAuth link (scope needs vc:record + offline_access)",
+        trigger[-8:] if len(trigger) > 8 else trigger,
+    )
+    return ""
+
+
+def _grant_recording_permissions(meeting_id: str, targets: list, user_targets: list) -> bool:
+    """Call set_permission with duty user token; refresh + retry once on 99991663."""
+    perm_tok = _token_for_recording_set_permission(meeting_id)
+    if not perm_tok:
+        return False
+    grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+        perm_tok, meeting_id, targets, user_open_ids=user_targets
+    )
+    if grant_ok:
+        return True
+    perm_tok = _token_for_recording_set_permission(meeting_id, force_refresh=True)
+    if not perm_tok:
+        return False
+    return _lark.grant_vc_recording_view_to_chat_groups(
+        perm_tok, meeting_id, targets, user_open_ids=user_targets
+    )
+
+
 def _usable_recording_url(u: str) -> bool:
     """
     Lark sometimes puts a placeholder in event ``url`` (e.g. \"Access restricted\") when the app
@@ -179,12 +246,11 @@ def fanout_recording_to_chats(
     duration_text = _fmt_duration_ms(duration_ms_raw)
 
     if _config.get_vc_recording_fanout_set_permission_enabled():
-        grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
-            token, mid, targets, user_open_ids=user_targets
-        )
+        grant_ok = _grant_recording_permissions(mid, targets, user_targets)
         if not grant_ok:
             log.warning(
-                "vc recording fan-out: set_permission grant failed mid=%s topic_head=%r",
+                "vc recording fan-out: set_permission grant failed mid=%s topic_head=%r — "
+                "re-run duty VC OAuth (P0_VC_OAUTH_SCOPE must include vc:record)",
                 mid[:24],
                 topic[:80],
             )
