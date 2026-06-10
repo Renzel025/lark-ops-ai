@@ -1604,6 +1604,7 @@ def start_p0(
             "affected_players": affected_players,
             "vc_external_join_count": 0,
             "vc_ring_target_open_ids": list(vc_ring_target_open_ids or []),
+            "vc_ring_invited_open_ids": [],
             "vc_ring_done": False,
         }
         if trigger_open_id:

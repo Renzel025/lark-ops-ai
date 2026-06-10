@@ -31,8 +31,14 @@ def _is_duty_open_id(open_id: str) -> bool:
     return oid in allowed if allowed else True
 
 
-def note_duty_mentions_in_chat(chat_id: str, duty_open_id: str, mention_open_ids: List[str]) -> None:
-    """Duty @mentioned users in detection group — used on next declare ring."""
+def note_duty_mentions_in_chat(
+    chat_id: str,
+    duty_open_id: str,
+    mention_open_ids: List[str],
+    *,
+    tenant_token: str = "",
+) -> None:
+    """Duty @mentioned users in detection group — merged on declare and during active P0."""
     if not _config.get_p0_vc_ring_enabled():
         return
     cid = (chat_id or "").strip()
@@ -50,6 +56,63 @@ def note_duty_mentions_in_chat(chat_id: str, duty_open_id: str, mention_open_ids
         oid[-8:],
         len(ids),
     )
+    _merge_duty_mentions_into_active_session(
+        cid, ids, operator_open_id=oid, tenant_token=tenant_token
+    )
+
+
+def _pending_ring_targets(sess: Dict[str, Any]) -> List[str]:
+    """Targets not yet successfully invited this P0 session."""
+    all_targets = list(sess.get("vc_ring_target_open_ids") or [])
+    invited = {str(x).strip() for x in (sess.get("vc_ring_invited_open_ids") or []) if str(x).strip()}
+    return [x for x in all_targets if x not in invited]
+
+
+def _merge_duty_mentions_into_active_session(
+    chat_id: str,
+    new_ids: List[str],
+    *,
+    operator_open_id: str = "",
+    tenant_token: str = "",
+) -> None:
+    """If P0 is already live, append duty @mentions and ring new users when VC is active."""
+    cid = (chat_id or "").strip()
+    if not cid or not new_ids:
+        return
+    sess = _session.P0_SESSIONS.get(cid)
+    if not isinstance(sess, dict):
+        return
+    existing = list(sess.get("vc_ring_target_open_ids") or [])
+    trigger = str(sess.get("trigger_open_id") or operator_open_id or "").strip()
+    merged = _filter_ring_targets(existing + list(new_ids), operator_open_id=trigger)
+    if merged == existing:
+        return
+    newly_added = [x for x in merged if x not in existing]
+    sess["vc_ring_target_open_ids"] = merged
+    _session.P0_SESSIONS[cid] = sess
+    if _session._session_disk.enabled():
+        _session._session_disk.save_session(cid, sess)
+    log.info(
+        "vc_ring: updated active session ring targets count=%s (was %s) new=%s chat_tail=%s",
+        len(merged),
+        len(existing),
+        len(newly_added),
+        cid[-12:] if len(cid) > 12 else cid,
+    )
+    meeting_id = str(sess.get("meeting_id") or "").strip()
+    if newly_added and meeting_id and trigger:
+        _try_ring_session(
+            cid,
+            sess,
+            declarer_open_id=trigger,
+            meeting_ref=meeting_id,
+            tenant_token=tenant_token,
+        )
+    elif newly_added:
+        log.info(
+            "vc_ring: new targets queued — will ring when declarer joins VC chat_tail=%s",
+            cid[-12:] if len(cid) > 12 else cid,
+        )
 
 
 def pop_duty_mentions_for_chat(chat_id: str) -> List[str]:
@@ -106,7 +169,7 @@ def resolve_ring_targets_from_snapshot(
     detection_chat_id: str,
     operator_open_id: str,
 ) -> List[str]:
-    """Merge concern @mentions + latest duty @mentions in this chat."""
+    """Merge concern @mentions (on alert) + duty @mentions stored before declare."""
     concern: List[str] = []
     if snap:
         raw = snap.get("concern_mention_open_ids") or snap.get("mention_open_ids") or []
@@ -145,52 +208,93 @@ def maybe_prompt_oauth_dm(operator_open_id: str, tenant_token: str) -> None:
         tok,
         "To auto-ring tagged users into the P0 VC, authorize this bot once (VC invite permission):\n"
         f"{url}\n\n"
-        "After authorizing, declare P0, join the meeting, then tagged users will be rung automatically.",
+        "Authorize first, then join the P0 VC — tagged users will be rung when you enter.",
     )
 
 
-def maybe_ring_on_vc_join(meeting_ref: str, joiner_open_id: str, tenant_token: str) -> None:
-    """
-    When the P0 declarer joins the VC, invite ``vc_ring_target_open_ids`` from the session.
-    """
-    if not _config.get_p0_vc_ring_enabled():
-        return
-    ref = (meeting_ref or "").strip()
-    joiner = (joiner_open_id or "").strip()
-    if not ref or not joiner:
-        return
+def _resolve_declarer_open_id(
+    joiner_open_id: str,
+    joiner_user_id: str,
+    tenant_token: str,
+) -> str:
+    oid = (joiner_open_id or "").strip()
+    if oid.startswith("ou_"):
+        return oid
+    uid = (joiner_user_id or "").strip()
+    if uid and tenant_token:
+        resolved = _lark.lookup_open_id_by_user_id(tenant_token, uid)
+        if resolved:
+            log.info("vc_ring: resolved joiner open_id from user_id uid_tail=%s", uid[-6:])
+            return resolved
+    return ""
 
-    chat_id, sess = _session.find_session_by_meeting_ref(ref)
-    if not chat_id or not sess:
-        return
-    trigger = str(sess.get("trigger_open_id") or "").strip()
-    if joiner != trigger:
-        log.debug(
-            "vc_ring: joiner not declarer — skip ring joiner_tail=%s trigger_tail=%s",
-            joiner[-8:],
-            trigger[-8:] if trigger else "",
-        )
-        return
-    targets = list(sess.get("vc_ring_target_open_ids") or [])
+
+def _is_session_declarer(
+    sess: Dict[str, Any],
+    *,
+    joiner_open_id: str,
+    joiner_user_id: str,
+    tenant_token: str,
+) -> bool:
+    trigger_oid = str(sess.get("trigger_open_id") or "").strip()
+    if trigger_oid and joiner_open_id and joiner_open_id == trigger_oid:
+        return True
+    trigger_uid = str(sess.get("trigger_lark_user_id") or "").strip()
+    if trigger_uid and joiner_user_id and joiner_user_id == trigger_uid:
+        return True
+    if trigger_uid and joiner_open_id and tenant_token:
+        joiner_uid = _lark.get_tenant_user_id_by_open_id(tenant_token, joiner_open_id)
+        if joiner_uid and joiner_uid == trigger_uid:
+            return True
+    return False
+
+
+def _try_ring_session(
+    chat_id: str,
+    sess: Dict[str, Any],
+    *,
+    declarer_open_id: str,
+    meeting_ref: str,
+    tenant_token: str,
+) -> bool:
+    """Attempt VC invite for pending (not yet invited) targets. Returns True when ring succeeded."""
+    declarer = (declarer_open_id or "").strip()
+    if not declarer:
+        return False
+    targets = _pending_ring_targets(sess)
     if not targets:
-        log.info("vc_ring: no ring targets on session chat_id=%s", chat_id[:24])
-        return
-    if sess.get("vc_ring_done"):
-        return
+        if list(sess.get("vc_ring_target_open_ids") or []):
+            log.info("vc_ring: all targets already invited chat_id=%s", chat_id[:24])
+        else:
+            log.warning("vc_ring: no ring targets on session chat_id=%s", chat_id[:24])
+        return False
 
-    meeting_id = str(sess.get("meeting_id") or ref).strip()
-    user_tok = _oauth.get_user_access_token(joiner)
+    meeting_id = str(sess.get("meeting_id") or meeting_ref or "").strip()
+    if not meeting_id:
+        log.warning("vc_ring: no meeting_id on session chat_id=%s", chat_id[:24])
+        return False
+
+    user_tok = _oauth.get_user_access_token(declarer)
     if not user_tok:
-        maybe_prompt_oauth_dm(joiner, tenant_token)
+        maybe_prompt_oauth_dm(declarer, tenant_token)
         log.warning(
-            "vc_ring: no user_access_token for declarer_tail=%s — OAuth required before ring",
-            joiner[-8:],
+            "vc_ring: no user_access_token for declarer_tail=%s — complete OAuth first",
+            declarer[-8:],
         )
-        return
+        return False
 
     ok, detail = _lark.invite_users_to_vc_meeting(user_tok, meeting_id, targets)
     if ok:
-        sess["vc_ring_done"] = True
+        invited = list(sess.get("vc_ring_invited_open_ids") or [])
+        seen = set(invited)
+        for oid in targets:
+            if oid not in seen:
+                invited.append(oid)
+                seen.add(oid)
+        sess["vc_ring_invited_open_ids"] = invited
+        sess["vc_ring_done"] = not _pending_ring_targets(
+            {**sess, "vc_ring_invited_open_ids": invited}
+        )
         _session.P0_SESSIONS[chat_id] = sess
         if _session._session_disk.enabled():
             _session._session_disk.save_session(chat_id, sess)
@@ -198,19 +302,116 @@ def maybe_ring_on_vc_join(meeting_ref: str, joiner_open_id: str, tenant_token: s
             "vc_ring: invited count=%s meeting_id_tail=%s declarer_tail=%s detail=%s",
             len(targets),
             meeting_id[-12:] if len(meeting_id) > 12 else meeting_id,
-            joiner[-8:],
+            declarer[-8:],
             (detail or "")[:200],
         )
         if tenant_token:
             _lark.post_text_to_open_id(
-                joiner,
+                declarer,
                 tenant_token,
                 f"VC ring: invited {len(targets)} user(s) into the meeting.",
             )
-    else:
+        return True
+
+    log.warning(
+        "vc_ring: invite failed meeting_id_tail=%s targets=%s detail=%s",
+        meeting_id[-12:] if len(meeting_id) > 12 else meeting_id,
+        len(targets),
+        (detail or "")[:300],
+    )
+    return False
+
+
+def maybe_ring_on_vc_join(
+    meeting_ref: str,
+    joiner_open_id: str,
+    tenant_token: str,
+    *,
+    joiner_user_id: str = "",
+) -> None:
+    """
+    When the P0 declarer joins the VC, invite ``vc_ring_target_open_ids`` from the session.
+    """
+    if not _config.get_p0_vc_ring_enabled():
+        return
+    ref = (meeting_ref or "").strip()
+    if not ref:
+        return
+
+    joiner = _resolve_declarer_open_id(joiner_open_id, joiner_user_id, tenant_token)
+    if not joiner:
         log.warning(
-            "vc_ring: invite failed meeting_id_tail=%s targets=%s detail=%s",
-            meeting_id[-12:] if len(meeting_id) > 12 else meeting_id,
-            len(targets),
-            (detail or "")[:300],
+            "vc_ring: join event missing open_id and could not resolve from user_id ref_tail=%s",
+            ref[-12:] if len(ref) > 12 else ref,
         )
+        return
+
+    chat_id, sess = _session.find_session_by_meeting_ref(ref)
+    if not chat_id or not sess:
+        log.warning(
+            "vc_ring: no session for meeting_ref_tail=%s joiner_tail=%s",
+            ref[-12:] if len(ref) > 12 else ref,
+            joiner[-8:],
+        )
+        return
+
+    if not _is_session_declarer(
+        sess,
+        joiner_open_id=joiner,
+        joiner_user_id=joiner_user_id,
+        tenant_token=tenant_token,
+    ):
+        log.warning(
+            "vc_ring: joiner not declarer — skip ring joiner_tail=%s trigger_tail=%s trigger_uid=%s",
+            joiner[-8:],
+            str(sess.get("trigger_open_id") or "")[-8:],
+            str(sess.get("trigger_lark_user_id") or "")[-6:],
+        )
+        return
+
+    _try_ring_session(
+        chat_id,
+        sess,
+        declarer_open_id=joiner,
+        meeting_ref=ref,
+        tenant_token=tenant_token,
+    )
+
+
+def maybe_retry_pending_vc_ring_for_declarer(declarer_open_id: str, tenant_token: str) -> int:
+    """
+    After OAuth, retry ring on active sessions where this user declared P0 but ring did not run
+    (e.g. they joined VC before authorizing).
+    """
+    if not _config.get_p0_vc_ring_enabled():
+        return 0
+    declarer = (declarer_open_id or "").strip()
+    if not declarer:
+        return 0
+    if not _oauth.has_user_token(declarer):
+        return 0
+
+    n_ok = 0
+    for chat_id, sess in list(_session.P0_SESSIONS.items()):
+        if not isinstance(sess, dict):
+            continue
+        if str(sess.get("trigger_open_id") or "").strip() != declarer:
+            continue
+        if sess.get("vc_ring_done"):
+            continue
+        if not list(sess.get("vc_ring_target_open_ids") or []):
+            continue
+        meeting_ref = str(sess.get("meeting_id") or sess.get("meeting_no") or "").strip()
+        if not meeting_ref:
+            continue
+        if _try_ring_session(
+            chat_id,
+            sess,
+            declarer_open_id=declarer,
+            meeting_ref=meeting_ref,
+            tenant_token=tenant_token,
+        ):
+            n_ok += 1
+    if n_ok:
+        log.info("vc_ring: OAuth retry rang %s session(s) for declarer_tail=%s", n_ok, declarer[-8:])
+    return n_ok

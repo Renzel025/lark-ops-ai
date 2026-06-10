@@ -947,6 +947,26 @@ def lookup_user_name_by_open_id(tenant_token: str, open_id: str) -> str:
     return ""
 
 
+def lookup_open_id_by_user_id(tenant_token: str, user_id: str) -> str:
+    """Resolve Lark ``open_id`` from tenant ``user_id`` (VC join events sometimes omit ``open_id``)."""
+    user_id = (user_id or "").strip()
+    if not tenant_token or not user_id:
+        return ""
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    url = f"{LARK_BASE}/contact/v3/users/{quote(user_id, safe='')}"
+    try:
+        r = _lark_http().get(url, headers=headers, params={"user_id_type": "user_id"}, **_timeout_kw())
+        if r.status_code != 200:
+            return ""
+        j = r.json() if r.text else {}
+        if j.get("code") != 0:
+            return ""
+        user = (j.get("data") or {}).get("user") or {}
+        return str(user.get("open_id") or "").strip()
+    except Exception:
+        return ""
+
+
 def get_tenant_user_id_by_open_id(tenant_token: str, open_id: str) -> str:
     """
     Lark tenant ``user_id`` (e.g. ``SNT0006``) for a user ``open_id``, using **primary** app token.

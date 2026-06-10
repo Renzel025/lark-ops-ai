@@ -556,14 +556,27 @@ async def lark_oauth_start(open_id: str = ""):
 
 @app.get("/lark/oauth/callback")
 async def lark_oauth_callback(code: str = "", state: str = ""):
+    from p0_logic import lark_client as _lark_client
+    from p0_logic.vc_ring import maybe_retry_pending_vc_ring_for_declarer
     from p0_logic.vc_user_oauth import exchange_code_for_tokens
 
     hint = (state or "").strip()
     ok, oid, msg = exchange_code_for_tokens((code or "").strip(), open_id_hint=hint)
     if ok:
+        retry_note = ""
+        try:
+            tenant_token = _lark_client.get_tenant_token_primary()
+            n = maybe_retry_pending_vc_ring_for_declarer(oid, tenant_token)
+            if n:
+                retry_note = f" Ring attempted on {n} active P0 session(s)."
+            else:
+                retry_note = " Join (or re-join) the P0 VC to ring tagged users."
+        except Exception as e_retry:
+            log.warning("vc_ring OAuth retry failed: %s", e_retry)
+            retry_note = " Join the P0 VC to ring tagged users."
         return HTMLResponse(
-            f"<p>VC ring authorized for user …{oid[-8:] if oid else ''}. "
-            "You can close this tab and join P0 meetings — tagged users will be rung when you enter the VC.</p>"
+            f"<p>VC ring authorized for user …{oid[-8:] if oid else ''}."
+            f"{retry_note} You can close this tab.</p>"
         )
     return HTMLResponse(f"<p>OAuth failed: {msg}</p>", status_code=400)
 
@@ -673,11 +686,17 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 add_meeting_participant(participant_name)
             else:
                 log.warning("vc join event received but participant name is empty after fallback lookup")
-            if meeting_ref and oid:
+            joiner_uid = (refs.get("user_id") or "").strip()
+            if meeting_ref and (oid or joiner_uid):
                 try:
                     from p0_logic.vc_ring import maybe_ring_on_vc_join
 
-                    maybe_ring_on_vc_join(meeting_ref, oid, tenant_token)
+                    maybe_ring_on_vc_join(
+                        meeting_ref,
+                        oid,
+                        tenant_token,
+                        joiner_user_id=joiner_uid,
+                    )
                 except Exception as e_ring:
                     log.warning("vc_ring on join failed: %s", e_ring)
             return

@@ -544,7 +544,9 @@ def try_handle_issue_watch(
         from . import vc_ring as _vc_ring
 
         if _vc_ring._is_duty_open_id(sender):
-            _vc_ring.note_duty_mentions_in_chat(cid, sender, concern_mids)
+            _vc_ring.note_duty_mentions_in_chat(
+                cid, sender, concern_mids, tenant_token=tenant_token
+            )
     raw = (text or "").strip()
     if not raw:
         return True
