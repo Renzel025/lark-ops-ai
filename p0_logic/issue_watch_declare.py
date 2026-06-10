@@ -183,6 +183,7 @@ def handle_declare_p0(
         source_chat_name=group_label,
         trigger_lark_user_id=(operator_lark_user_id or "").strip(),
         silent_when_blocked=False,
+        issue_watch_alert_key=key,
     )
     _lark.post_text_to_open_id(
         oid,
