@@ -956,6 +956,21 @@ def build_help_commands_card() -> Dict[str, Any]:
     }
 
 
+def dm_escalation_reminder_plain() -> str:
+    """P0 SOP escalation reminder (plain text for DM lines)."""
+    return (
+        "Escalation category:\n\n"
+        "Major Issues:\n"
+        "Login, games/events entering, withdrawal, deposit problems.\n"
+        "• Need to send the P0 overview to the WhatsApp group as well\n\n"
+        "Minor Issues:\n"
+        "All other issues, including cases where it's unclear whether the problem is on our side "
+        "or limited to a specific provider (especially if only one provider is affected).\n"
+        "• No need to send the P0 overview to the WhatsApp group\n\n"
+        "Note: Every time you call, please provide them with a brief update on what is happening"
+    )
+
+
 def _dm_escalation_reminder_md() -> str:
     return (
         "**Escalation category:**\n\n"
@@ -967,6 +982,24 @@ def _dm_escalation_reminder_md() -> str:
         "or limited to a specific provider (especially if only one provider is affected).\n"
         "• No need to send the P0 overview to the WhatsApp group\n\n"
         "**Note:** Every time you call, please provide them with a brief update on what is happening."
+    )
+
+
+def build_issue_watch_declare_overview_hint_text() -> str:
+    """DM hint above the suggested overview preview card after Issue Watch declare."""
+    return (
+        "P0 has been declared - A suggested overview is being generated\n\n"
+        "Select Send to group - to post it to the incident group.\n\n"
+        "Select Cancel - to skip this auto-generated overview and proceed with the standard "
+        "Build overview flow using your own text and screenshots."
+    )
+
+
+def build_issue_watch_declare_followup_text() -> str:
+    """DM after declare: SOP reminder (meeting card is in the detection group)."""
+    return (
+        "P0 has been declared. Please follow the guidelines and SOP for handling a P0 incident.\n\n"
+        + dm_escalation_reminder_plain()
     )
 
 

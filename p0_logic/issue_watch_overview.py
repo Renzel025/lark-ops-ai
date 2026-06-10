@@ -362,10 +362,7 @@ def _post_suggested_overview_preview(
         st_h, body_h = _lark.post_text_to_open_id(
             oid,
             tok,
-            "P0 has been declared. A suggested overview from Issue Watch is shown below. "
-            "Select Send to group to post it to the incident group. "
-            "Select Cancel to skip this auto-generated overview and proceed with the "
-            "standard Build overview flow using your own text and screenshots.",
+            _cards.build_issue_watch_declare_overview_hint_text(),
         )
         hint_mid = _lark.parse_im_message_id_from_response(body_h) if st_h == 200 else ""
         _drafts.patch_preview_fields(

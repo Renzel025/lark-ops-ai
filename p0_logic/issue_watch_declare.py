@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+from . import cards as _cards
 from . import config as _config
 from . import groq_client as _groq
 from . import issue_watch_overview as _iwo
@@ -184,11 +185,7 @@ def handle_declare_p0(
         trigger_lark_user_id=(operator_lark_user_id or "").strip(),
         silent_when_blocked=False,
     )
-    _lark.post_text_to_open_id(
-        oid,
-        tok,
-        "P0 declare initiated. Check the detection group for the meeting card and your DM for the overview preview.",
-    )
+    _lark.post_text_to_open_id(oid, tok, _cards.build_issue_watch_declare_followup_text())
 
 
 def handle_declare_dismiss(operator_open_id: str, tenant_token: str) -> None:
