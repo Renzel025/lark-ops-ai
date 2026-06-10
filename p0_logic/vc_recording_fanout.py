@@ -79,22 +79,37 @@ def _token_for_recording_set_permission(
     return ""
 
 
-def _grant_recording_permissions(meeting_id: str, targets: list, user_targets: list) -> bool:
-    """Call set_permission with duty user token; refresh + retry once on 99991663."""
+def _grant_recording_permissions(
+    meeting_id: str,
+    targets: list,
+    user_targets: list,
+    *,
+    recording_url: str = "",
+) -> bool:
+    """VC set_permission (view) + optional Drive API (edit) using duty user token."""
     perm_tok = _token_for_recording_set_permission(meeting_id)
     if not perm_tok:
         return False
-    grant_ok = _lark.grant_vc_recording_view_to_chat_groups(
+    vc_ok = _lark.grant_vc_recording_view_to_chat_groups(
         perm_tok, meeting_id, targets, user_open_ids=user_targets
     )
-    if grant_ok:
-        return True
-    perm_tok = _token_for_recording_set_permission(meeting_id, force_refresh=True)
-    if not perm_tok:
-        return False
-    return _lark.grant_vc_recording_view_to_chat_groups(
-        perm_tok, meeting_id, targets, user_open_ids=user_targets
-    )
+    if not vc_ok:
+        perm_tok = _token_for_recording_set_permission(meeting_id, force_refresh=True)
+        if perm_tok:
+            vc_ok = _lark.grant_vc_recording_view_to_chat_groups(
+                perm_tok, meeting_id, targets, user_open_ids=user_targets
+            )
+    drive_perm = _config.get_vc_recording_fanout_drive_perm()
+    drive_ok = False
+    if drive_perm and (recording_url or "").strip():
+        drive_ok = _lark.grant_minutes_drive_collaborators(
+            perm_tok,
+            recording_url,
+            targets,
+            user_open_ids=user_targets,
+            perm=drive_perm,
+        )
+    return vc_ok or drive_ok
 
 
 def _usable_recording_url(u: str) -> bool:
@@ -206,10 +221,16 @@ def fanout_recording_to_chats(
     user_targets = _config.get_vc_recording_fanout_user_open_ids()
     if not targets and not user_targets:
         log.warning(
-            "vc recording fan-out disabled — set P0_NOTIFICATION_HUB_CHAT_IDS or "
-            "VC_RECORDING_FANOUT_CHAT_IDS (and/or VC_RECORDING_FANOUT_USER_OPEN_IDS)"
+            "vc recording fan-out disabled — set VC_RECORDING_FANOUT_CHAT_IDS "
+            "(and/or VC_RECORDING_FANOUT_USER_OPEN_IDS)"
         )
         return False
+    log.info(
+        "vc recording fan-out post targets group_tails=%s user_tails=%s mid=%s",
+        [oc[-12:] if len(oc) > 12 else oc for oc in targets],
+        [ou[-8:] if len(ou) > 8 else ou for ou in user_targets],
+        mid[:20],
+    )
 
     topic = (topic or "").strip()
     meeting_no = (meeting_no or "").strip()
@@ -246,7 +267,9 @@ def fanout_recording_to_chats(
     duration_text = _fmt_duration_ms(duration_ms_raw)
 
     if _config.get_vc_recording_fanout_set_permission_enabled():
-        grant_ok = _grant_recording_permissions(mid, targets, user_targets)
+        grant_ok = _grant_recording_permissions(
+            mid, targets, user_targets, recording_url=recording_url
+        )
         if not grant_ok:
             log.warning(
                 "vc recording fan-out: set_permission grant failed mid=%s topic_head=%r — "
@@ -451,7 +474,7 @@ def schedule_recording_fanout_poll_after_meeting_end(
                     return
             log.warning(
                 "vc recording poll: gave up after %s attempts mid=%s — check vc:record scope, "
-                "P0_NOTIFICATION_HUB_CHAT_IDS, and meeting length (need ~10s+)",
+                "VC_RECORDING_FANOUT_CHAT_IDS, and meeting length (need ~10s+)",
                 len(gaps),
                 meeting_id[:24],
             )

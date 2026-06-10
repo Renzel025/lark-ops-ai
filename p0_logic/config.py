@@ -179,10 +179,10 @@ def _parse_oc_chat_id_csv(raw: str) -> List[str]:
 
 def get_p0_notification_hub_chat_ids() -> List[str]:
     """
-    Shared hub group(s) for **both** plain P0 join text and recording-available text.
+    Hub group(s) for plain P0 join / meeting-created text (``P0_MEETING_CREATED_TEXT_CHAT_IDS`` merge).
 
     ``P0_NOTIFICATION_HUB_CHAT_IDS`` (alias ``P0_HUB_CHAT_IDS``) — comma-separated ``oc_...``.
-    Merged with ``P0_MEETING_CREATED_TEXT_CHAT_IDS`` and ``VC_RECORDING_FANOUT_CHAT_IDS``.
+    **Not** auto-merged into recording fan-out — set ``VC_RECORDING_FANOUT_CHAT_IDS`` separately.
     """
     reload_env_runtime()
     raw = (
@@ -364,18 +364,46 @@ def get_vc_recording_fanout_chat_ids() -> List[str]:
     When Lark emits **vc.meeting.recording_ready_v1** (Open API reserves only), post the recording link
     to these ``oc_`` group chats. Comma-separated ``VC_RECORDING_FANOUT_CHAT_IDS`` (alias
     ``P0_VC_RECORDING_FANOUT_CHAT_IDS``). Bot must be in each group. Empty = disabled.
+
+    ``P0_NOTIFICATION_HUB_CHAT_IDS`` is **never** merged here. Hub ids in this list are dropped unless
+    ``VC_RECORDING_FANOUT_INCLUDE_HUB=1``.
     """
     reload_env_runtime()
     raw = (
         os.getenv("VC_RECORDING_FANOUT_CHAT_IDS") or os.getenv("P0_VC_RECORDING_FANOUT_CHAT_IDS") or ""
     ).strip()
     out = _parse_oc_chat_id_csv(raw)
-    seen = set(out)
-    for hub in get_p0_notification_hub_chat_ids():
-        if hub not in seen:
-            seen.add(hub)
-            out.append(hub)
-    return out
+    hub_set = set(get_p0_notification_hub_chat_ids())
+    if not hub_set:
+        return out
+    include_hub = (os.getenv("VC_RECORDING_FANOUT_INCLUDE_HUB") or "").strip().lower()
+    if include_hub in ("1", "true", "yes", "on"):
+        return out
+    filtered = [c for c in out if c not in hub_set]
+    dropped = [c for c in out if c in hub_set]
+    if dropped:
+        log.warning(
+            "vc recording fan-out: excluded hub chat(s) %s from recording post/set_permission — "
+            "set VC_RECORDING_FANOUT_CHAT_IDS to boss bot group only",
+            [d[-12:] if len(d) > 12 else d for d in dropped],
+        )
+    return filtered
+
+
+def get_vc_recording_fanout_drive_perm() -> str:
+    """
+    After recording is ready, upgrade Minutes collaborators via Drive API.
+
+    ``VC_RECORDING_FANOUT_DRIVE_PERM``: ``edit`` (default), ``view``, or ``off``/``0`` to skip.
+    Requires ``docs:permission.member:create`` (or ``drive:drive``) on the duty user/app token.
+    """
+    reload_env_runtime()
+    v = (os.getenv("VC_RECORDING_FANOUT_DRIVE_PERM") or "edit").strip().lower()
+    if v in ("0", "false", "no", "off", "none", "skip"):
+        return ""
+    if v in ("view", "edit"):
+        return v
+    return "edit"
 
 
 def get_vc_recording_fanout_user_open_ids() -> List[str]:

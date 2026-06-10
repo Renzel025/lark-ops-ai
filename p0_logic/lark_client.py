@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -824,6 +824,193 @@ def grant_vc_recording_view_to_chat_groups(
         meeting_id[:24],
         "; ".join(errors)[:500],
     )
+    return False
+
+
+def minutes_token_from_recording_url(recording_url: str) -> str:
+    """Extract Minutes file token from a recording URL path (``.../minutes/{token}``)."""
+    s = (recording_url or "").strip()
+    if not s:
+        return ""
+    try:
+        parts = [p for p in urlparse(s).path.split("/") if p]
+        for i, seg in enumerate(parts):
+            if seg == "minutes" and i + 1 < len(parts):
+                tok = parts[i + 1].split("?")[0].strip()
+                if len(tok) >= 8:
+                    return tok
+    except Exception:
+        pass
+    return ""
+
+
+def _drive_minutes_member_perm(
+    token: str,
+    minutes_token: str,
+    *,
+    member_type: str,
+    member_id: str,
+    perm: str,
+    use_create: bool,
+    label: str,
+) -> Tuple[bool, str]:
+    """Create or update a Minutes collaborator via Drive API."""
+    tok = (token or "").strip()
+    mtok = (minutes_token or "").strip()
+    mid = (member_id or "").strip()
+    mtype = (member_type or "").strip()
+    prole = (perm or "edit").strip().lower()
+    if prole not in ("view", "edit"):
+        prole = "edit"
+    if not tok or not mtok or not mid or not mtype:
+        return False, "missing token, minutes_token, member_type, or member_id"
+    payload = {"member_type": mtype, "member_id": mid, "perm": prole}
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
+    last_err = ""
+    tag = (label or "drive_minutes_perm").strip()
+    bases = list(VC_BASES)
+    for base in bases:
+        enc_tok = quote(mtok, safe="")
+        if use_create:
+            url = f"{base.rstrip('/')}/drive/v1/permissions/{enc_tok}/members?type=minutes"
+            method = "post"
+        else:
+            enc_mid = quote(mid, safe="")
+            url = (
+                f"{base.rstrip('/')}/drive/v1/permissions/{enc_tok}/members/{enc_mid}"
+                f"?type=minutes&member_type={quote(mtype, safe='')}"
+            )
+            method = "put"
+        try:
+            fn = _lark_http().post if method == "post" else _lark_http().put
+            r = fn(url, headers=headers, json=payload, **_timeout_kw())
+            body_snip = (r.text or "")[:320].replace("\n", " ")
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={body_snip}"
+                log.warning("VC recording %s failed base=%s http=%s %s", tag, base, r.status_code, body_snip[:200])
+                continue
+            j = r.json() if r.text else {}
+            if isinstance(j, dict) and j.get("code") == 0:
+                log.info(
+                    "VC recording %s ok minutes_token_tail=%s member_tail=%s perm=%s",
+                    tag,
+                    mtok[-8:] if len(mtok) > 8 else mtok,
+                    mid[-8:] if len(mid) > 8 else mid,
+                    prole,
+                )
+                return True, ""
+            last_err = (
+                f"code={j.get('code') if isinstance(j, dict) else '?'} "
+                f"msg={j.get('msg') if isinstance(j, dict) else ''} body={body_snip}"
+            )
+            log.warning("VC recording %s API error base=%s %s", tag, base, last_err[:280])
+        except Exception as e:
+            last_err = str(e)
+            log.warning("VC recording %s exception base=%s err=%s", tag, base, e)
+    return False, last_err
+
+
+def grant_minutes_drive_collaborators(
+    token: str,
+    recording_url: str,
+    chat_ids: List[str],
+    *,
+    user_open_ids: Optional[List[str]] = None,
+    perm: str = "edit",
+) -> bool:
+    """
+    Drive API: add **edit** (or view) on the Minutes file for users (``openid``) and groups (``openchat``).
+    Complements VC ``set_permission`` (view-only). Requires duty **user_access_token** + docs scopes.
+    """
+    tok = (token or "").strip()
+    minutes_tok = minutes_token_from_recording_url(recording_url)
+    if not tok or not minutes_tok:
+        log.warning(
+            "grant_minutes_drive_collaborators skipped — missing token or minutes token url_head=%r",
+            (recording_url or "")[:80],
+        )
+        return False
+    users_src = user_open_ids
+    if users_src is None:
+        users_src = _config.get_vc_recording_fanout_user_open_ids()
+    prole = (perm or "edit").strip().lower()
+    if prole not in ("view", "edit"):
+        prole = "edit"
+    ok_any = False
+    errors: List[str] = []
+    seen_user: set[str] = set()
+    for raw in users_src or []:
+        uid = (raw or "").strip()
+        if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
+            continue
+        seen_user.add(uid)
+        ok, err = _drive_minutes_member_perm(
+            tok,
+            minutes_tok,
+            member_type="openid",
+            member_id=uid,
+            perm=prole,
+            use_create=True,
+            label="drive_minutes user create",
+        )
+        if not ok:
+            ok, err = _drive_minutes_member_perm(
+                tok,
+                minutes_tok,
+                member_type="openid",
+                member_id=uid,
+                perm=prole,
+                use_create=False,
+                label="drive_minutes user update",
+            )
+        if ok:
+            ok_any = True
+        elif err:
+            errors.append(f"user {uid[-8:]}: {err}")
+    seen_chat: set[str] = set()
+    for raw in chat_ids:
+        cid = (raw or "").strip()
+        if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
+            continue
+        seen_chat.add(cid)
+        ok, err = _drive_minutes_member_perm(
+            tok,
+            minutes_tok,
+            member_type="openchat",
+            member_id=cid,
+            perm=prole,
+            use_create=True,
+            label="drive_minutes group create",
+        )
+        if not ok:
+            ok, err = _drive_minutes_member_perm(
+                tok,
+                minutes_tok,
+                member_type="openchat",
+                member_id=cid,
+                perm=prole,
+                use_create=False,
+                label="drive_minutes group update",
+            )
+        if ok:
+            ok_any = True
+        elif err:
+            errors.append(f"group {cid[-8:]}: {err}")
+    if ok_any:
+        log.info(
+            "VC recording drive Minutes perm ok token_tail=%s users=%s groups=%s perm=%s",
+            minutes_tok[-8:] if len(minutes_tok) > 8 else minutes_tok,
+            len(seen_user),
+            len(seen_chat),
+            prole,
+        )
+        return True
+    if errors:
+        log.warning(
+            "grant_minutes_drive_collaborators failed token_tail=%s err=%s",
+            minutes_tok[-8:] if len(minutes_tok) > 8 else minutes_tok,
+            "; ".join(errors)[:500],
+        )
     return False
 
 
