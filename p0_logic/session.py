@@ -1518,6 +1518,7 @@ def start_p0(
     trigger_lark_user_id: str = "",
     silent_when_blocked: bool = False,
     vc_ring_target_open_ids: Optional[List[str]] = None,
+    issue_watch_alert_key: str = "",
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -1734,28 +1735,19 @@ def start_p0(
         schedule_p0_graph_screenshot(token, priority, chat_label)
     except Exception as e:
         log.warning("start_p0: graph screenshot hook failed: %s", e)
-    # Primary bot DM: Issue Watch suggested preview on P0 declare when a recent alert exists; else green card.
-    issue_watch_key = ""
-    if priority == "P0" and _config.get_p0_issue_watch_auto_overview_enabled():
-        try:
-            from . import issue_watch_overview as _iwo
-
-            issue_watch_key = _iwo.find_latest_alert_key_for_chat(chat_id)
-            if issue_watch_key:
-                log.info(
-                    "start_p0: Issue Watch overview will DM on declare chat_id=%s alert_key=%s",
-                    chat_id[:24],
-                    issue_watch_key[:12],
-                )
-            else:
-                log.warning(
-                    "start_p0: no Issue Watch alert cache for chat_id=%s — "
-                    "duty gets green Build overview only (set P0_SHARED_STATE_DIR for multi-worker; "
-                    "alert must be within 2h of declare)",
-                    chat_id[:24],
-                )
-        except Exception as e_iw:
-            log.warning("start_p0: Issue Watch overview lookup failed: %s", e_iw)
+    # Auto overview preview only when P0 is declared from Issue Watch DM (explicit alert_key).
+    # Typed p0 / thread confirm always get the green Build overview card.
+    issue_watch_key = (issue_watch_alert_key or "").strip()
+    if (
+        issue_watch_key
+        and priority == "P0"
+        and _config.get_p0_issue_watch_auto_overview_enabled()
+    ):
+        log.info(
+            "start_p0: Issue Watch suggested overview on declare chat_id=%s alert_key=%s",
+            chat_id[:24],
+            issue_watch_key[:12],
+        )
     for oid in dm_targets:
         if not oid:
             continue

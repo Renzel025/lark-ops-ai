@@ -195,6 +195,7 @@ def handle_declare_p0(
         trigger_lark_user_id=(operator_lark_user_id or "").strip(),
         silent_when_blocked=False,
         vc_ring_target_open_ids=ring_targets if _config.get_p0_vc_ring_enabled() else None,
+        issue_watch_alert_key=key,
     )
     _lark.post_text_to_open_id(oid, tok, _cards.build_issue_watch_declare_followup_text())
     if _config.get_p0_vc_ring_enabled():
