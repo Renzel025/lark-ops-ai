@@ -227,6 +227,13 @@ def _post_on_demand_reply(chat_id: str, token: str, text: str) -> None:
 
 
 def _chat_allows_on_demand(chat_id: str) -> bool:
+    """
+    On-demand Grafana chat replies/capture only in the screenshot hub — not every incident group.
+
+    Allowlist order:
+    1. ``P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS`` when set
+    2. Else ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID`` only
+    """
     cid = (chat_id or "").strip()
     if not cid:
         return False
@@ -234,9 +241,7 @@ def _chat_allows_on_demand(chat_id: str) -> bool:
     if allowed:
         return cid in allowed
     target = _config.get_p0_graph_screenshot_target_chat_id()
-    if target and cid == target:
-        return True
-    return cid in _config.get_incident_group_chat_ids()
+    return bool(target) and cid == target
 
 
 def _react_to_request_message(token: str, message_id: str, emoji_type: str) -> None:
@@ -273,6 +278,14 @@ def try_handle_graph_screenshot_request(
     cid = (chat_id or "").strip()
     tok = (tenant_token or "").strip()
     if not cid or not tok:
+        return False
+
+    if not _chat_allows_on_demand(cid):
+        log.info(
+            "graph screenshot on-demand: ignored (not screenshot hub) chat_id_tail=%s text_head=%r",
+            cid[-12:] if len(cid) > 12 else cid,
+            raw[:80],
+        )
         return False
 
     range_key = resolve_graph_screenshot_range_key(
@@ -323,21 +336,6 @@ def try_handle_graph_screenshot_request(
             cid,
             tok,
             "📊 Grafana screenshot URL is not configured (`P0_GRAPH_SCREENSHOT_URL` missing in `.env`).",
-        )
-        return True
-
-    if not _chat_allows_on_demand(cid):
-        log.info(
-            "graph screenshot on-demand: ignored (chat not allowed) chat_id_tail=%s range=%s",
-            cid[-12:] if len(cid) > 12 else cid,
-            range_key,
-        )
-        _post_on_demand_reply(
-            cid,
-            tok,
-            "📊 This chat is not allowed for on-demand screenshots. "
-            "Add this group to `INCIDENT_GROUP_IDS` or `P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS` "
-            f"(chat tail `…{cid[-12:]}`).",
         )
         return True
 

@@ -1476,10 +1476,10 @@ def get_p0_graph_screenshot_bot_mention_hints() -> Tuple[str, ...]:
 
 def get_p0_graph_screenshot_on_demand_chat_ids() -> FrozenSet[str]:
     """
-    Chats that may request on-demand screenshots. Empty = incident detection groups +
-    ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``.
+    Extra chats allowed for on-demand Grafana requests (comma ``oc_``).
 
-    Env: ``P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS`` (comma ``oc_``).
+    When empty, only ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID`` (screenshot hub) is allowed —
+    not all ``INCIDENT_GROUP_IDS``.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_ON_DEMAND_CHAT_IDS") or "").strip()
