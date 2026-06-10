@@ -1517,6 +1517,7 @@ def start_p0(
     source_chat_name: str = "",
     trigger_lark_user_id: str = "",
     silent_when_blocked: bool = False,
+    vc_ring_target_open_ids: Optional[List[str]] = None,
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -1602,6 +1603,8 @@ def start_p0(
             "participants": [],
             "affected_players": affected_players,
             "vc_external_join_count": 0,
+            "vc_ring_target_open_ids": list(vc_ring_target_open_ids or []),
+            "vc_ring_done": False,
         }
         if trigger_open_id:
             try:

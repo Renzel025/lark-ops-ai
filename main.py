@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi.responses import HTMLResponse, RedirectResponse
 from Crypto.Cipher import AES
 import lark_oapi as lark
 
@@ -524,6 +525,49 @@ def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
     return _first_non_empty_str(candidates)
 
 
+@app.get("/lark/oauth/start")
+async def lark_oauth_start(open_id: str = ""):
+    """Redirect duty to Lark OAuth (VC ring). Register this path + /lark/oauth/callback in Lark console."""
+    from p0_logic import config as _cfg
+    from p0_logic.vc_user_oauth import build_authorize_url
+
+    if not _cfg.get_p0_vc_ring_enabled():
+        return HTMLResponse("<p>P0_VC_RING_ENABLED is off.</p>", status_code=404)
+    oid = (open_id or "").strip()
+    app_id, _ = _cfg.get_lark_primary_app_credentials()
+    redirect = _cfg.get_p0_vc_oauth_redirect_uri()
+    scope = _cfg.get_p0_vc_oauth_scope()
+    if not app_id or not redirect:
+        return HTMLResponse("<p>OAuth not configured (LARK_APP_ID / P0_VC_OAUTH_REDIRECT_URI).</p>", status_code=500)
+    import urllib.parse
+
+    state = urllib.parse.quote(oid, safe="")
+    url = (
+        "https://open.larksuite.com/open-apis/authen/v1/authorize"
+        f"?app_id={urllib.parse.quote(app_id, safe='')}"
+        f"&redirect_uri={urllib.parse.quote(redirect, safe='')}"
+        f"&scope={urllib.parse.quote(scope, safe='')}"
+        f"&state={state}"
+    )
+    if oid:
+        log.info("vc oauth start open_id_tail=%s", oid[-8:])
+    return RedirectResponse(url)
+
+
+@app.get("/lark/oauth/callback")
+async def lark_oauth_callback(code: str = "", state: str = ""):
+    from p0_logic.vc_user_oauth import exchange_code_for_tokens
+
+    hint = (state or "").strip()
+    ok, oid, msg = exchange_code_for_tokens((code or "").strip(), open_id_hint=hint)
+    if ok:
+        return HTMLResponse(
+            f"<p>VC ring authorized for user …{oid[-8:] if oid else ''}. "
+            "You can close this tab and join P0 meetings — tagged users will be rung when you enter the VC.</p>"
+        )
+    return HTMLResponse(f"<p>OAuth failed: {msg}</p>", status_code=400)
+
+
 @app.post("/lark/webhook")
 async def lark_webhook(req: Request, background: BackgroundTasks):
     try:
@@ -629,6 +673,13 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 add_meeting_participant(participant_name)
             else:
                 log.warning("vc join event received but participant name is empty after fallback lookup")
+            if meeting_ref and oid:
+                try:
+                    from p0_logic.vc_ring import maybe_ring_on_vc_join
+
+                    maybe_ring_on_vc_join(meeting_ref, oid, tenant_token)
+                except Exception as e_ring:
+                    log.warning("vc_ring on join failed: %s", e_ring)
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":

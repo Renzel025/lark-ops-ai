@@ -562,6 +562,53 @@ def delete_vc_reserve(token: str, reserve_id: str) -> bool:
     return False
 
 
+def invite_users_to_vc_meeting(
+    user_access_token: str,
+    meeting_id: str,
+    invitee_open_ids: List[str],
+) -> Tuple[bool, str]:
+    """
+    ``PATCH /vc/v1/meetings/{meeting_id}/invite`` — ring Lark users into an **ongoing** meeting.
+
+    Requires **user_access_token** of a participant already in the meeting (typically duty).
+    Up to 10 invitees per call.
+    """
+    tok = (user_access_token or "").strip()
+    mid = (meeting_id or "").strip()
+    ids = [x.strip() for x in (invitee_open_ids or []) if (x or "").strip().startswith("ou_")][:10]
+    if not tok or not mid or not ids:
+        return False, "missing token, meeting_id, or invitees"
+    invitees = [{"id": oid, "user_type": 1} for oid in ids]
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    payload = {"invitees": invitees}
+    last_err = ""
+    for base in VC_BASES:
+        url = f"{base}/vc/v1/meetings/{quote(mid, safe='')}/invite?user_id_type=open_id"
+        try:
+            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
+            log.info("VC invite try: %s -> HTTP=%s targets=%s", url, r.status_code, len(ids))
+            if r.status_code != 200:
+                last_err = (r.text or "")[:300]
+                continue
+            j = r.json() if r.text else {}
+            if not isinstance(j, dict) or j.get("code") != 0:
+                last_err = f"code={j.get('code')} msg={j.get('msg')}"
+                continue
+            results = ((j.get("data") or {}).get("invite_results") or [])
+            ok_n = sum(1 for row in results if isinstance(row, dict) and int(row.get("status") or 0) == 1)
+            detail = f"ok={ok_n}/{len(ids)}"
+            if ok_n > 0:
+                return True, detail
+            last_err = detail or "no successful invites"
+        except Exception as e:
+            last_err = str(e)
+    log.warning("invite_users_to_vc_meeting failed meeting_id=%s err=%s", mid[:24], last_err)
+    return False, last_err
+
+
 def end_vc_meeting(token: str, meeting_id: str) -> bool:
     """
     ``POST /vc/v1/meetings/{meeting_id}/end``.

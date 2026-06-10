@@ -526,6 +526,7 @@ def try_handle_issue_watch(
     source_chat_name: str = "",
     message_id: str = "",
     message_create_time: str = "",
+    mention_open_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Classify detection-group chatter and DM overview duty users on incident signals.
@@ -537,6 +538,13 @@ def try_handle_issue_watch(
     cid = (chat_id or "").strip()
     if not cid:
         return False
+    sender = (sender_open_id or "").strip()
+    concern_mids = [str(x).strip() for x in (mention_open_ids or []) if str(x).strip()]
+    if concern_mids and _config.get_p0_vc_ring_enabled():
+        from . import vc_ring as _vc_ring
+
+        if _vc_ring._is_duty_open_id(sender):
+            _vc_ring.note_duty_mentions_in_chat(cid, sender, concern_mids)
     raw = (text or "").strip()
     if not raw:
         return True
@@ -591,7 +599,6 @@ def try_handle_issue_watch(
         return True
 
     fingerprint = str(result.get("issue_fingerprint") or "unknown_issue")
-    sender = (sender_open_id or "").strip()
     window_min = _config.get_p0_issue_watch_window_min()
     window_sec = float(window_min * 60)
     min_reports = _config.get_p0_issue_watch_min_reports()
@@ -684,6 +691,7 @@ def try_handle_issue_watch(
         or _lark.build_chat_open_applink(cid),
         "source_message_time": src_time,
         "supplemental_player_ids": False,
+        "concern_mention_open_ids": concern_mids,
     }
 
     wait_sec = _config.get_p0_issue_watch_id_wait_sec()

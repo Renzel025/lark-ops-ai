@@ -2433,6 +2433,55 @@ def get_p0_issue_watch_declare_reply_in_thread() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_vc_ring_enabled() -> bool:
+    """
+    ``P0_VC_RING_ENABLED=1`` — when duty joins the P0 VC, ring users @mentioned on the concern
+    (and/or duty's latest @mentions in the detection group). Dev-first; requires OAuth below.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_VC_RING_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_vc_oauth_redirect_uri() -> str:
+    """OAuth callback URL registered in Lark Developer Console."""
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_REDIRECT_URI") or "").strip()
+
+
+def get_p0_vc_oauth_public_base_url() -> str:
+    """Public HTTPS base for authorize links in DM (e.g. ``https://dev.example.com``)."""
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_PUBLIC_BASE_URL") or "").strip()
+
+
+def get_p0_vc_oauth_scope() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_SCOPE") or "vc:meeting").strip()
+
+
+def get_p0_vc_ring_fallback_open_ids() -> List[str]:
+    """Optional dev fallback when concern has no @mentions (comma-separated ``ou_...``)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_RING_FALLBACK_OPEN_IDS") or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        p = part.strip()
+        if p.startswith("ou_") and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def get_lark_bot_open_id() -> str:
+    """Optional bot ``ou_...`` to exclude from ring targets when @mentioned by mistake."""
+    reload_env_runtime()
+    return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
+
+
 def get_p0_issue_watch_declare_also_send_to_group() -> bool:
     """
     ``P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP`` — after thread reply, also post the same text

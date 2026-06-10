@@ -1368,6 +1368,7 @@ def process_message(
                 source_chat_name=source_chat_name,
                 message_id=message_id,
                 message_create_time=message_create_time,
+                mention_open_ids=kwargs.get("mention_open_ids"),
             ):
                 return
 
