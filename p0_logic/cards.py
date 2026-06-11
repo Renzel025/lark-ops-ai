@@ -1105,6 +1105,28 @@ def build_dm_instruction_card(
     }
 
 
+def build_adjustment_bitable_card(body_md: str, *, hours: int, count: int) -> Dict[str, Any]:
+    """Orange card for recent Bitable deployments (reply under P0 overview)."""
+    hrs = max(1, int(hours or 24))
+    n = max(0, int(count or 0))
+    safe_md = (body_md or "").strip()[:3500]
+    subtitle = f"{n} service(s) with Blue Green or Full Release in the last {hrs}h"
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": subtitle}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "lark_md", "content": safe_md or "_No rows_"}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": f"⚙️ Side deployments ({hrs}h)"},
+        },
+        "body": {"elements": elements},
+    }
+
+
 def build_overview_result_card(
     md: str,
     priority: str = "P0",

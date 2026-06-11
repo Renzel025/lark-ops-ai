@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
 
@@ -109,11 +110,27 @@ def _pick_time_ms(fields: Dict[str, Any], names: Tuple[str, ...]) -> Optional[in
     return None
 
 
-def _fmt_ts(ms: int) -> str:
+def _fmt_ts_short(ms: int) -> str:
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=_SGT).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(ms / 1000, tz=_SGT).strftime("%b %d %H:%M")
     except Exception:
         return ""
+
+
+def _short_image_tag(tag: str) -> str:
+    """Prefer version string over long registry URLs in the notice."""
+    t = (tag or "").strip()
+    if not t:
+        return ""
+    m = re.search(r"(v[\d.]+[a-z]?__[^\s/]+)", t, re.I)
+    if m:
+        return _truncate(m.group(1), 40)
+    if "://" in t or "registry" in t.lower() or "aliyun" in t.lower():
+        parts = [p for p in t.rstrip("/").split("/") if p]
+        if parts:
+            return _truncate(parts[-1], 32)
+        return "registry image"
+    return _truncate(t, 40)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -153,24 +170,38 @@ class AdjustmentRow:
         self.full_release_ms = full_release_ms
         self.sort_ms = sort_ms
 
-    def line(self, *, cutoff_ms: int) -> str:
-        parts: List[str] = []
+    def _title(self) -> str:
+        name_bits: List[str] = []
         if self.service:
-            parts.append(self.service)
+            name_bits.append(self.service)
         if self.namespace:
-            parts.append(f"({self.namespace})")
-        head = " ".join(parts) if parts else "(entry)"
-        tail_bits: List[str] = []
-        if self.image_tag:
-            tail_bits.append(_truncate(self.image_tag, 48))
+            name_bits.append(self.namespace)
+        return " · ".join(name_bits) if name_bits else "entry"
+
+    def block_lines(self, *, index: int, cutoff_ms: int) -> List[str]:
+        """Plain-text block per deployment (fallback message)."""
+        out = [f"{index}. {self._title()}"]
+        tag = _short_image_tag(self.image_tag)
+        if tag:
+            out.append(f"   Image: {tag}")
         if self.blue_green_ms and self.blue_green_ms >= cutoff_ms:
-            tail_bits.append(f"Blue Green {_fmt_ts(self.blue_green_ms)}")
+            out.append(f"   Blue Green:   {_fmt_ts_short(self.blue_green_ms)}")
         if self.full_release_ms and self.full_release_ms >= cutoff_ms:
-            tail_bits.append(f"Full Release {_fmt_ts(self.full_release_ms)}")
-        if self.project:
-            tail_bits.append(self.project)
-        tail = " — ".join(x for x in tail_bits if x)
-        return f"• {head}" + (f" — {tail}" if tail else "")
+            out.append(f"   Full Release: {_fmt_ts_short(self.full_release_ms)}")
+        return out
+
+    def block_md(self, *, index: int, cutoff_ms: int) -> str:
+        """Markdown block for interactive card body."""
+        lines: List[str] = []
+        tag = _short_image_tag(self.image_tag)
+        if tag:
+            lines.append(f"- **Image:** `{tag}`")
+        if self.blue_green_ms and self.blue_green_ms >= cutoff_ms:
+            lines.append(f"- **Blue Green:** {_fmt_ts_short(self.blue_green_ms)}")
+        if self.full_release_ms and self.full_release_ms >= cutoff_ms:
+            lines.append(f"- **Full Release:** {_fmt_ts_short(self.full_release_ms)}")
+        body = "\n".join(lines) if lines else "- _(no times in window)_"
+        return f"**{index}. {self._title()}**\n{body}"
 
 
 def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], str]:
@@ -255,19 +286,32 @@ def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], st
     return rows, ""
 
 
+def build_adjustment_notice_md(rows: List[AdjustmentRow], *, cutoff_ms: int) -> str:
+    """Card body markdown (header lives on the interactive card)."""
+    if not rows:
+        return ""
+    parts: List[str] = []
+    for i, row in enumerate(rows, start=1):
+        parts.append(row.block_md(index=i, cutoff_ms=cutoff_ms))
+        if i < len(rows):
+            parts.append("---")
+    return "\n\n".join(parts)
+
+
 def build_adjustment_notice_text(rows: List[AdjustmentRow], *, cutoff_ms: int) -> str:
+    """Plain-text fallback when card post fails."""
     if not rows:
         return ""
     hours = _config.get_p0_adjustment_bitable_hours()
-    url = _config.get_p0_adjustment_bitable_doc_url()
     lines = [
-        f"⚙️ Side deployments (last {hours}h)",
-        f"对方侧 Blue Green / Full Release 时间在过去 {hours} 小时内：",
+        f"⚙️ Recent side deployments (last {hours}h)",
+        f"{len(rows)} service(s) with Blue Green or Full Release in window:",
         "",
     ]
-    lines.extend(r.line(cutoff_ms=cutoff_ms) for r in rows)
-    if url:
-        lines.extend(["", f"📋 Bitable: {url}"])
+    for i, row in enumerate(rows, start=1):
+        lines.extend(row.block_lines(index=i, cutoff_ms=cutoff_ms))
+        if i < len(rows):
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -319,28 +363,47 @@ def maybe_post_adjustment_notice_after_overview(
         )
         return False, ""
 
-    text = build_adjustment_notice_text(rows, cutoff_ms=cutoff_ms)
-    if not text:
+    body_md = build_adjustment_notice_md(rows, cutoff_ms=cutoff_ms)
+    text_fallback = build_adjustment_notice_text(rows, cutoff_ms=cutoff_ms)
+    if not body_md and not text_fallback:
         return False, ""
 
     reply_in_thread = _config.p0_adjustment_bitable_reply_in_thread()
-    st, body = _lark.post_text_reply_to_message(
+    card = _cards.build_adjustment_bitable_card(body_md, hours=hours, count=len(rows))
+    st, body = _lark.post_card_reply_to_message(
         overview_message_id,
         tenant_token,
-        text,
+        card,
         reply_in_thread=reply_in_thread,
     )
     ok, code, msg = _lark.lark_im_message_create_ok(body)
     if st != 200 or not ok:
         log.warning(
-            "adjustment_bitable: post failed HTTP=%s lark_code=%s lark_msg=%r dest_tail=%s",
+            "adjustment_bitable: card reply failed HTTP=%s lark_code=%s lark_msg=%r — trying text",
+            st,
+            code,
+            msg,
+        )
+        st, body = _lark.post_text_reply_to_message(
+            overview_message_id,
+            tenant_token,
+            text_fallback,
+            reply_in_thread=reply_in_thread,
+        )
+        ok, code, msg = _lark.lark_im_message_create_ok(body)
+    if st != 200 or not ok:
+        log.warning(
+            "adjustment_bitable: thread post failed HTTP=%s lark_code=%s lark_msg=%r dest_tail=%s",
             st,
             code,
             msg,
             group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
         )
-        st2, body2 = _lark.post_text_to_chat(group_chat_id, tenant_token, text)
+        st2, body2, _ = _lark.post_card_to_chat(group_chat_id, tenant_token, card)
         ok2, code2, msg2 = _lark.lark_im_message_create_ok(body2)
+        if st2 != 200 or not ok2:
+            st2, body2 = _lark.post_text_to_chat(group_chat_id, tenant_token, text_fallback)
+            ok2, code2, msg2 = _lark.lark_im_message_create_ok(body2)
         if st2 != 200 or not ok2:
             log.warning(
                 "adjustment_bitable: flat post also failed HTTP=%s lark_code=%s lark_msg=%r",
@@ -350,7 +413,7 @@ def maybe_post_adjustment_notice_after_overview(
             )
             return False, ""
     log.info(
-        "adjustment_bitable: posted %s row(s) (Blue Green / Full Release window) mid_tail=%s",
+        "adjustment_bitable: posted %s row(s) as card under overview mid_tail=%s",
         len(rows),
         overview_message_id[-12:] if len(overview_message_id) > 12 else overview_message_id,
     )

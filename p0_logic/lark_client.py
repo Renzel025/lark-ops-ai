@@ -172,6 +172,55 @@ def post_text_reply_to_message(
         return 0, str(e)
 
 
+def post_card_reply_to_message(
+    message_id: str,
+    token: str,
+    card: Dict[str, Any],
+    *,
+    reply_in_thread: bool = False,
+) -> Tuple[int, str]:
+    """Reply to a message with an interactive card (thread or flat reply)."""
+    mid = (message_id or "").strip()
+    tok = (token or "").strip()
+    if not mid or not tok or not card:
+        return 0, ""
+    url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}/reply"
+    payload: Dict[str, Any] = {
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+        "reply_in_thread": bool(reply_in_thread),
+    }
+    try:
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {tok}"}, json=payload, **_timeout_kw())
+        body = r.text or ""
+        if r.status_code != 200:
+            log.warning(
+                "post_card_reply_to_message HTTP=%s parent_tail=%s",
+                r.status_code,
+                mid[-12:] if len(mid) > 12 else mid,
+            )
+            return r.status_code, body
+        try:
+            jb = r.json()
+            if jb.get("code") != 0:
+                log.warning(
+                    "post_card_reply_to_message code=%s parent_tail=%s msg=%s",
+                    jb.get("code"),
+                    mid[-12:] if len(mid) > 12 else mid,
+                    (jb.get("msg") or "")[:200],
+                )
+        except Exception:
+            pass
+        return r.status_code, body
+    except Exception as e:
+        log.warning(
+            "post_card_reply_to_message failed parent_tail=%s: %s",
+            mid[-12:] if len(mid) > 12 else mid,
+            e,
+        )
+        return 0, str(e)
+
+
 def post_text_reply_in_thread(
     chat_id: str,
     token: str,
