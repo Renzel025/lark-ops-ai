@@ -2442,3 +2442,109 @@ def get_p0_issue_watch_declare_also_send_to_group() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def p0_adjustment_bitable_enabled() -> bool:
+    """``P0_ADJUSTMENT_BITABLE_ENABLED`` — post deployment notice after Send overview. Default ``1`` when app_token set."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ENABLED") or "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return bool(get_p0_adjustment_bitable_app_token())
+
+
+def get_p0_adjustment_bitable_app_token() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_ADJUSTMENT_BITABLE_APP_TOKEN") or "").strip()
+
+
+def get_p0_adjustment_bitable_table_id() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_ADJUSTMENT_BITABLE_TABLE_ID") or "").strip()
+
+
+def get_p0_adjustment_bitable_hours() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_HOURS") or "24").strip()
+    try:
+        h = int(raw)
+        return max(1, min(h, 168))
+    except ValueError:
+        return 24
+
+
+def get_p0_adjustment_bitable_max_rows() -> int:
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "10").strip()
+    try:
+        n = int(raw)
+        return max(0, min(n, 50))
+    except ValueError:
+        return 10
+
+
+def get_p0_adjustment_bitable_doc_url() -> str:
+    reload_env_runtime()
+    return (
+        os.getenv("P0_ADJUSTMENT_BITABLE_DOC_URL")
+        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblr1CwAW1GVOkUR&view=vewRD952Gw"
+    ).strip()
+
+
+def p0_adjustment_bitable_reply_in_thread() -> bool:
+    """``P0_ADJUSTMENT_BITABLE_REPLY_IN_THREAD`` — reply under overview card (default ``1``)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_REPLY_IN_THREAD") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def p0_adjustment_bitable_also_send_to_group() -> bool:
+    """
+    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — after thread reply on the overview,
+    also post the same deployment card to the main group feed. Default ``1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _split_field_aliases(raw: str, default: str) -> Tuple[str, ...]:
+    text = (raw or default).strip()
+    parts = tuple(x.strip() for x in text.split("|") if x.strip())
+    return parts or (default,)
+
+
+def get_p0_adjustment_bitable_field_names() -> Dict[str, Tuple[str, ...]]:
+    """
+    Bitable column names (pipe-separated aliases). Only **Blue Green Time** and
+    **Full Release Time** are used for the 24h window check.
+    """
+    reload_env_runtime()
+    return {
+        "blue_green_time": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_BLUE_GREEN_TIME_FIELD") or "",
+            "Blue Green Time|蓝绿发布时间",
+        ),
+        "full_release_time": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_FULL_RELEASE_TIME_FIELD") or "",
+            "Full Release Time|全量发布时间",
+        ),
+        "service": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_SERVICE_FIELD") or "",
+            "Service|服务",
+        ),
+        "namespace": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_NAMESPACE_FIELD") or "",
+            "Namespace|命名空间",
+        ),
+        "image_tag": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_IMAGE_TAG_FIELD") or "",
+            "Image Tag|镜像标签|Image",
+        ),
+        "project": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_PROJECT_FIELD") or "",
+            "Project|项目",
+        ),
+    }

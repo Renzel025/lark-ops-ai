@@ -172,6 +172,55 @@ def post_text_reply_to_message(
         return 0, str(e)
 
 
+def post_card_reply_to_message(
+    message_id: str,
+    token: str,
+    card: Dict[str, Any],
+    *,
+    reply_in_thread: bool = False,
+) -> Tuple[int, str]:
+    """Reply to a message with an interactive card (thread or flat reply)."""
+    mid = (message_id or "").strip()
+    tok = (token or "").strip()
+    if not mid or not tok or not card:
+        return 0, ""
+    url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}/reply"
+    payload: Dict[str, Any] = {
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+        "reply_in_thread": bool(reply_in_thread),
+    }
+    try:
+        r = _lark_http().post(url, headers={"Authorization": f"Bearer {tok}"}, json=payload, **_timeout_kw())
+        body = r.text or ""
+        if r.status_code != 200:
+            log.warning(
+                "post_card_reply_to_message HTTP=%s parent_tail=%s",
+                r.status_code,
+                mid[-12:] if len(mid) > 12 else mid,
+            )
+            return r.status_code, body
+        try:
+            jb = r.json()
+            if jb.get("code") != 0:
+                log.warning(
+                    "post_card_reply_to_message code=%s parent_tail=%s msg=%s",
+                    jb.get("code"),
+                    mid[-12:] if len(mid) > 12 else mid,
+                    (jb.get("msg") or "")[:200],
+                )
+        except Exception:
+            pass
+        return r.status_code, body
+    except Exception as e:
+        log.warning(
+            "post_card_reply_to_message failed parent_tail=%s: %s",
+            mid[-12:] if len(mid) > 12 else mid,
+            e,
+        )
+        return 0, str(e)
+
+
 def post_text_reply_in_thread(
     chat_id: str,
     token: str,
@@ -799,6 +848,57 @@ def read_sheets_values_batch(tenant_token: str, spreadsheet_token: str, range_st
                 return values, ""
         last = f"{url} code=0 but empty valueRanges"
     return [], last or "values_batch_get failed"
+
+
+def list_bitable_records(
+    tenant_token: str,
+    app_token: str,
+    table_id: str,
+    *,
+    page_size: int = 100,
+    max_pages: int = 10,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    List all records in a Bitable table (paginated GET).
+
+    Requires ``bitable:app:readonly`` (or ``bitable:app``) on the Lark app.
+    """
+    tok = (tenant_token or "").strip()
+    app = (app_token or "").strip()
+    tbl = (table_id or "").strip()
+    if not tok or not app or not tbl:
+        return [], "bitable credentials missing"
+    headers = {"Authorization": f"Bearer {tok}"}
+    url = f"{LARK_BASE}/bitable/v1/apps/{quote(app, safe='')}/tables/{quote(tbl, safe='')}/records"
+    out: List[Dict[str, Any]] = []
+    page_token = ""
+    pages = 0
+    last_err = ""
+    while pages < max(1, max_pages):
+        pages += 1
+        params: Dict[str, Any] = {"page_size": min(max(page_size, 1), 500)}
+        if page_token:
+            params["page_token"] = page_token
+        try:
+            r = _lark_http().get(url, headers=headers, params=params, **_timeout_kw())
+        except Exception as e:
+            return out, f"bitable list exception={e}"
+        j, jerr = safe_json(r)
+        if r.status_code != 200:
+            return out, f"bitable list HTTP={r.status_code} {jerr}"
+        if j.get("code") != 0:
+            return out, f"bitable list code={j.get('code')} msg={j.get('msg')} {jerr}"
+        data = j.get("data") or {}
+        items = data.get("items") or []
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict):
+                    out.append(it)
+        page_token = str(data.get("page_token") or "").strip()
+        if not page_token or not data.get("has_more"):
+            return out, ""
+        last_err = ""
+    return out, last_err or "bitable list truncated (max_pages)"
 
 
 def download_image_bytes(tenant_token: str, image_key: str) -> bytes:
