@@ -110,34 +110,17 @@ def _pick_time_ms(fields: Dict[str, Any], names: Tuple[str, ...]) -> Optional[in
     return None
 
 
-def _fmt_ts_short(ms: int) -> str:
+def _fmt_ts_full(ms: int) -> str:
+    """Match Bitable column format (YYYY-MM-DD HH:MM:SS, SGT)."""
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=_SGT).strftime("%b %d %H:%M")
+        return datetime.fromtimestamp(ms / 1000, tz=_SGT).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
 
 
-def _short_image_tag(tag: str) -> str:
-    """Prefer version string over long registry URLs in the notice."""
-    t = (tag or "").strip()
-    if not t:
-        return ""
-    m = re.search(r"(v[\d.]+[a-z]?__[^\s/]+)", t, re.I)
-    if m:
-        return _truncate(m.group(1), 40)
-    if "://" in t or "registry" in t.lower() or "aliyun" in t.lower():
-        parts = [p for p in t.rstrip("/").split("/") if p]
-        if parts:
-            return _truncate(parts[-1], 32)
-        return "registry image"
-    return _truncate(t, 40)
-
-
-def _truncate(text: str, limit: int) -> str:
-    t = (text or "").strip()
-    if len(t) <= limit:
-        return t
-    return t[: max(0, limit - 1)] + "…"
+def _display_image_tag(tag: str) -> str:
+    """Full Image Tag from Bitable (no truncation)."""
+    return (tag or "").strip()
 
 
 class AdjustmentRow:
@@ -170,38 +153,37 @@ class AdjustmentRow:
         self.full_release_ms = full_release_ms
         self.sort_ms = sort_ms
 
-    def _title(self) -> str:
-        name_bits: List[str] = []
-        if self.service:
-            name_bits.append(self.service)
-        if self.namespace:
-            name_bits.append(self.namespace)
-        return " · ".join(name_bits) if name_bits else "entry"
+    def _detail_fields(self) -> List[Tuple[str, str]]:
+        """All Bitable columns shown in the notice (matches table headers)."""
+        tag = _display_image_tag(self.image_tag)
+        return [
+            ("Service", (self.service or "").strip()),
+            ("Namespace", (self.namespace or "").strip()),
+            ("Image Tag", tag),
+            ("Blue Green Time", _fmt_ts_full(self.blue_green_ms) if self.blue_green_ms else ""),
+            ("Full Release Time", _fmt_ts_full(self.full_release_ms) if self.full_release_ms else ""),
+            ("Project", (self.project or "").strip()),
+        ]
 
-    def block_lines(self, *, index: int, cutoff_ms: int) -> List[str]:
+    def block_lines(self, *, index: int, cutoff_ms: int = 0) -> List[str]:
         """Plain-text block per deployment (fallback message)."""
-        out = [f"{index}. {self._title()}"]
-        tag = _short_image_tag(self.image_tag)
-        if tag:
-            out.append(f"   Image: {tag}")
-        if self.blue_green_ms and self.blue_green_ms >= cutoff_ms:
-            out.append(f"   Blue Green:   {_fmt_ts_short(self.blue_green_ms)}")
-        if self.full_release_ms and self.full_release_ms >= cutoff_ms:
-            out.append(f"   Full Release: {_fmt_ts_short(self.full_release_ms)}")
+        _ = cutoff_ms
+        out = [f"{index}."]
+        for label, value in self._detail_fields():
+            out.append(f"   {label}: {value or '—'}")
         return out
 
-    def block_md(self, *, index: int, cutoff_ms: int) -> str:
+    def block_md(self, *, index: int, cutoff_ms: int = 0) -> str:
         """Markdown block for interactive card body."""
+        _ = cutoff_ms
         lines: List[str] = []
-        tag = _short_image_tag(self.image_tag)
-        if tag:
-            lines.append(f"- **Image:** `{tag}`")
-        if self.blue_green_ms and self.blue_green_ms >= cutoff_ms:
-            lines.append(f"- **Blue Green:** {_fmt_ts_short(self.blue_green_ms)}")
-        if self.full_release_ms and self.full_release_ms >= cutoff_ms:
-            lines.append(f"- **Full Release:** {_fmt_ts_short(self.full_release_ms)}")
-        body = "\n".join(lines) if lines else "- _(no times in window)_"
-        return f"**{index}. {self._title()}**\n{body}"
+        for label, value in self._detail_fields():
+            display = value or "—"
+            if label == "Image Tag" and value:
+                lines.append(f"- **{label}:** `{display}`")
+            else:
+                lines.append(f"- **{label}:** {display}")
+        return f"**{index}.**\n" + "\n".join(lines)
 
 
 def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], str]:

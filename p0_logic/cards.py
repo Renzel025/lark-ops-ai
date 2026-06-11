@@ -1109,7 +1109,7 @@ def build_adjustment_bitable_card(body_md: str, *, hours: int, count: int) -> Di
     """Orange card for recent Bitable deployments (reply under P0 overview)."""
     hrs = max(1, int(hours or 24))
     n = max(0, int(count or 0))
-    safe_md = (body_md or "").strip()[:3500]
+    safe_md = (body_md or "").strip()[:8000]
     subtitle = f"{n} service(s) with Blue Green or Full Release in the last {hrs}h"
     elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "plain_text", "content": subtitle}},
@@ -1121,7 +1121,7 @@ def build_adjustment_bitable_card(body_md: str, *, hours: int, count: int) -> Di
         "config": {"enable_forward": True},
         "header": {
             "template": "orange",
-            "title": {"tag": "plain_text", "content": f"⚙️ Side deployments ({hrs}h)"},
+            "title": {"tag": "plain_text", "content": "Deployments"},
         },
         "body": {"elements": elements},
     }
