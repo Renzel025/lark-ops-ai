@@ -369,7 +369,35 @@ def maybe_post_adjustment_notice_after_overview(
         return False, ""
 
     reply_in_thread = _config.p0_adjustment_bitable_reply_in_thread()
+    also_group = _config.p0_adjustment_bitable_also_send_to_group()
     card = _cards.build_adjustment_bitable_card(body_md, hours=hours, count=len(rows))
+
+    def _post_flat_to_group(*, prefer_card: bool) -> bool:
+        if prefer_card:
+            st_f, body_f, _ = _lark.post_card_to_chat(group_chat_id, tenant_token, card)
+            ok_f, code_f, msg_f = _lark.lark_im_message_create_ok(body_f)
+            if st_f == 200 and ok_f:
+                return True
+            log.warning(
+                "adjustment_bitable: flat card failed HTTP=%s lark_code=%s lark_msg=%r",
+                st_f,
+                code_f,
+                msg_f,
+            )
+        st_f, body_f = _lark.post_text_to_chat(group_chat_id, tenant_token, text_fallback)
+        ok_f, code_f, msg_f = _lark.lark_im_message_create_ok(body_f)
+        if st_f != 200 or not ok_f:
+            log.warning(
+                "adjustment_bitable: flat text failed HTTP=%s lark_code=%s lark_msg=%r",
+                st_f,
+                code_f,
+                msg_f,
+            )
+            return False
+        return True
+
+    thread_ok = False
+    thread_used_card = True
     st, body = _lark.post_card_reply_to_message(
         overview_message_id,
         tenant_token,
@@ -377,13 +405,16 @@ def maybe_post_adjustment_notice_after_overview(
         reply_in_thread=reply_in_thread,
     )
     ok, code, msg = _lark.lark_im_message_create_ok(body)
-    if st != 200 or not ok:
+    if st == 200 and ok:
+        thread_ok = True
+    else:
         log.warning(
             "adjustment_bitable: card reply failed HTTP=%s lark_code=%s lark_msg=%r — trying text",
             st,
             code,
             msg,
         )
+        thread_used_card = False
         st, body = _lark.post_text_reply_to_message(
             overview_message_id,
             tenant_token,
@@ -391,7 +422,9 @@ def maybe_post_adjustment_notice_after_overview(
             reply_in_thread=reply_in_thread,
         )
         ok, code, msg = _lark.lark_im_message_create_ok(body)
-    if st != 200 or not ok:
+        thread_ok = st == 200 and ok
+
+    if not thread_ok:
         log.warning(
             "adjustment_bitable: thread post failed HTTP=%s lark_code=%s lark_msg=%r dest_tail=%s",
             st,
@@ -399,23 +432,25 @@ def maybe_post_adjustment_notice_after_overview(
             msg,
             group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
         )
-        st2, body2, _ = _lark.post_card_to_chat(group_chat_id, tenant_token, card)
-        ok2, code2, msg2 = _lark.lark_im_message_create_ok(body2)
-        if st2 != 200 or not ok2:
-            st2, body2 = _lark.post_text_to_chat(group_chat_id, tenant_token, text_fallback)
-            ok2, code2, msg2 = _lark.lark_im_message_create_ok(body2)
-        if st2 != 200 or not ok2:
-            log.warning(
-                "adjustment_bitable: flat post also failed HTTP=%s lark_code=%s lark_msg=%r",
-                st2,
-                code2,
-                msg2,
-            )
+        if not _post_flat_to_group(prefer_card=True):
             return False, ""
+    elif also_group:
+        if not _post_flat_to_group(prefer_card=thread_used_card):
+            log.warning(
+                "adjustment_bitable: also-send-to-group failed dest_tail=%s (thread ok)",
+                group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
+            )
+        else:
+            log.info(
+                "adjustment_bitable: also sent deployment card to main group dest_tail=%s",
+                group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
+            )
+
     log.info(
-        "adjustment_bitable: posted %s row(s) as card under overview mid_tail=%s",
+        "adjustment_bitable: posted %s row(s) as card under overview mid_tail=%s also_group=%s",
         len(rows),
         overview_message_id[-12:] if len(overview_message_id) > 12 else overview_message_id,
+        also_group,
     )
     dm_line = (
         f"⚙️ Noted {len(rows)} side deployment(s) with Blue Green / Full Release "

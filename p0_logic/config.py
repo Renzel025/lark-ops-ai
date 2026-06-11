@@ -2581,6 +2581,17 @@ def p0_adjustment_bitable_reply_in_thread() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def p0_adjustment_bitable_also_send_to_group() -> bool:
+    """
+    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — after thread reply on the overview,
+    also post the same deployment card to the main group feed (Lark UI: "Also send to the group").
+    Default ``1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _split_field_aliases(raw: str, default: str) -> Tuple[str, ...]:
     text = (raw or default).strip()
     parts = tuple(x.strip() for x in text.split("|") if x.strip())
