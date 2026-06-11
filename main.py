@@ -89,6 +89,26 @@ if get_p0_issue_watch_enabled():
 else:
     log.info("issue_watch: disabled (set P0_ISSUE_WATCH_ENABLED=1)")
 
+from p0_logic.config import (
+    p0_adjustment_bitable_enabled,
+    get_p0_adjustment_bitable_app_token,
+    get_p0_adjustment_bitable_table_id,
+)
+
+if p0_adjustment_bitable_enabled():
+    _adj_app = get_p0_adjustment_bitable_app_token()
+    _adj_tbl = get_p0_adjustment_bitable_table_id()
+    log.info(
+        "adjustment_bitable: ENABLED — app_token_tail=%s table_id_tail=%s (posts after Send overview)",
+        _adj_app[-8:] if len(_adj_app) > 8 else (_adj_app or "(empty)"),
+        _adj_tbl[-8:] if len(_adj_tbl) > 8 else (_adj_tbl or "(empty)"),
+    )
+else:
+    log.info(
+        "adjustment_bitable: disabled — set P0_ADJUSTMENT_BITABLE_APP_TOKEN + "
+        "P0_ADJUSTMENT_BITABLE_TABLE_ID in .env (and P0_ADJUSTMENT_BITABLE_ENABLED=1)"
+    )
+
 app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()

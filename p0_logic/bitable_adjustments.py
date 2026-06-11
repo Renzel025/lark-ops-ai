@@ -181,8 +181,10 @@ def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], st
         return [], ""
     app_token = _config.get_p0_adjustment_bitable_app_token()
     table_id = _config.get_p0_adjustment_bitable_table_id()
-    if not tenant_token or not app_token or not table_id:
-        return [], ""
+    if not tenant_token:
+        return [], "tenant_token missing"
+    if not app_token or not table_id:
+        return [], "P0_ADJUSTMENT_BITABLE_APP_TOKEN or TABLE_ID not set in .env"
 
     cfg = _config.get_p0_adjustment_bitable_field_names()
     hours = _config.get_p0_adjustment_bitable_hours()
@@ -191,6 +193,14 @@ def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], st
     records, err = _lark.list_bitable_records(tenant_token, app_token, table_id)
     if err:
         return [], err
+
+    log.info(
+        "adjustment_bitable: fetched %s record(s) table_id_tail=%s hours=%s cutoff_ms=%s",
+        len(records),
+        table_id[-8:] if len(table_id) > 8 else table_id,
+        hours,
+        cutoff_ms,
+    )
 
     rows: List[AdjustmentRow] = []
     for rec in records:
@@ -227,6 +237,21 @@ def fetch_recent_adjustments(tenant_token: str) -> Tuple[List[AdjustmentRow], st
     max_rows = _config.get_p0_adjustment_bitable_max_rows()
     if max_rows > 0 and len(rows) > max_rows:
         rows = rows[:max_rows]
+    if not rows and records:
+        sample_fields: List[str] = []
+        for rec in records[:1]:
+            fld = rec.get("fields") if isinstance(rec, dict) else None
+            if isinstance(fld, dict):
+                sample_fields = sorted(str(k) for k in fld.keys())[:12]
+        log.info(
+            "adjustment_bitable: 0 rows in %sh window (total_records=%s). "
+            "Expect columns %s / %s. Sample field names: %s",
+            hours,
+            len(records),
+            cfg["blue_green_time"][0],
+            cfg["full_release_time"][0],
+            sample_fields or "(none)",
+        )
     return rows, ""
 
 
@@ -258,10 +283,23 @@ def maybe_post_adjustment_notice_after_overview(
     Returns (posted, dm_appendix) — ``dm_appendix`` is a short line for the operator DM.
     """
     if not overview_message_id or not group_chat_id:
+        log.info(
+            "adjustment_bitable: skipped (no overview message_id or group_chat_id) mid_tail=%s",
+            (overview_message_id or "")[-12:] if overview_message_id else "(empty)",
+        )
         return False, ""
     if not _config.p0_adjustment_bitable_enabled():
+        log.info(
+            "adjustment_bitable: skipped (disabled — set P0_ADJUSTMENT_BITABLE_ENABLED=1 and "
+            "P0_ADJUSTMENT_BITABLE_APP_TOKEN + TABLE_ID in .env, then restart)"
+        )
         return False, ""
 
+    log.info(
+        "adjustment_bitable: checking after send_preview dest_tail=%s mid_tail=%s",
+        group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
+        overview_message_id[-12:] if len(overview_message_id) > 12 else overview_message_id,
+    )
     hours = _config.get_p0_adjustment_bitable_hours()
     cutoff_ms = int((time.time() - hours * 3600) * 1000)
 

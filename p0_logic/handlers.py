@@ -1444,6 +1444,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                             oc_extra,
                         )
             adj_dm_note = ""
+            if not post_mid:
+                log.info("send_preview: adjustment bitable skipped (overview post_mid empty)")
             if post_mid:
                 try:
                     _, adj_dm_note = _bitable_adj.maybe_post_adjustment_notice_after_overview(
