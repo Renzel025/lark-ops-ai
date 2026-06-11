@@ -109,6 +109,13 @@ def _grant_recording_permissions(
             user_open_ids=user_targets,
             perm=drive_perm,
         )
+        if drive_perm == "edit" and not drive_ok:
+            log.warning(
+                "vc recording: Minutes still **Can view** — Drive edit grant failed mid=%s. "
+                "Add docs:permission.member:create + docs:permission.member:update to "
+                "P0_VC_OAUTH_SCOPE (Lark console + duty re-OAuth). VC set_permission is view-only.",
+                (meeting_id or "")[:24],
+            )
     return vc_ok or drive_ok
 
 

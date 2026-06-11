@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import bitable_adjustments as _bitable_adj
 from . import cards as _cards
 from . import config as _config
 from . import drafts as _drafts
@@ -1442,6 +1443,17 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                             msg_f,
                             oc_extra,
                         )
+            adj_dm_note = ""
+            if post_mid:
+                try:
+                    _, adj_dm_note = _bitable_adj.maybe_post_adjustment_notice_after_overview(
+                        tenant_token,
+                        group_chat_id=lark_overview_dest,
+                        overview_message_id=post_mid,
+                        sender_open_id=sender_open_id,
+                    )
+                except Exception as e:
+                    log.warning("send_preview: adjustment bitable notice failed: %s", e)
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
             if md:
                 if not src_inc:
@@ -1502,6 +1514,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 group_message_id=post_mid or "",
                 group_edit_only=bool(post_mid),
             )
+            dm_extra = (f"\n{fwd_warn}" if fwd_warn else "") + (f"\n{adj_dm_note}" if adj_dm_note else "")
             if post_mid and _group_overview_store.group_overview_edit_enabled():
                 sent_card = _cards.build_dm_overview_sent_card(
                     pri,
@@ -1516,15 +1529,15 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     _lark.post_text_to_open_id(
                         sender_open_id,
                         tenant_token,
-                        "✅ Overview sent to the target group chat."
-                        + (f"\n{fwd_warn}" if fwd_warn else ""),
+                        "✅ Overview sent to the target group chat." + dm_extra,
                     )
+                elif adj_dm_note:
+                    _lark.post_text_to_open_id(sender_open_id, tenant_token, adj_dm_note)
             else:
                 _lark.post_text_to_open_id(
                     sender_open_id,
                     tenant_token,
-                    "✅ Overview sent to the target group chat."
-                    + (f"\n{fwd_warn}" if fwd_warn else ""),
+                    "✅ Overview sent to the target group chat." + dm_extra,
                 )
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
