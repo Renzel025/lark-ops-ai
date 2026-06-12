@@ -180,6 +180,44 @@ def resolve_ring_targets_from_snapshot(
     return _filter_ring_targets(merged, operator_open_id=operator_open_id)
 
 
+def _major_check_person_ring_open_ids(
+    tenant_token: str,
+) -> List[str]:
+    """``P0_MAJOR_CHECK_PERSON_IDS`` as ``ou_...`` for VC invite (resolves tenant user_id when needed)."""
+    tok = (tenant_token or "").strip()
+    out: List[str] = []
+    for oid, uid in _config.get_p0_major_check_person_recipients():
+        if oid and oid.startswith("ou_"):
+            out.append(oid)
+            continue
+        if uid and tok:
+            resolved = _lark.lookup_open_id_by_user_id(tok, uid)
+            if resolved:
+                out.append(resolved)
+    return out
+
+
+def resolve_declare_ring_targets(
+    snap: Optional[Dict[str, Any]],
+    *,
+    detection_chat_id: str,
+    operator_open_id: str,
+    tenant_token: str = "",
+) -> List[str]:
+    """
+    Ring targets at Issue Watch declare: concern/duty @mentions + ``P0_MAJOR_CHECK_PERSON_IDS``.
+    """
+    base = resolve_ring_targets_from_snapshot(
+        snap,
+        detection_chat_id=detection_chat_id,
+        operator_open_id=operator_open_id,
+    )
+    major = _major_check_person_ring_open_ids(tenant_token)
+    if not major:
+        return base
+    return _filter_ring_targets(major + base, operator_open_id=operator_open_id)
+
+
 def format_declare_reply_with_mentions(reply_text: str, ring_targets: List[str]) -> str:
     """Prepend Lark ``<at>`` tags so tagged users are notified in the thread."""
     body = (reply_text or "").strip()

@@ -2494,12 +2494,25 @@ def get_p0_issue_watch_declare_check_person_reply_text() -> str:
     if raw:
         return raw
     return (
-        "Calling and inviting the check persons on this major P0 issue. Thank you."
+        "Calling and inviting the check persons for major P0 issues. Thank you."
     )
 
 
+def get_p0_major_check_person_dm_enabled() -> bool:
+    """
+    ``P0_MAJOR_CHECK_PERSON_DM_ENABLED`` — DM check persons a meeting link after declare.
+
+    Default **off**. Invite is via **VC ring** when duty joins the meeting
+    (``P0_VC_RING_ENABLED=1`` + ``P0_MAJOR_CHECK_PERSON_IDS``).
+    Set ``1`` only if you also want a separate DM with ``{link}``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_MAJOR_CHECK_PERSON_DM_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_major_check_person_dm_text() -> str:
-    """DM body sent to each check person after P0 declare. Use ``{link}`` for meeting URL."""
+    """DM body when ``P0_MAJOR_CHECK_PERSON_DM_ENABLED=1``. Use ``{link}`` for meeting URL."""
     reload_env_runtime()
     raw = (os.getenv("P0_MAJOR_CHECK_PERSON_DM_TEXT") or "").strip()
     if raw:
@@ -2530,6 +2543,55 @@ def p0_thread_confirm_target_mentions_enabled() -> bool:
         return v in ("1", "true", "yes", "on")
     v = (os.getenv("P0_THREAD_CONFIRM_ALLOW_TARGET_MENTIONS") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+def get_p0_vc_ring_enabled() -> bool:
+    """``P0_VC_RING_ENABLED`` — ring users into VC when duty joins (needs OAuth + ``vc:meeting``)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_VC_RING_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_vc_ring_fallback_open_ids() -> List[str]:
+    """``P0_VC_RING_FALLBACK_OPEN_IDS`` — comma-separated ``ou_...`` when concern has no @mention."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_RING_FALLBACK_OPEN_IDS") or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for part in raw.split(","):
+        oid = (part or "").strip()
+        if oid.startswith("ou_") and oid not in seen:
+            seen.add(oid)
+            out.append(oid)
+    return out
+
+
+def get_p0_vc_oauth_public_base_url() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def get_p0_vc_oauth_redirect_uri() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_REDIRECT_URI") or "").strip()
+
+
+def get_p0_vc_oauth_scope() -> str:
+    """
+    ``P0_VC_OAUTH_SCOPE`` — Lark user OAuth scopes for VC ring + recording fan-out.
+
+    Default includes ``vc:meeting``, ``vc:record``, and Drive permission scopes for Minutes edit.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_OAUTH_SCOPE") or "").strip()
+    if raw:
+        return raw
+    return (
+        "vc:meeting offline_access vc:record "
+        "docs:permission.member:create docs:permission.member:update"
+    )
 
 
 def p0_adjustment_bitable_enabled() -> bool:

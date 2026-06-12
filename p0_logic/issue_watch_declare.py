@@ -65,8 +65,10 @@ def invite_major_check_persons_after_declare(
     concern_message_id: str,
 ) -> int:
     """
-    After Issue Watch declare + ``start_p0``, DM configured check persons with the meeting link.
-    Returns count of successful DMs.
+    After Issue Watch declare + ``start_p0``, register check persons on the session.
+
+    VC ring (when duty joins) is the default invite path. Optional link DMs only when
+    ``P0_MAJOR_CHECK_PERSON_DM_ENABLED=1``. Returns count of successful DMs (0 when DM off).
     """
     cid = (source_chat_id or "").strip()
     tok = (tenant_token or "").strip()
@@ -74,13 +76,20 @@ def invite_major_check_persons_after_declare(
     if not cid or not tok or not recipients:
         return 0
     sess = _session.P0_SESSIONS.get(cid) or {}
-    link = (sess.get("link") or "").strip()
-    if not link:
-        log.warning("issue_watch_declare: check-person invite skipped — no meeting link chat=%s", cid[:24])
-        return 0
     _stash_major_check_person_session(sess, concern_message_id, recipients)
     if _session_disk.enabled():
         _session_disk.save_session(cid, sess)
+    if not _config.get_p0_major_check_person_dm_enabled():
+        log.info(
+            "issue_watch_declare: check-person invite = VC ring only (DM disabled) chat_tail=%s count=%s",
+            cid[-12:] if len(cid) > 12 else cid,
+            len(recipients),
+        )
+        return 0
+    link = (sess.get("link") or "").strip()
+    if not link:
+        log.warning("issue_watch_declare: check-person DM skipped — no meeting link chat=%s", cid[:24])
+        return 0
     body_tmpl = _config.get_p0_major_check_person_dm_text()
     body = body_tmpl.replace("{link}", link)
     sent = 0
@@ -167,8 +176,6 @@ def maybe_prompt_major_check_person_joined(
 
 def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
     """Groq contextual reply on the concern thread; env fallback if AI off or unavailable."""
-    if _config.get_p0_major_check_person_recipients():
-        return _config.get_p0_issue_watch_declare_check_person_reply_text()
     fallback = _config.get_p0_issue_watch_declare_reply_text()
     if not snap or not _config.get_p0_issue_watch_declare_reply_ai_enabled():
         return fallback
@@ -194,6 +201,87 @@ def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
         return ai
     log.warning("issue_watch_declare: Groq declare reply failed — using fallback text")
     return fallback
+
+
+def _post_declare_text_on_concern(
+    *,
+    src_mid: str,
+    detection_chat: str,
+    tenant_token: str,
+    operator_open_id: str,
+    text: str,
+    log_label: str,
+) -> bool:
+    """Reply on the concern thread (+ optional main-group fan-out). Returns True on success."""
+    body = (text or "").strip()
+    mid = (src_mid or "").strip()
+    cid = (detection_chat or "").strip()
+    tok = (tenant_token or "").strip()
+    oid = (operator_open_id or "").strip()
+    if not mid or not body or not tok:
+        return False
+    st_r, body_r = _lark.post_text_reply_to_message(
+        mid,
+        tok,
+        body,
+        reply_in_thread=_config.get_p0_issue_watch_declare_reply_in_thread(),
+    )
+    ok, api_code, api_msg = _lark.lark_im_message_create_ok(body_r)
+    if st_r != 200 or not ok:
+        log.warning(
+            "issue_watch_declare: %s failed HTTP=%s code=%s chat=%s parent_tail=%s body=%s",
+            log_label,
+            st_r,
+            api_code,
+            cid[:24],
+            mid[-12:] if len(mid) > 12 else mid,
+            (api_msg or body_r or "")[:200],
+        )
+        if oid:
+            _lark.post_text_to_open_id(
+                oid,
+                tok,
+                f"Could not post {log_label} on the concern message in the detection group. "
+                "Check bot is in the group and has im:message permission.",
+            )
+        return False
+    parent_id = ""
+    reply_mid = ""
+    try:
+        data = (json.loads(body_r or "{}").get("data") or {})
+        parent_id = str(data.get("parent_id") or "").strip()
+        reply_mid = str(data.get("message_id") or "").strip()
+    except Exception:
+        pass
+    log.info(
+        "issue_watch_declare: %s sent chat_tail=%s parent_tail=%s "
+        "api_parent_tail=%s reply_tail=%s thread=%s",
+        log_label,
+        cid[-12:] if len(cid) > 12 else cid,
+        mid[-12:] if len(mid) > 12 else mid,
+        parent_id[-12:] if len(parent_id) > 12 else parent_id,
+        reply_mid[-12:] if len(reply_mid) > 12 else reply_mid,
+        _config.get_p0_issue_watch_declare_reply_in_thread(),
+    )
+    if _config.get_p0_issue_watch_declare_also_send_to_group():
+        st_g, body_g = _lark.post_text_to_chat(cid, tok, body)
+        ok_g, code_g, msg_g = _lark.lark_im_message_create_ok(body_g)
+        if st_g != 200 or not ok_g:
+            log.warning(
+                "issue_watch_declare: %s also-send-to-group failed HTTP=%s code=%s chat=%s msg=%s",
+                log_label,
+                st_g,
+                code_g,
+                cid[:24],
+                (msg_g or body_g or "")[:200],
+            )
+        else:
+            log.info(
+                "issue_watch_declare: %s also sent to main group chat_tail=%s",
+                log_label,
+                cid[-12:] if len(cid) > 12 else cid,
+            )
+    return True
 
 
 def _duty_operator(operator_open_id: str) -> bool:
@@ -243,64 +331,57 @@ def handle_declare_p0(
         _lark.post_text_to_open_id(oid, tok, "Could not resolve the detection group for this alert.")
         return
 
-    reply_text = _declare_reply_from_alert(snap)
-    if src_mid:
-        st_r, body_r = _lark.post_text_reply_to_message(
-            src_mid,
-            tok,
-            reply_text,
-            reply_in_thread=_config.get_p0_issue_watch_declare_reply_in_thread(),
+    ring_targets: List[str] = []
+    if _config.get_p0_vc_ring_enabled():
+        from . import vc_ring as _vc_ring
+
+        ring_targets = _vc_ring.resolve_declare_ring_targets(
+            snap,
+            detection_chat_id=detection_chat,
+            operator_open_id=oid,
+            tenant_token=tok,
         )
-        ok, api_code, api_msg = _lark.lark_im_message_create_ok(body_r)
-        if st_r != 200 or not ok:
-            log.warning(
-                "issue_watch_declare: reply-on-message failed HTTP=%s code=%s chat=%s parent_tail=%s body=%s",
-                st_r,
-                api_code,
-                detection_chat[:24],
-                src_mid[-12:] if len(src_mid) > 12 else src_mid,
-                (api_msg or body_r or "")[:200],
-            )
-            _lark.post_text_to_open_id(
-                oid,
-                tok,
-                "Could not reply on the concern message in the detection group. "
-                "Check bot is in the group and has im:message permission.",
-            )
-        else:
-            parent_id = ""
-            reply_mid = ""
-            try:
-                data = (json.loads(body_r or "{}").get("data") or {})
-                parent_id = str(data.get("parent_id") or "").strip()
-                reply_mid = str(data.get("message_id") or "").strip()
-            except Exception:
-                pass
+        if ring_targets:
             log.info(
-                "issue_watch_declare: thread reply sent chat_tail=%s parent_tail=%s "
-                "api_parent_tail=%s reply_tail=%s thread=%s",
+                "issue_watch_declare: ring_targets count=%s chat_tail=%s",
+                len(ring_targets),
                 detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
-                src_mid[-12:] if len(src_mid) > 12 else src_mid,
-                parent_id[-12:] if len(parent_id) > 12 else parent_id,
-                reply_mid[-12:] if len(reply_mid) > 12 else reply_mid,
-                _config.get_p0_issue_watch_declare_reply_in_thread(),
             )
-            if _config.get_p0_issue_watch_declare_also_send_to_group():
-                st_g, body_g = _lark.post_text_to_chat(detection_chat, tok, reply_text)
-                ok_g, code_g, msg_g = _lark.lark_im_message_create_ok(body_g)
-                if st_g != 200 or not ok_g:
-                    log.warning(
-                        "issue_watch_declare: also-send-to-group failed HTTP=%s code=%s chat=%s msg=%s",
-                        st_g,
-                        code_g,
-                        detection_chat[:24],
-                        (msg_g or body_g or "")[:200],
-                    )
-                else:
-                    log.info(
-                        "issue_watch_declare: also sent declare reply to main group chat_tail=%s",
-                        detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
-                    )
+        _vc_ring.maybe_prompt_oauth_dm(oid, tok)
+
+    declare_reply = _declare_reply_from_alert(snap)
+    check_recipients = _config.get_p0_major_check_person_recipients()
+    if src_mid:
+        _post_declare_text_on_concern(
+            src_mid=src_mid,
+            detection_chat=detection_chat,
+            tenant_token=tok,
+            operator_open_id=oid,
+            text=declare_reply,
+            log_label="declare-as-P0 reply",
+        )
+        if check_recipients:
+            from . import vc_ring as _vc_ring
+
+            invite_reply = _config.get_p0_issue_watch_declare_check_person_reply_text()
+            mention_targets = list(ring_targets)
+            if not mention_targets:
+                mention_targets = _vc_ring._filter_ring_targets(
+                    _vc_ring._major_check_person_ring_open_ids(tok),
+                    operator_open_id=oid,
+                )
+            if mention_targets:
+                invite_reply = _vc_ring.format_declare_reply_with_mentions(
+                    invite_reply, mention_targets
+                )
+            _post_declare_text_on_concern(
+                src_mid=src_mid,
+                detection_chat=detection_chat,
+                tenant_token=tok,
+                operator_open_id=oid,
+                text=invite_reply,
+                log_label="check-person invite reply",
+            )
     else:
         log.warning("issue_watch_declare: no source message_id — skipping group reply chat=%s", detection_chat[:24])
         _lark.post_text_to_open_id(
@@ -334,6 +415,7 @@ def handle_declare_p0(
         source_chat_name=group_label,
         trigger_lark_user_id=(operator_lark_user_id or "").strip(),
         silent_when_blocked=False,
+        vc_ring_target_open_ids=ring_targets or None,
         issue_watch_alert_key=key,
     )
     if _config.get_p0_major_check_person_recipients():
