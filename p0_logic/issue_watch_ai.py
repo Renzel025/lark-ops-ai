@@ -42,6 +42,10 @@ _ISSUE_WATCH_SYSTEM = (
     "withdrawal failing, all games cannot enter.\n"
     "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
     "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
+    "- is_incident_signal=FALSE when staff confirms things work: \"able to withdraw without any issue\", "
+    "\"we were able to withdraw realtime without encountering any issue\", \"deposit is working fine\", "
+    "\"checked — no problem\", \"resolved / back to normal\". Words like withdraw/deposit/issue in the "
+    "same message do NOT mean an incident if the meaning is success or no problem.\n"
     "- Staff asking the team to investigate a website/login/deposit/withdrawal/backend/game issue = TRUE (high confidence).\n"
     "- ``players can't deposit``, ``cant proceed to deposit``, ``deposit on cp website``, ``充值失败`` = deposit_issues (NOT login_issues).\n"
     "- If message mentions **deposit** / top-up / 充值, use deposit_issues even when **cp website** appears.\n"
@@ -287,9 +291,28 @@ def _summary_with_players(
     return base_summary
 
 
+def _is_non_incident_status_update(text: str) -> bool:
+    """Staff/player confirms success or explicitly no problem — not a detection signal."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    status_patterns = (
+        r"(?is)\bwithout\s+(?:encountering\s+)?(?:any\s+)?(?:issue|issues|problem|problems)\b",
+        r"(?is)\bno\s+(?:issue|issues|problem|problems)\b",
+        r"(?is)\bnot\s+(?:encountering|experiencing|having)\s+(?:any\s+)?(?:issue|issues|problem|problems)\b",
+        r"(?is)\b(?:were\s+)?able\s+to\s+(?:withdraw|deposit|login|register)\b",
+        r"(?is)\b(?:withdraw|deposit|login|registration)\b.{0,50}\b(?:working|works|fine|ok|okay|successful|successfully)\b",
+        r"(?is)\bworking\s+(?:fine|well|normally|as\s+expected)\b",
+        r"(?is)\b(?:resolved|fixed|already\s+(?:fixed|resolved)|back\s+to\s+normal)\b",
+    )
+    return any(re.search(p, t) for p in status_patterns)
+
+
 def _keyword_classify(message_text: str) -> Optional[dict]:
     t = (message_text or "").strip()
     if not t:
+        return None
+    if _is_non_incident_status_update(t):
         return None
     for pattern, categories, fingerprint, confidence, summary in _KEYWORD_RULES:
         if not pattern.search(t):
@@ -325,27 +348,44 @@ def _classify_via_claude(message_text: str) -> Optional[dict]:
 
 def classify_issue_watch_message(message_text: str) -> Optional[dict]:
     """
-    Keyword fast-path + Claude. Keyword wins when high-confidence; Claude refines otherwise.
+    **Claude first** when ``ANTHROPIC_API_KEY`` is set — LLM decides incident vs noise.
+    Keyword rules are fallback only when AI is unavailable.
     """
     t = (message_text or "").strip()
     if not t:
         return None
+    provider = resolve_issue_watch_ai_provider()
+    if provider == "claude":
+        ai = _classify_via_claude(t)
+        if ai is not None:
+            log.info(
+                "issue_watch_ai: claude decision signal=%s categories=%s conf=%.2f reason=%r",
+                ai.get("is_incident_signal"),
+                ai.get("categories"),
+                float(ai.get("confidence") or 0),
+                (ai.get("reason") or "")[:160],
+            )
+            return ai
+        log.warning("issue_watch_ai: claude classify failed — falling back to keyword rules")
+    else:
+        log.warning("issue_watch_ai: no ANTHROPIC_API_KEY — keyword rules only (more false positives)")
     kw = _keyword_classify(t)
-    if kw and float(kw.get("confidence") or 0) >= 0.88:
+    if kw and kw.get("is_incident_signal"):
         log.info(
-            "issue_watch_ai: keyword match categories=%s fp=%s",
+            "issue_watch_ai: keyword fallback categories=%s fp=%s",
             kw.get("categories"),
             kw.get("issue_fingerprint"),
         )
         return kw
-    provider = resolve_issue_watch_ai_provider()
-    ai: Optional[dict] = None
-    if provider == "claude":
-        ai = _classify_via_claude(t)
-    else:
-        log.warning("issue_watch_ai: no ANTHROPIC_API_KEY — using keyword rules only")
-    if ai and ai.get("is_incident_signal"):
-        return ai
-    if kw and kw.get("is_incident_signal"):
-        return kw
-    return ai if ai is not None else kw
+    if _is_non_incident_status_update(t):
+        return {
+            "is_incident_signal": False,
+            "categories": [],
+            "confidence": 0.0,
+            "summary": "",
+            "issue_fingerprint": "",
+            "players_mentioned_in_message": 0,
+            "reason": "status update: no issue / working normally",
+            "provider": "negation_guard",
+        }
+    return kw
