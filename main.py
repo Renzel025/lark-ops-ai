@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse
 from Crypto.Cipher import AES
 import lark_oapi as lark
 
@@ -545,74 +544,6 @@ def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
     return _first_non_empty_str(candidates)
 
 
-@app.get("/lark/oauth/start")
-async def lark_oauth_start(open_id: str = ""):
-    """Redirect duty to Lark OAuth (VC ring). Register this path + /lark/oauth/callback in Lark console."""
-    from p0_logic import config as _cfg
-    from p0_logic.vc_user_oauth import build_authorize_url
-
-    if not _cfg.get_p0_vc_ring_enabled():
-        return HTMLResponse("<p>P0_VC_RING_ENABLED is off.</p>", status_code=404)
-    oid = (open_id or "").strip()
-    app_id, _ = _cfg.get_lark_primary_app_credentials()
-    redirect = _cfg.get_p0_vc_oauth_redirect_uri()
-    scope = _cfg.get_p0_vc_oauth_scope()
-    if not app_id or not redirect:
-        return HTMLResponse("<p>OAuth not configured (LARK_APP_ID / P0_VC_OAUTH_REDIRECT_URI).</p>", status_code=500)
-    from p0_logic.vc_user_oauth import build_oauth_authorize_redirect_url
-
-    url = build_oauth_authorize_redirect_url(
-        app_id=app_id,
-        redirect=redirect,
-        scope=scope,
-        state=oid,
-    )
-    if oid:
-        log.info("vc oauth start open_id_tail=%s", oid[-8:])
-    return RedirectResponse(url)
-
-
-@app.get("/lark/oauth/callback")
-async def lark_oauth_callback(code: str = "", state: str = "", error: str = ""):
-    from p0_logic import lark_client as _lark_client
-    from p0_logic.vc_ring import maybe_retry_pending_vc_ring_for_declarer
-    from p0_logic.vc_user_oauth import exchange_code_for_tokens
-
-    if (error or "").strip():
-        err = (error or "").strip()
-        log.warning("vc oauth callback denied by Lark error=%s state_tail=%s", err, (state or "")[-8:])
-        return HTMLResponse(f"<p>OAuth denied: {err}</p>", status_code=400)
-    hint = (state or "").strip()
-    ok, oid, msg = exchange_code_for_tokens((code or "").strip(), open_id_hint=hint)
-    if ok:
-        retry_note = ""
-        try:
-            tenant_token = _lark_client.get_tenant_token_primary()
-            n = maybe_retry_pending_vc_ring_for_declarer(oid, tenant_token)
-            if n:
-                retry_note = f" Ring attempted on {n} active P0 session(s)."
-            else:
-                retry_note = " Join (or re-join) the P0 VC to ring tagged users."
-        except Exception as e_retry:
-            log.warning("vc_ring OAuth retry failed: %s", e_retry)
-            retry_note = " Join the P0 VC to ring tagged users."
-        return HTMLResponse(
-            f"<p>VC ring authorized for user …{oid[-8:] if oid else ''}."
-            f"{retry_note} You can close this tab.</p>"
-        )
-    log.warning(
-        "vc oauth callback failed state_tail=%s code_len=%s msg=%s",
-        hint[-8:] if hint else "",
-        len((code or "").strip()),
-        (msg or "")[:400],
-    )
-    return HTMLResponse(
-        f"<p>OAuth failed: {msg}</p>"
-        "<p>Start a <b>new</b> authorization from the bot DM link (each code works once).</p>",
-        status_code=400,
-    )
-
-
 @app.post("/lark/webhook")
 async def lark_webhook(req: Request, background: BackgroundTasks):
     try:
@@ -718,19 +649,18 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 add_meeting_participant(participant_name)
             else:
                 log.warning("vc join event received but participant name is empty after fallback lookup")
-            joiner_uid = (refs.get("user_id") or "").strip()
-            if meeting_ref and (oid or joiner_uid):
-                try:
-                    from p0_logic.vc_ring import maybe_ring_on_vc_join
+            try:
+                from p0_logic.issue_watch_declare import maybe_prompt_major_check_person_joined
 
-                    maybe_ring_on_vc_join(
-                        meeting_ref,
-                        oid,
-                        tenant_token,
-                        joiner_user_id=joiner_uid,
-                    )
-                except Exception as e_ring:
-                    log.warning("vc_ring on join failed: %s", e_ring)
+                maybe_prompt_major_check_person_joined(
+                    meeting_ref=meeting_ref or "",
+                    tenant_token=tenant_token,
+                    joiner_open_id=oid,
+                    joiner_user_id=(refs.get("user_id") or "").strip(),
+                    participant_name=participant_name or "",
+                )
+            except Exception as e_cp:
+                log.warning("major check-person join prompt hook failed: %s", e_cp)
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":

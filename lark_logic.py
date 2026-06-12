@@ -23,6 +23,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_toplevel_grace_sec,
     get_p0_thread_confirm_ttl_sec,
     get_p0_thread_confirm_use_groq,
+    p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
     HELP_RE,
 )
@@ -946,7 +947,11 @@ def _try_handle_p0_thread_confirm(
 
     if _is_p0_thread_confirm_question(text_raw):
         arm_via_asker = bool(askers and oid in askers)
-        arm_via_target = bool(targets and (mention_oids & targets))
+        arm_via_target = bool(
+            p0_thread_confirm_target_mentions_enabled()
+            and targets
+            and (mention_oids & targets)
+        )
         if arm_via_asker or arm_via_target:
             mid = (message_id or "").strip()
             if not mid:
@@ -1368,7 +1373,6 @@ def process_message(
                 source_chat_name=source_chat_name,
                 message_id=message_id,
                 message_create_time=message_create_time,
-                mention_open_ids=kwargs.get("mention_open_ids"),
             ):
                 return
 

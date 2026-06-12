@@ -5,21 +5,170 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
-from . import cards as _cards
 from . import config as _config
 from . import groq_client as _groq
 from . import issue_watch_overview as _iwo
 from . import lark_client as _lark
 from . import session as _session
-from . import vc_ring as _vc_ring
+from . import session_disk as _session_disk
 
 log = logging.getLogger("lark-ops-ai")
 
 
+def _major_check_person_id_sets(
+    recipients: List[Tuple[str, str]],
+) -> Tuple[FrozenSet[str], FrozenSet[str]]:
+    oids: set = set()
+    uids: set = set()
+    for oid, uid in recipients:
+        if oid:
+            oids.add(oid)
+        if uid:
+            uids.add(uid)
+    return frozenset(oids), frozenset(uids)
+
+
+def _stash_major_check_person_session(
+    sess: Dict[str, Any],
+    concern_message_id: str,
+    recipients: List[Tuple[str, str]],
+) -> None:
+    oids, uids = _major_check_person_id_sets(recipients)
+    sess["major_check_person_open_ids"] = sorted(oids)
+    sess["major_check_person_user_ids"] = sorted(uids)
+    sess["major_check_person_join_prompted"] = []
+    mid = (concern_message_id or "").strip()
+    if mid:
+        sess["issue_watch_concern_message_id"] = mid
+
+
+def _dm_one_check_person(
+    token: str,
+    open_id: str,
+    user_id: str,
+    text: str,
+) -> Tuple[int, str]:
+    oid = (open_id or "").strip()
+    uid = (user_id or "").strip()
+    if oid:
+        return _lark.post_text_to_open_id(oid, token, text)
+    if uid:
+        return _lark.post_text_to_user_cross_app("", uid, token, text, use_user_id=True)
+    return 0, ""
+
+
+def invite_major_check_persons_after_declare(
+    source_chat_id: str,
+    tenant_token: str,
+    concern_message_id: str,
+) -> int:
+    """
+    After Issue Watch declare + ``start_p0``, DM configured check persons with the meeting link.
+    Returns count of successful DMs.
+    """
+    cid = (source_chat_id or "").strip()
+    tok = (tenant_token or "").strip()
+    recipients = _config.get_p0_major_check_person_recipients()
+    if not cid or not tok or not recipients:
+        return 0
+    sess = _session.P0_SESSIONS.get(cid) or {}
+    link = (sess.get("link") or "").strip()
+    if not link:
+        log.warning("issue_watch_declare: check-person invite skipped — no meeting link chat=%s", cid[:24])
+        return 0
+    _stash_major_check_person_session(sess, concern_message_id, recipients)
+    if _session_disk.enabled():
+        _session_disk.save_session(cid, sess)
+    body_tmpl = _config.get_p0_major_check_person_dm_text()
+    body = body_tmpl.replace("{link}", link)
+    sent = 0
+    for oid, uid in recipients:
+        st, resp = _dm_one_check_person(tok, oid, uid, body)
+        ok, code, msg = _lark.lark_im_message_create_ok(resp)
+        if st == 200 and ok:
+            sent += 1
+            log.info(
+                "issue_watch_declare: check-person DM sent open_id_tail=%s user_id=%s",
+                oid[-8:] if oid else "",
+                uid[:12] if uid else "",
+            )
+        else:
+            log.warning(
+                "issue_watch_declare: check-person DM failed HTTP=%s code=%s open_id_tail=%s user_id=%s msg=%s",
+                st,
+                code,
+                oid[-8:] if oid else "",
+                uid[:12] if uid else "",
+                (msg or resp or "")[:160],
+            )
+    return sent
+
+
+def maybe_prompt_major_check_person_joined(
+    *,
+    meeting_ref: str,
+    tenant_token: str,
+    joiner_open_id: str = "",
+    joiner_user_id: str = "",
+    participant_name: str = "",
+) -> None:
+    """
+    When a configured check person joins VC, reply once on the original concern thread.
+    Non-check-persons and no-shows get no prompt.
+    """
+    ref = (meeting_ref or "").strip()
+    tok = (tenant_token or "").strip()
+    if not ref or not tok:
+        return
+    cid, sess = _session.find_session_by_meeting_ref(ref)
+    if not cid or not sess:
+        return
+    check_oids = set(sess.get("major_check_person_open_ids") or [])
+    check_uids = set(sess.get("major_check_person_user_ids") or [])
+    if not check_oids and not check_uids:
+        return
+    jo = (joiner_open_id or "").strip()
+    ju = (joiner_user_id or "").strip()
+    if not ((jo and jo in check_oids) or (ju and ju in check_uids)):
+        return
+    dedupe_key = jo or ju
+    prompted = list(sess.get("major_check_person_join_prompted") or [])
+    if dedupe_key in prompted:
+        return
+    src_mid = str(sess.get("issue_watch_concern_message_id") or "").strip()
+    if not src_mid:
+        return
+    name = (participant_name or "").strip() or "Check person"
+    text = _config.get_p0_major_check_person_join_thread_text().replace("{name}", name)
+    st, body = _lark.post_text_reply_to_message(src_mid, tok, text, reply_in_thread=True)
+    ok, code, msg = _lark.lark_im_message_create_ok(body)
+    if st != 200 or not ok:
+        log.warning(
+            "issue_watch_declare: check-person join prompt failed HTTP=%s code=%s concern_tail=%s msg=%s",
+            st,
+            code,
+            src_mid[-12:] if len(src_mid) > 12 else src_mid,
+            (msg or body or "")[:160],
+        )
+        return
+    prompted.append(dedupe_key)
+    sess["major_check_person_join_prompted"] = prompted
+    if _session_disk.enabled():
+        _session_disk.save_session(cid, sess)
+    log.info(
+        "issue_watch_declare: check-person join prompt sent name=%r concern_tail=%s joiner_tail=%s",
+        name[:40],
+        src_mid[-12:] if len(src_mid) > 12 else src_mid,
+        dedupe_key[-8:] if len(dedupe_key) > 8 else dedupe_key,
+    )
+
+
 def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
     """Groq contextual reply on the concern thread; env fallback if AI off or unavailable."""
+    if _config.get_p0_major_check_person_recipients():
+        return _config.get_p0_issue_watch_declare_check_person_reply_text()
     fallback = _config.get_p0_issue_watch_declare_reply_text()
     if not snap or not _config.get_p0_issue_watch_declare_reply_ai_enabled():
         return fallback
@@ -94,20 +243,12 @@ def handle_declare_p0(
         _lark.post_text_to_open_id(oid, tok, "Could not resolve the detection group for this alert.")
         return
 
-    ring_targets: list[str] = []
-    if _config.get_p0_vc_ring_enabled():
-        ring_targets = _vc_ring.resolve_ring_targets_from_snapshot(
-            snap,
-            detection_chat_id=detection_chat,
-            operator_open_id=oid,
-        )
     reply_text = _declare_reply_from_alert(snap)
-    reply_post = _vc_ring.format_declare_reply_with_mentions(reply_text, ring_targets)
     if src_mid:
         st_r, body_r = _lark.post_text_reply_to_message(
             src_mid,
             tok,
-            reply_post,
+            reply_text,
             reply_in_thread=_config.get_p0_issue_watch_declare_reply_in_thread(),
         )
         ok, api_code, api_msg = _lark.lark_im_message_create_ok(body_r)
@@ -145,7 +286,7 @@ def handle_declare_p0(
                 _config.get_p0_issue_watch_declare_reply_in_thread(),
             )
             if _config.get_p0_issue_watch_declare_also_send_to_group():
-                st_g, body_g = _lark.post_text_to_chat(detection_chat, tok, reply_post)
+                st_g, body_g = _lark.post_text_to_chat(detection_chat, tok, reply_text)
                 ok_g, code_g, msg_g = _lark.lark_im_message_create_ok(body_g)
                 if st_g != 200 or not ok_g:
                     log.warning(
@@ -180,11 +321,10 @@ def handle_declare_p0(
             )
 
     log.info(
-        "issue_watch_declare: start_p0 chat_tail=%s operator_tail=%s alert_key=%s ring_targets=%s",
+        "issue_watch_declare: start_p0 chat_tail=%s operator_tail=%s alert_key=%s",
         detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
         oid[-8:] if len(oid) > 8 else oid,
         key[:12] if key else "",
-        len(ring_targets),
     )
     _session.start_p0(
         detection_chat,
@@ -194,12 +334,20 @@ def handle_declare_p0(
         source_chat_name=group_label,
         trigger_lark_user_id=(operator_lark_user_id or "").strip(),
         silent_when_blocked=False,
-        vc_ring_target_open_ids=ring_targets if _config.get_p0_vc_ring_enabled() else None,
         issue_watch_alert_key=key,
     )
-    _lark.post_text_to_open_id(oid, tok, _cards.build_issue_watch_declare_followup_text())
-    if _config.get_p0_vc_ring_enabled():
-        _vc_ring.maybe_prompt_oauth_dm(oid, tok)
+    if _config.get_p0_major_check_person_recipients():
+        n_inv = invite_major_check_persons_after_declare(detection_chat, tok, src_mid)
+        log.info(
+            "issue_watch_declare: check-person invites sent=%s chat_tail=%s",
+            n_inv,
+            detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
+        )
+    _lark.post_text_to_open_id(
+        oid,
+        tok,
+        "P0 declare initiated. Check the detection group for the meeting card and your DM for the overview preview.",
+    )
 
 
 def handle_declare_dismiss(operator_open_id: str, tenant_token: str) -> None:
