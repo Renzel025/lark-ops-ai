@@ -2545,6 +2545,12 @@ def p0_thread_confirm_target_mentions_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_lark_bot_open_id() -> str:
+    """``LARK_BOT_OPEN_ID`` — optional ``ou_...`` for this bot (excluded from VC ring @mentions)."""
+    reload_env_runtime()
+    return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
+
+
 def get_p0_vc_ring_enabled() -> bool:
     """``P0_VC_RING_ENABLED`` — ring users into VC when duty joins (needs OAuth + ``vc:meeting``)."""
     reload_env_runtime()
