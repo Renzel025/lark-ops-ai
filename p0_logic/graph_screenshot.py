@@ -2930,6 +2930,12 @@ def _capture_and_post_ranges_thread_body(
     global _capture_busy, _on_demand_timed_out
     from . import config as _config
 
+    log.info(
+        "p0 graph screenshot: capture thread started chat_id_tail=%s on_demand=%s ranges=%s",
+        chat_id[-12:] if chat_id and len(chat_id) > 12 else chat_id,
+        on_demand,
+        range_keys or "(auto)",
+    )
     with _on_demand_timed_out_lock:
         _on_demand_timed_out = False
     with _capture_busy_lock:

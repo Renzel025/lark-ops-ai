@@ -2444,6 +2444,12 @@ def get_p0_issue_watch_declare_also_send_to_group() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_lark_bot_open_id() -> str:
+    """``LARK_BOT_OPEN_ID`` — optional ``ou_...`` for this bot (excluded from VC ring @mentions)."""
+    reload_env_runtime()
+    return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
+
+
 def p0_adjustment_bitable_enabled() -> bool:
     """``P0_ADJUSTMENT_BITABLE_ENABLED`` — post deployment notice after Send overview. Default ``1`` when app_token set."""
     reload_env_runtime()
