@@ -102,7 +102,7 @@ if p0_adjustment_bitable_enabled():
     _adj_ops = get_p0_adjustment_bitable_ops_table_id()
     log.info(
         "adjustment_bitable: ENABLED — app_token_tail=%s deploy_table_tail=%s ops_table_tail=%s "
-        "(yesterday 12:00 AM SGT → now; posts after Send overview)",
+        "(yesterday 00:00 – end of today MYT; posts after Send overview)",
         _adj_app[-8:] if len(_adj_app) > 8 else (_adj_app or "(empty)"),
         _adj_tbl[-8:] if len(_adj_tbl) > 8 else (_adj_tbl or "(empty)"),
         _adj_ops[-8:] if len(_adj_ops) > 8 else (_adj_ops or "(none)"),

@@ -1141,11 +1141,11 @@ def build_adjustment_bitable_card(
     """Orange card for recent Bitable rows (reply under P0 overview)."""
     _ = hours  # legacy callers may still pass hours; window is calendar-based
     n = max(0, int(count or 0))
-    safe_md = (body_md or "").strip()[:8000]
+    safe_md = (body_md or "").strip()[:12000]
     card_title = (title or "Deployments").strip() or "Deployments"
     sub = (subtitle or "").strip()
     if not sub:
-        win = (window_label or "yesterday 12:00 AM – now SGT").strip()
+        win = (window_label or f"yesterday 00:00 – end of today {_config.get_p0_adjustment_bitable_tz_label()}").strip()
         sub = f"{n} service(s) with Blue Green or Full Release ({win})"
     elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "plain_text", "content": sub}},

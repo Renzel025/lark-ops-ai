@@ -2632,13 +2632,33 @@ def get_p0_adjustment_bitable_hours() -> int:
 
 
 def get_p0_adjustment_bitable_max_rows() -> int:
+    """
+    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — cap rows on the card. ``0`` = no limit (show all in window).
+    """
     reload_env_runtime()
-    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "10").strip()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "0").strip()
     try:
         n = int(raw)
-        return max(0, min(n, 50))
+        return max(0, n)
     except ValueError:
-        return 10
+        return 0
+
+
+def get_p0_adjustment_bitable_timezone_name() -> str:
+    """
+    IANA zone for Bitable window + displayed timestamps. Default **Malaysia Time**
+    (``Asia/Kuala_Lumpur``, MYT).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_TIMEZONE") or "").strip()
+    return raw if raw else "Asia/Kuala_Lumpur"
+
+
+def get_p0_adjustment_bitable_tz_label() -> str:
+    """Short label on cards/logs (default ``MYT``)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_TZ_LABEL") or "").strip()
+    return raw if raw else "MYT"
 
 
 def get_p0_adjustment_bitable_doc_url() -> str:

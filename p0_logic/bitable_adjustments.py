@@ -4,13 +4,13 @@ After P0 overview is sent, check Lark Bitable tables for recent side deployments
 **Deployments** table: Blue Green Time / Full Release Time in window.
 **线上操作** table: 执行操作时间 / 执行完毕时间 in window.
 
-Window: yesterday 00:00 SGT through now (up to ~48h).
+Window: **yesterday 00:00 MYT** through **end of today 23:59 MYT** (full 48h / two calendar days).
 """
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import cards as _cards
@@ -19,7 +19,18 @@ from . import lark_client as _lark
 
 log = logging.getLogger("lark-ops-ai")
 
-_SGT = timezone(timedelta(hours=8))
+try:
+    from zoneinfo import ZoneInfo  # type: ignore
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
+
+def _bitable_tz() -> ZoneInfo:
+    return ZoneInfo(_config.get_p0_adjustment_bitable_timezone_name())
+
+
+def _tz_label() -> str:
+    return _config.get_p0_adjustment_bitable_tz_label()
 
 
 def _field_text(val: Any) -> str:
@@ -71,7 +82,7 @@ def _field_epoch_ms(val: Any) -> Optional[int]:
             "%Y/%m/%d %H:%M",
         ):
             try:
-                dt = datetime.strptime(s, fmt).replace(tzinfo=_SGT)
+                dt = datetime.strptime(s, fmt).replace(tzinfo=_bitable_tz())
                 return int(dt.timestamp() * 1000)
             except ValueError:
                 continue
@@ -111,33 +122,35 @@ def _pick_time_ms(fields: Dict[str, Any], names: Tuple[str, ...]) -> Optional[in
 
 
 def _fmt_ts_full(ms: int) -> str:
-    """Match Bitable column format (YYYY-MM-DD HH:MM:SS, SGT)."""
+    """Match Bitable column format (YYYY-MM-DD HH:MM:SS, MYT)."""
     try:
-        return datetime.fromtimestamp(ms / 1000, tz=_SGT).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(ms / 1000, tz=_bitable_tz()).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
 
 
 def _window_bounds_ms() -> Tuple[int, int, str]:
     """
-    Window from yesterday 00:00 SGT through present (when overview is sent).
-    Up to ~48h depending on time of day.
+    Full 48h window: yesterday 00:00 MYT through end of today 23:59:59 MYT.
     """
-    now = datetime.now(tz=_SGT)
+    tz = _bitable_tz()
+    label = _tz_label()
+    now = datetime.now(tz=tz)
     today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_midnight = today_midnight - timedelta(days=1)
+    today_end = today_midnight + timedelta(days=1) - timedelta(seconds=1)
     cutoff_ms = int(yesterday_midnight.timestamp() * 1000)
-    end_ms = int(now.timestamp() * 1000)
+    end_ms = int(today_end.timestamp() * 1000)
     window_label = (
         f"{yesterday_midnight.strftime('%Y-%m-%d %H:%M')} – "
-        f"{now.strftime('%Y-%m-%d %H:%M')} SGT"
+        f"{today_end.strftime('%Y-%m-%d %H:%M')} {label}"
     )
     return cutoff_ms, end_ms, window_label
 
 
 def _card_subtitle(*, kind: str, count: int, window_label: str) -> str:
     n = max(0, int(count or 0))
-    win = (window_label or "yesterday 12:00 AM – now SGT").strip()
+    win = (window_label or f"yesterday 00:00 – end of today {_tz_label()}").strip()
     if kind == "online_ops":
         return f"{n} 条线上操作记录（执行操作时间 / 执行完毕时间在窗口内）({win})"
     return f"{n} service(s) with Blue Green or Full Release ({win})"
@@ -236,7 +249,7 @@ def fetch_recent_adjustments(
     source_id: str = "",
     kind: str = "deployments",
 ) -> Tuple[List[BitableNoticeRow], str, str]:
-    """Rows with time columns in yesterday 00:00 SGT through now."""
+    """Rows with time columns in yesterday 00:00 MYT through end of today MYT."""
     if not _config.p0_adjustment_bitable_enabled():
         return [], "", ""
     app_token = (app_token or _config.get_p0_adjustment_bitable_app_token()).strip()
@@ -329,7 +342,7 @@ def build_adjustment_notice_text(
     if not rows:
         return ""
     title = (card_title or "Deployments").strip() or "Deployments"
-    win = (window_label or "yesterday 12:00 AM – now SGT").strip()
+    win = (window_label or f"yesterday 00:00 – end of today {_tz_label()}").strip()
     lines = [
         f"⚙️ {title} ({win})",
         _summary_line(kind=kind, count=len(rows)),
