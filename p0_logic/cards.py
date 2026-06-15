@@ -62,6 +62,35 @@ def _build_meeting_invite_footer(priority: str) -> str:
     return f"{prio} declared - created a meeting please help to join"
 
 
+def _button_open_url(
+    *,
+    content: str,
+    url: str,
+    button_type: str = "primary",
+    element_id: str = "",
+) -> Dict[str, Any]:
+    """Schema 2.0 URL button — ``multi_url`` on buttons causes Lark 230099."""
+    link = (url or "").strip()
+    btn: Dict[str, Any] = {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": (content or "Open")[:100]},
+        "type": button_type,
+        "behaviors": [
+            {
+                "type": "open_url",
+                "default_url": link,
+                "pc_url": link,
+                "ios_url": link,
+                "android_url": link,
+            }
+        ],
+    }
+    eid = (element_id or "").strip()
+    if eid:
+        btn["element_id"] = eid
+    return btn
+
+
 def _title_group_suffix(source_chat_label: str, max_chars: int = 34) -> str:
     """Append incident group name to card titles (Lark plain_text stays short)."""
     s = (source_chat_label or "").strip()
@@ -174,12 +203,7 @@ def build_meeting_card(
     elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
         {"tag": "hr"},
-        {
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": "Join meeting"},
-            "type": "primary",
-            "multi_url": {"url": link, "pc_url": link},
-        },
+        _button_open_url(content="Join meeting", url=link, button_type="primary", element_id="join_meeting"),
         {"tag": "hr"},
         {"tag": "div", "text": {"tag": "plain_text", "content": footer_text}},
     ]
@@ -1680,12 +1704,12 @@ def build_issue_watch_alert_card(
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
     if msg_link:
         elements.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "Open source message"},
-                "type": "primary",
-                "multi_url": {"url": msg_link, "pc_url": msg_link},
-            }
+            _button_open_url(
+                content="Open source message",
+                url=msg_link,
+                button_type="primary",
+                element_id="open_src_msg",
+            )
         )
     elements.append({"tag": "hr"})
     if declare_p0_buttons and (source_incident_chat_id or "").strip():

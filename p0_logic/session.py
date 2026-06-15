@@ -1619,23 +1619,59 @@ def start_p0(
                 log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
         log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
         meeting_no = str(vc.get("meeting_no", "")).strip()
-        st, body, invite_mid = _lark.post_card_to_chat(
-            target_chat,
-            token,
-            _cards.build_meeting_card(
-                link=link,
-                meeting_no=meeting_no,
-                priority=priority,
-                affected_players=affected_players,
-                emergency_topic=emergency_topic,
-            ),
+        card = _cards.build_meeting_card(
+            link=link,
+            meeting_no=meeting_no,
+            priority=priority,
+            affected_players=affected_players,
+            emergency_topic=emergency_topic,
         )
-        if st != 200:
-            log.error("start_p0: meeting card failed HTTP=%s body=%s", st, (body or "")[:300])
-            _lark.post_text_to_chat(notify_chat, token, "❌ Failed to post meeting card.")
-            P0_SESSIONS.pop(chat_id, None)
-            return
-        if invite_mid:
+        st, body, invite_mid = _lark.post_card_to_chat(target_chat, token, card)
+        ok_card, lark_code, lark_msg = _lark.lark_im_message_create_ok(body)
+        card_posted = st == 200 and ok_card
+        if not card_posted:
+            log.error(
+                "start_p0: meeting card failed target_tail=%s HTTP=%s lark_code=%s lark_msg=%r body=%s",
+                target_chat[-12:] if len(target_chat) > 12 else target_chat,
+                st,
+                lark_code,
+                lark_msg,
+                (body or "")[:500],
+            )
+            fallback_lines = [
+                f"🚨 {priority} meeting created (card post failed — join link below)",
+                f"Join: {link}",
+            ]
+            if meeting_no:
+                fallback_lines.append(f"Meeting no: {meeting_no}")
+            if lark_msg:
+                fallback_lines.append(f"Lark: {lark_msg[:200]}")
+            fallback_text = "\n".join(fallback_lines)
+            st_fb, body_fb = _lark.post_text_to_chat(target_chat, token, fallback_text)
+            ok_fb, _, _ = _lark.lark_im_message_create_ok(body_fb)
+            if st_fb != 200 or not ok_fb:
+                st_fb2, body_fb2 = _lark.post_text_to_chat(chat_id, token, fallback_text)
+                ok_fb2, _, _ = _lark.lark_im_message_create_ok(body_fb2)
+                if st_fb2 != 200 or not ok_fb2:
+                    _lark.post_text_to_chat(
+                        notify_chat,
+                        token,
+                        "❌ Failed to post meeting card. Check bot is in the prompt group "
+                        f"(target_tail={target_chat[-12:] if len(target_chat) > 12 else target_chat}) "
+                        f"and Lark scopes for interactive messages. Lark: {lark_msg or 'unknown'}",
+                    )
+                    P0_SESSIONS.pop(chat_id, None)
+                    return
+                log.warning(
+                    "start_p0: meeting card failed but text fallback ok in source chat_tail=%s",
+                    chat_id[-12:] if len(chat_id) > 12 else chat_id,
+                )
+            else:
+                log.warning(
+                    "start_p0: meeting card failed but text fallback ok target_tail=%s",
+                    target_chat[-12:] if len(target_chat) > 12 else target_chat,
+                )
+        elif invite_mid:
             P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
         if priority == "P0":
             _fanout_p0_meeting_created_text(token, chat_id, target_chat, link)
