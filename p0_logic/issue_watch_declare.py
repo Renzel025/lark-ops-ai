@@ -185,11 +185,6 @@ def handle_declare_p0(
         silent_when_blocked=False,
         issue_watch_alert_key=key,
     )
-    _lark.post_text_to_open_id(
-        oid,
-        tok,
-        "P0 declare initiated. Check the detection group for the meeting card and your DM for the overview preview.",
-    )
 
 
 def handle_declare_dismiss(operator_open_id: str, tenant_token: str) -> None:
