@@ -386,24 +386,51 @@ def build_ongoing_meeting_card(
     }
 
 
+def _p0_ongoing_root_cause_guidance(contact_names: str) -> str:
+    """Formal escalation guidance for the ongoing P0 DM buzz."""
+    contacts = (contact_names or "").strip() or "Greg, Eason and Rock"
+    return (
+        "Escalation guidance:\n"
+        f"• If the root cause has not yet been identified, please contact {contacts}.\n"
+        f"• If the root cause has already been identified, please confirm with the incident "
+        f"commander whether {contacts} should be contacted."
+    )
+
+
 def build_p0_ongoing_dm_buzz_card(
     *,
     source_chat_label: str = "",
     meeting_no: str = "",
     duration_text: str = "10 minutes",
-    contact_names: str = "Greg and Eason",
+    contact_names: str = "Greg, Eason and Rock",
+    severity_tier: str = "minor",
 ) -> Dict[str, Any]:
-    """DM reminder when a P0 VC is still active after the configured delay."""
+    """DM reminder when a P0 VC is still active — **Major** at 5 min, **Minor** at 10 min."""
     label = (source_chat_label or "").strip() or "incident group"
     mno = (meeting_no or "").strip() or "Not available"
-    contacts = (contact_names or "").strip() or "Greg and Eason"
-    dur = (duration_text or "").strip() or "10 minutes"
+    contacts = (contact_names or "").strip() or "Greg, Eason and Rock"
+    tier = (severity_tier or "minor").strip().lower()
+    if tier == "major":
+        dur = (duration_text or "").strip() or "5 minutes"
+        body_line = (
+            "The meeting has been active for 5 minutes. "
+            "If this is a Major issue, please review escalation below."
+        )
+        title = f"⏱ P0 meeting — {dur} ongoing (Major)"
+    else:
+        dur = (duration_text or "").strip() or "10 minutes"
+        body_line = (
+            "The meeting has been active for 10 minutes. "
+            "If this is a Minor issue, please review escalation below."
+        )
+        title = f"⏱ P0 meeting — {dur} ongoing (Minor)"
+    guidance = _p0_ongoing_root_cause_guidance(contacts)
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
         "header": {
             "template": "orange",
-            "title": {"tag": "plain_text", "content": f"⏱ P0 meeting — {dur} ongoing"},
+            "title": {"tag": "plain_text", "content": title},
         },
         "body": {
             "elements": [
@@ -412,8 +439,9 @@ def build_p0_ongoing_dm_buzz_card(
                     "text": {
                         "tag": "plain_text",
                         "content": (
-                            f"P0 video meeting for {label} is still active ({dur}).\n\n"
-                            f"Please help to contact {contacts} if needed.\n\n"
+                            f"P0 video meeting for {label} is still active.\n\n"
+                            f"{body_line}\n\n"
+                            f"{guidance}\n\n"
                             f"Meeting ID: {mno}"
                         ),
                     },
