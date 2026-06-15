@@ -93,15 +93,19 @@ from p0_logic.config import (
     p0_adjustment_bitable_enabled,
     get_p0_adjustment_bitable_app_token,
     get_p0_adjustment_bitable_table_id,
+    get_p0_adjustment_bitable_ops_table_id,
 )
 
 if p0_adjustment_bitable_enabled():
     _adj_app = get_p0_adjustment_bitable_app_token()
     _adj_tbl = get_p0_adjustment_bitable_table_id()
+    _adj_ops = get_p0_adjustment_bitable_ops_table_id()
     log.info(
-        "adjustment_bitable: ENABLED — app_token_tail=%s table_id_tail=%s (posts after Send overview)",
+        "adjustment_bitable: ENABLED — app_token_tail=%s deploy_table_tail=%s ops_table_tail=%s "
+        "(yesterday 12:00 AM SGT → now; posts after Send overview)",
         _adj_app[-8:] if len(_adj_app) > 8 else (_adj_app or "(empty)"),
         _adj_tbl[-8:] if len(_adj_tbl) > 8 else (_adj_tbl or "(empty)"),
+        _adj_ops[-8:] if len(_adj_ops) > 8 else (_adj_ops or "(none)"),
     )
 else:
     log.info(

@@ -1105,14 +1105,26 @@ def build_dm_instruction_card(
     }
 
 
-def build_adjustment_bitable_card(body_md: str, *, hours: int, count: int) -> Dict[str, Any]:
-    """Orange card for recent Bitable deployments (reply under P0 overview)."""
-    hrs = max(1, int(hours or 24))
+def build_adjustment_bitable_card(
+    body_md: str,
+    *,
+    count: int,
+    title: str = "Deployments",
+    subtitle: str = "",
+    window_label: str = "",
+    hours: int = 0,
+) -> Dict[str, Any]:
+    """Orange card for recent Bitable rows (reply under P0 overview)."""
+    _ = hours  # legacy callers may still pass hours; window is calendar-based
     n = max(0, int(count or 0))
     safe_md = (body_md or "").strip()[:8000]
-    subtitle = f"{n} service(s) with Blue Green or Full Release in the last {hrs}h"
+    card_title = (title or "Deployments").strip() or "Deployments"
+    sub = (subtitle or "").strip()
+    if not sub:
+        win = (window_label or "yesterday 12:00 AM – now SGT").strip()
+        sub = f"{n} service(s) with Blue Green or Full Release ({win})"
     elements: List[Dict[str, Any]] = [
-        {"tag": "div", "text": {"tag": "plain_text", "content": subtitle}},
+        {"tag": "div", "text": {"tag": "plain_text", "content": sub}},
         {"tag": "hr"},
         {"tag": "div", "text": {"tag": "lark_md", "content": safe_md or "_No rows_"}},
     ]
@@ -1121,7 +1133,7 @@ def build_adjustment_bitable_card(body_md: str, *, hours: int, count: int) -> Di
         "config": {"enable_forward": True},
         "header": {
             "template": "orange",
-            "title": {"tag": "plain_text", "content": "Deployments"},
+            "title": {"tag": "plain_text", "content": card_title},
         },
         "body": {"elements": elements},
     }
