@@ -808,13 +808,39 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
     ).start()
 
 
-def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, trigger_open_id: str) -> None:
-    """DM duty operators that the P0 meeting is still running — contact Greg/Eason (configurable)."""
+def _p0_ongoing_buzz_sent_key(tier: str) -> str:
+    t = (tier or "").strip().lower()
+    return "p0_ongoing_buzz_major_sent" if t == "major" else "p0_ongoing_buzz_minor_sent"
+
+
+def _session_slack_severity(sess: Dict[str, Any]) -> str:
+    return str((sess or {}).get("slack_severity") or "").strip().lower()
+
+
+def _p0_ongoing_buzz_tier_allowed(sess: Dict[str, Any], tier: str, *, require_severity: bool) -> bool:
+    t = (tier or "").strip().lower()
+    if not require_severity:
+        return t == "minor"
+    sev = _session_slack_severity(sess)
+    if t == "major":
+        return sev == "major"
+    return sev == "minor"
+
+
+def _send_p0_ongoing_dm_buzz(
+    chat_id: str,
+    sess: Dict[str, Any],
+    token: str,
+    trigger_open_id: str,
+    *,
+    tier: str,
+    delay_sec: int,
+) -> None:
+    """DM duty operators — Major at 5 min, Minor at 10 min (configurable)."""
     if not token:
-        log.warning("p0 ongoing buzz: no tenant token chat_id=%s", chat_id)
+        log.warning("p0 ongoing buzz: no tenant token chat_id=%s tier=%s", chat_id, tier)
         return
-    delay_sec = _config.get_p0_ongoing_dm_buzz_delay_sec()
-    buzz_min = max(1, delay_sec // 60)
+    buzz_min = max(1, int(delay_sec) // 60)
     duration_text = f"{buzz_min} minute" if buzz_min == 1 else f"{buzz_min} minutes"
     label = str(sess.get("source_chat_name") or "").strip()
     if not label:
@@ -826,6 +852,7 @@ def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, tri
         meeting_no=meeting_no,
         duration_text=duration_text,
         contact_names=contacts,
+        severity_tier=tier,
     )
     targets = _dm_instruction_targets(trigger_open_id)
     urgent_mode = _config.get_p0_ongoing_lark_urgent_mode()
@@ -837,9 +864,10 @@ def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, tri
         st, body, mid = _lark.post_card_to_open_id(oid, token, card)
         if st != 200:
             log.warning(
-                "p0 ongoing buzz: DM failed HTTP=%s open_id_tail=%s body=%s",
+                "p0 ongoing buzz: DM failed HTTP=%s open_id_tail=%s tier=%s body=%s",
                 st,
                 oid[-12:] if len(oid) > 12 else oid,
+                tier,
                 (body or "")[:300],
             )
             continue
@@ -850,31 +878,155 @@ def _send_p0_ongoing_dm_buzz(chat_id: str, sess: Dict[str, Any], token: str, tri
                 urgent_ok += 1
             else:
                 log.warning(
-                    "p0 ongoing buzz: Lark urgent_%s failed open_id_tail=%s detail=%s "
+                    "p0 ongoing buzz: Lark urgent_%s failed open_id_tail=%s tier=%s detail=%s "
                     "(enable im:message.urgent on the bot app?)",
                     urgent_mode,
                     oid[-12:] if len(oid) > 12 else oid,
+                    tier,
                     (udetail or "")[:300],
                 )
     log.info(
-        "p0 ongoing buzz: sent=%s/%s urgent_%s=%s chat_id=%s delay_sec=%s contacts=%r",
+        "p0 ongoing buzz: sent=%s/%s urgent_%s=%s chat_id=%s tier=%s delay_sec=%s contacts=%r",
         sent,
         len(targets),
         urgent_mode,
         urgent_ok,
         chat_id,
+        tier,
         delay_sec,
         contacts,
     )
 
 
+def _mark_p0_ongoing_buzz_sent(chat_id: str, run_id: str, tier: str) -> None:
+    sent_key = _p0_ongoing_buzz_sent_key(tier)
+    sess2 = P0_SESSIONS.get(chat_id)
+    if not sess2 or str(sess2.get("p0_ongoing_buzz_run_id") or "") != run_id:
+        return
+    sess2[sent_key] = True
+    P0_SESSIONS[chat_id] = sess2
+    if _session_disk.enabled():
+        _session_disk.save_session(chat_id, sess2)
+
+
+def _try_send_p0_ongoing_dm_buzz_now(
+    chat_id: str,
+    *,
+    tier: str,
+    run_id: str = "",
+    require_severity: bool = True,
+) -> bool:
+    """Send buzz if session active, tier matches severity, and not already sent."""
+    cid = (chat_id or "").strip()
+    t = (tier or "").strip().lower()
+    if not cid or t not in ("major", "minor"):
+        return False
+    sess = P0_SESSIONS.get(cid)
+    if not sess:
+        return False
+    rid = (run_id or str(sess.get("p0_ongoing_buzz_run_id") or "")).strip()
+    if rid and str(sess.get("p0_ongoing_buzz_run_id") or "") != rid:
+        return False
+    sent_key = _p0_ongoing_buzz_sent_key(t)
+    if sess.get(sent_key):
+        return False
+    if str(sess.get("priority") or "").strip().upper() != "P0":
+        return False
+    if not _p0_ongoing_buzz_tier_allowed(sess, t, require_severity=require_severity):
+        return False
+    tok = _lark.get_tenant_token_primary()
+    if not tok:
+        log.warning("p0 ongoing buzz: no primary tenant token chat_id=%s tier=%s", cid, t)
+        return False
+    trigger = str(sess.get("trigger_open_id") or "").strip()
+    delay_sec = (
+        _config.get_p0_ongoing_dm_buzz_major_delay_sec()
+        if t == "major"
+        else _config.get_p0_ongoing_dm_buzz_minor_delay_sec()
+    )
+    _send_p0_ongoing_dm_buzz(cid, sess, tok, trigger, tier=t, delay_sec=delay_sec)
+    _mark_p0_ongoing_buzz_sent(cid, rid, t)
+    return True
+
+
+def _try_p0_ongoing_buzz_after_severity_choice(chat_id: str) -> None:
+    """If Major/Minor was chosen after the delay, send the matching buzz immediately."""
+    cid = (chat_id or "").strip()
+    if not cid or not _config.get_p0_ongoing_dm_buzz_enabled():
+        return
+    if not _config.slack_severity_prompt_enabled():
+        return
+    sess = P0_SESSIONS.get(cid)
+    if not sess:
+        return
+    sev = _session_slack_severity(sess)
+    if sev not in ("major", "minor"):
+        return
+    start = int(sess.get("start_epoch") or 0)
+    if start <= 0:
+        return
+    elapsed = time.time() - start
+    run_id = str(sess.get("p0_ongoing_buzz_run_id") or "").strip()
+    if sev == "major":
+        if elapsed >= float(_config.get_p0_ongoing_dm_buzz_major_delay_sec()):
+            _try_send_p0_ongoing_dm_buzz_now(cid, tier="major", run_id=run_id)
+    elif sev == "minor":
+        if elapsed >= float(_config.get_p0_ongoing_dm_buzz_minor_delay_sec()):
+            _try_send_p0_ongoing_dm_buzz_now(cid, tier="minor", run_id=run_id)
+
+
+def _start_p0_ongoing_buzz_worker(
+    chat_id: str,
+    trigger_open_id: str,
+    run_id: str,
+    *,
+    tier: str,
+    delay_sec: float,
+    require_severity: bool,
+) -> None:
+    t = (tier or "").strip().lower()
+
+    def worker() -> None:
+        time.sleep(max(0.0, float(delay_sec)))
+        try:
+            _config.reload_env_runtime()
+            if not _config.get_p0_ongoing_dm_buzz_enabled():
+                return
+            sess = P0_SESSIONS.get(chat_id)
+            if not sess:
+                log.info("p0 ongoing buzz: worker exit (session ended) chat_id=%s tier=%s", chat_id, t)
+                return
+            if str(sess.get("p0_ongoing_buzz_run_id") or "") != run_id:
+                log.info("p0 ongoing buzz: worker exit (stale run_id) chat_id=%s tier=%s", chat_id, t)
+                return
+            if not _p0_ongoing_buzz_tier_allowed(sess, t, require_severity=require_severity):
+                log.info(
+                    "p0 ongoing buzz: worker skip (severity=%s tier=%s require_severity=%s) chat_id=%s",
+                    _session_slack_severity(sess),
+                    t,
+                    require_severity,
+                    chat_id,
+                )
+                return
+            _try_send_p0_ongoing_dm_buzz_now(chat_id, tier=t, run_id=run_id, require_severity=require_severity)
+        except Exception as e:
+            log.warning("p0 ongoing buzz worker failed chat_id=%s tier=%s err=%s", chat_id, t, e)
+
+    threading.Thread(
+        target=worker,
+        name=f"p0-ongoing-buzz-{t}-{chat_id[-12:]}",
+        daemon=True,
+    ).start()
+
+
 def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
-    """After ``P0_ONGOING_DM_BUZZ_DELAY_SEC``, DM operators if the P0 session is still active."""
+    """
+    After P0 start, DM operators when the meeting is still active:
+    **Major** → 5 min (default); **Minor** → 10 min (default).
+    When severity prompt is off, only the 10-minute minor-style buzz runs.
+    """
     chat_id = (chat_id or "").strip()
     if not chat_id or not _config.get_p0_ongoing_dm_buzz_enabled():
-        return
-    delay = float(_config.get_p0_ongoing_dm_buzz_delay_sec())
-    if delay <= 0:
         return
     sess0 = P0_SESSIONS.get(chat_id)
     if not sess0:
@@ -883,58 +1035,55 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
     if str(sess0.get("priority") or "").strip().upper() != "P0":
         log.info("p0 ongoing buzz: not scheduled chat_id=%s (priority is not P0)", chat_id)
         return
+    severity_gated = _config.slack_severity_prompt_enabled()
+    major_delay = float(_config.get_p0_ongoing_dm_buzz_major_delay_sec())
+    minor_delay = float(_config.get_p0_ongoing_dm_buzz_minor_delay_sec())
+    if not severity_gated and minor_delay <= 0:
+        return
     run_id = secrets.token_hex(8)
     sess0["p0_ongoing_buzz_run_id"] = run_id
-    sess0["p0_ongoing_buzz_sent"] = False
+    sess0["p0_ongoing_buzz_major_sent"] = False
+    sess0["p0_ongoing_buzz_minor_sent"] = False
+    sess0.pop("p0_ongoing_buzz_sent", None)
     P0_SESSIONS[chat_id] = sess0
     if _session_disk.enabled():
         _session_disk.save_session(chat_id, sess0)
     log.info(
-        "p0 ongoing buzz: scheduled chat_id=%s delay_sec=%s run_id=%s",
+        "p0 ongoing buzz: scheduled chat_id=%s run_id=%s severity_gated=%s major_sec=%s minor_sec=%s",
         chat_id,
-        int(delay),
         run_id,
+        severity_gated,
+        int(major_delay),
+        int(minor_delay),
     )
-
-    def worker() -> None:
-        time.sleep(delay)
-        try:
-            _config.reload_env_runtime()
-            if not _config.get_p0_ongoing_dm_buzz_enabled():
-                return
-            sess = P0_SESSIONS.get(chat_id)
-            if not sess:
-                log.info("p0 ongoing buzz: worker exit (session ended) chat_id=%s", chat_id)
-                return
-            if str(sess.get("p0_ongoing_buzz_run_id") or "") != run_id:
-                log.info("p0 ongoing buzz: worker exit (stale run_id) chat_id=%s", chat_id)
-                return
-            if sess.get("p0_ongoing_buzz_sent"):
-                return
-            if str(sess.get("priority") or "").strip().upper() != "P0":
-                log.info("p0 ongoing buzz: worker exit (no longer P0) chat_id=%s", chat_id)
-                return
-            tok = _lark.get_tenant_token_primary()
-            if not tok:
-                log.warning("p0 ongoing buzz: no primary tenant token chat_id=%s", chat_id)
-                return
-            trigger = str(sess.get("trigger_open_id") or trigger_open_id or "").strip()
-            _send_p0_ongoing_dm_buzz(chat_id, sess, tok, trigger)
-            sess2 = P0_SESSIONS.get(chat_id)
-            if not sess2 or str(sess2.get("p0_ongoing_buzz_run_id") or "") != run_id:
-                return
-            sess2["p0_ongoing_buzz_sent"] = True
-            P0_SESSIONS[chat_id] = sess2
-            if _session_disk.enabled():
-                _session_disk.save_session(chat_id, sess2)
-        except Exception as e:
-            log.warning("p0 ongoing buzz worker failed chat_id=%s err=%s", chat_id, e)
-
-    threading.Thread(
-        target=worker,
-        name=f"p0-ongoing-buzz-{chat_id[-12:]}",
-        daemon=True,
-    ).start()
+    if severity_gated:
+        if major_delay > 0:
+            _start_p0_ongoing_buzz_worker(
+                chat_id,
+                trigger_open_id,
+                run_id,
+                tier="major",
+                delay_sec=major_delay,
+                require_severity=True,
+            )
+        if minor_delay > 0:
+            _start_p0_ongoing_buzz_worker(
+                chat_id,
+                trigger_open_id,
+                run_id,
+                tier="minor",
+                delay_sec=minor_delay,
+                require_severity=True,
+            )
+    elif minor_delay > 0:
+        _start_p0_ongoing_buzz_worker(
+            chat_id,
+            trigger_open_id,
+            run_id,
+            tier="minor",
+            delay_sec=minor_delay,
+            require_severity=False,
+        )
 
 
 def end_p0_session(
@@ -1990,6 +2139,10 @@ def apply_slack_severity_choice(
         sess["slack_minor_phase"] = "role_active"
     if _session_disk.enabled():
         _session_disk.save_session(cid, sess)
+    try:
+        _try_p0_ongoing_buzz_after_severity_choice(cid)
+    except Exception as e_buzz:
+        log.warning("apply_slack_severity_choice: ongoing buzz hook failed: %s", e_buzz)
     if is_major:
         label = str(sess.get("source_chat_name") or "").strip()
         pr = str(sess.get("priority") or "P0").strip().upper()

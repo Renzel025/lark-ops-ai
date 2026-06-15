@@ -897,23 +897,46 @@ def get_p0_ongoing_dm_buzz_enabled() -> bool:
 
 def get_p0_ongoing_dm_buzz_delay_sec() -> int:
     """
-    Seconds after P0 start before the Greg/Eason DM buzz. Uses ``P0_ONGOING_DM_BUZZ_DELAY_SEC``,
-    else ``ONGOING_CARD_DELAY_SEC`` (default 600 = 10 minutes).
+    Legacy alias for **minor** tier delay. Prefer ``get_p0_ongoing_dm_buzz_minor_delay_sec``.
+    """
+    return get_p0_ongoing_dm_buzz_minor_delay_sec()
+
+
+def get_p0_ongoing_dm_buzz_major_delay_sec() -> int:
+    """Seconds after P0 start before the **Major** DM buzz (default 300 = 5 minutes)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ONGOING_DM_BUZZ_MAJOR_DELAY_SEC") or "300").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 300
+
+
+def get_p0_ongoing_dm_buzz_minor_delay_sec() -> int:
+    """
+    Seconds after P0 start before the **Minor** DM buzz (default 600 = 10 minutes).
+    ``P0_ONGOING_DM_BUZZ_DELAY_SEC`` overrides when ``P0_ONGOING_DM_BUZZ_MINOR_DELAY_SEC`` is unset.
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_ONGOING_DM_BUZZ_DELAY_SEC") or "").strip()
-    if raw:
+    raw_minor = (os.getenv("P0_ONGOING_DM_BUZZ_MINOR_DELAY_SEC") or "").strip()
+    if raw_minor:
         try:
-            return max(60, int(raw))
+            return max(60, int(raw_minor))
+        except ValueError:
+            pass
+    raw_legacy = (os.getenv("P0_ONGOING_DM_BUZZ_DELAY_SEC") or "").strip()
+    if raw_legacy:
+        try:
+            return max(60, int(raw_legacy))
         except ValueError:
             pass
     return max(60, ONGOING_CARD_DELAY_SEC)
 
 
 def get_p0_ongoing_contact_names() -> str:
-    """Who operators should contact (``P0_ONGOING_CONTACT_NAMES``, default Greg and Eason)."""
+    """Who operators should contact (``P0_ONGOING_CONTACT_NAMES``, default Greg, Eason and Rock)."""
     reload_env_runtime()
-    return (os.getenv("P0_ONGOING_CONTACT_NAMES") or "Greg and Eason").strip() or "Greg and Eason"
+    return (os.getenv("P0_ONGOING_CONTACT_NAMES") or "Greg, Eason and Rock").strip() or "Greg, Eason and Rock"
 
 
 def get_p0_ongoing_lark_urgent_mode() -> str:
