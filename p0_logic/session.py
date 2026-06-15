@@ -1076,6 +1076,16 @@ def cancel_p0_session(
                 )
             except Exception as e:
                 log.error("Failed to post meeting cancelled card (fallback): %s", e)
+        _fanout_p0_meeting_cancelled(
+            token,
+            source_incident_chat_id=chat_id,
+            prompt_chat_id=prompt_cid,
+            meeting_no=meeting_no,
+            duration_text=duration_text,
+            priority=priority,
+            reason=reason,
+            emergency_topic=em_topic,
+        )
     if token and chat_id:
         s_can = P0_SESSIONS.get(chat_id)
         if s_can and s_can.get("dm_instruction_deferred"):
@@ -1507,6 +1517,58 @@ def _fanout_p0_meeting_created_text(
                 )
         except Exception as e:
             log.warning("start_p0: P0 meeting text fan-out exception chat=%s err=%s", oc[:24], e)
+
+
+def _fanout_p0_meeting_cancelled(
+    token: str,
+    *,
+    source_incident_chat_id: str,
+    prompt_chat_id: str,
+    meeting_no: str,
+    duration_text: str,
+    priority: str,
+    reason: str,
+    emergency_topic: str,
+) -> None:
+    """Post the grey cancelled card to boss / hub groups (prompt group already got the primary notice)."""
+    targets = _config.get_p0_meeting_cancelled_fanout_chat_ids(source_incident_chat_id)
+    if not targets:
+        return
+    card = _cards.build_meeting_cancelled_card(
+        meeting_no=meeting_no,
+        duration_text=duration_text,
+        priority=priority,
+        reason=reason,
+        emergency_topic=emergency_topic,
+        update_multi=False,
+    )
+    prompt = (prompt_chat_id or "").strip()
+    for oc in targets:
+        if oc == prompt:
+            continue
+        try:
+            st, body, _ = _lark.post_card_to_chat(oc, token, card)
+            ok, code, msg = _lark.lark_im_message_create_ok(body)
+            if st == 200 and ok:
+                log.info(
+                    "cancel_p0: meeting cancelled fan-out ok chat_id_tail=%s source=%s",
+                    oc[-12:] if len(oc) > 12 else oc,
+                    source_incident_chat_id[:24],
+                )
+            else:
+                log.warning(
+                    "cancel_p0: meeting cancelled fan-out HTTP=%s lark_code=%s chat=%s msg=%r",
+                    st,
+                    code,
+                    oc[:24],
+                    msg,
+                )
+        except Exception as e:
+            log.warning(
+                "cancel_p0: meeting cancelled fan-out exception chat=%s err=%s",
+                oc[:24],
+                e,
+            )
 
 
 def start_p0(
