@@ -980,25 +980,12 @@ def end_p0_session(
         duration_text = _cards.format_duration(start_epoch)
         em_topic = str(sess.get("emergency_topic") or "").strip()
         patched = _patch_meeting_invite_to_terminal(sess, token, kind="ended", duration_text=duration_text)
-        prompt_cid = _session_prompt_chat_id(sess, chat_id)
         if not patched:
-            try:
-                _lark.post_card_to_chat(
-                    prompt_cid,
-                    token,
-                    _cards.build_meeting_ended_card(
-                        meeting_no, duration_text, priority, emergency_topic=em_topic, update_multi=False
-                    ),
-                )
-            except Exception as e:
-                log.error("Failed to post meeting ended card (fallback): %s", e)
-        summary = f"✅ Meeting ended. Duration: {duration_text}"
-        if meeting_no:
-            summary += f". Meeting ID: {meeting_no}"
-        try:
-            _lark.post_text_to_chat(prompt_cid, token, summary)
-        except Exception as e:
-            log.warning("post_text meeting ended summary failed chat_id=%s err=%s", chat_id, e)
+            log.warning(
+                "end_p0_session: could not patch invite card to ended state chat_id=%s message_id=%s",
+                chat_id,
+                str(sess.get("meeting_invite_message_id") or "")[:24],
+            )
     if token and chat_id:
         s_end = P0_SESSIONS.get(chat_id)
         if s_end and s_end.get("dm_instruction_deferred"):
@@ -1485,38 +1472,61 @@ def clear_p0_cooldown(chat_id: str) -> None:
     log.info("clear_p0_cooldown chat_id=%s", chat_id)
 
 
-def _fanout_p0_meeting_created_text(
+def _fanout_p0_meeting_created_card(
     token: str,
     source_incident_chat_id: str,
     prompt_chat_id: str,
+    *,
     link: str,
+    meeting_no: str,
+    priority: str,
+    emergency_topic: str,
 ) -> None:
-    """Plain ``🚨 P0 meeting created`` text to extra group(s) — red card stays in ``prompt_chat_id``."""
+    """Red meeting invite card to extra group(s) — same layout as incident group, Join button opens VC link."""
     targets = _config.get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id)
     if not targets:
         return
-    msg = _cards.build_p0_meeting_created_text(link)
+    card = _cards.build_meeting_card(
+        link=link,
+        meeting_no=meeting_no,
+        priority=priority,
+        emergency_topic=emergency_topic,
+        patchable=False,
+    )
     prompt = (prompt_chat_id or "").strip()
     for oc in targets:
         if oc == prompt:
             continue
         try:
-            st, resp = _lark.post_text_to_chat(oc, token, msg)
-            if st == 200:
+            st, body, _ = _lark.post_card_to_chat(oc, token, card)
+            ok, code, msg = _lark.lark_im_message_create_ok(body)
+            if st == 200 and ok:
                 log.info(
-                    "start_p0: P0 meeting text fan-out ok chat_id_tail=%s source=%s",
+                    "start_p0: P0 meeting card fan-out ok chat_id_tail=%s source=%s",
                     oc[-12:] if len(oc) > 12 else oc,
                     source_incident_chat_id[:24],
                 )
             else:
                 log.warning(
-                    "start_p0: P0 meeting text fan-out HTTP=%s chat=%s body_head=%s",
+                    "start_p0: P0 meeting card fan-out HTTP=%s lark_code=%s chat=%s msg=%r",
                     st,
+                    code,
                     oc[:24],
-                    (resp or "")[:200],
+                    msg,
                 )
+                fallback = _cards.build_p0_meeting_created_text(link)
+                st_fb, resp_fb = _lark.post_text_to_chat(oc, token, fallback)
+                if st_fb == 200:
+                    log.info("start_p0: P0 meeting card fan-out text fallback ok chat=%s", oc[:24])
+                else:
+                    log.warning(
+                        "start_p0: P0 meeting card fan-out text fallback HTTP=%s chat=%s body_head=%s",
+                        st_fb,
+                        oc[:24],
+                        (resp_fb or "")[:200],
+                    )
         except Exception as e:
-            log.warning("start_p0: P0 meeting text fan-out exception chat=%s err=%s", oc[:24], e)
+            log.warning("start_p0: P0 meeting card fan-out exception chat=%s err=%s", oc[:24], e)
 
 
 def _fanout_p0_meeting_cancelled(
@@ -1736,7 +1746,15 @@ def start_p0(
         elif invite_mid:
             P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
         if priority == "P0":
-            _fanout_p0_meeting_created_text(token, chat_id, target_chat, link)
+            _fanout_p0_meeting_created_card(
+                token,
+                chat_id,
+                target_chat,
+                link=link,
+                meeting_no=meeting_no,
+                priority=priority,
+                emergency_topic=emergency_topic,
+            )
         if _session_disk.enabled():
             _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
     dm_targets = _dm_instruction_targets(trigger_open_id)

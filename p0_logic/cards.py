@@ -195,6 +195,8 @@ def build_meeting_card(
     priority: str = "P0",
     affected_players: str = "",
     emergency_topic: str = "",
+    *,
+    patchable: bool = True,
 ) -> Dict[str, Any]:
     prio = (priority or "P0").strip().upper()
     title_text = _build_emergency_title(prio, emergency_topic)
@@ -207,10 +209,12 @@ def build_meeting_card(
         {"tag": "hr"},
         {"tag": "div", "text": {"tag": "plain_text", "content": footer_text}},
     ]
+    cfg: Dict[str, Any] = {"enable_forward": True}
+    if patchable:
+        cfg["update_multi"] = True
     return {
         "schema": "2.0",
-        # Required so we can PATCH this message when the meeting ends (remove Join button).
-        "config": {"enable_forward": True, "update_multi": True},
+        "config": cfg,
         "header": {"template": "red", "title": {"tag": "plain_text", "content": title_text}},
         "body": {"elements": elements},
     }
@@ -421,15 +425,11 @@ def build_meeting_ended_card(
     *,
     update_multi: bool = False,
 ) -> Dict[str, Any]:
+    """Grey in-place update of the red invite card — no Join button, minimal body."""
+    _ = emergency_topic
     prio = (priority or "P0").strip().upper()
-    em_line = _build_emergency_title(prio, emergency_topic)
-    # Title carries ✅ line; body starts at 🚨 line (P0 / P1 both use ``prio``).
-    body_md = (
-        f"{em_line}\n\n"
-        f"Meeting ID: {meeting_no}\n"
-        f"Duration: {duration_text}\n\n"
-        "The emergency meeting has concluded."
-    )
+    dur = (duration_text or "Not available").strip() or "Not available"
+    meeting_line = f"Meeting ID: {meeting_no}" if meeting_no else "Meeting ended."
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
@@ -439,13 +439,9 @@ def build_meeting_ended_card(
         "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"✅ {prio} meeting ended"}},
         "body": {
             "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": body_md,
-                    },
-                }
+                {"tag": "div", "text": {"tag": "plain_text", "content": meeting_line}},
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "plain_text", "content": f"Duration: {dur}"}},
             ],
         },
     }
