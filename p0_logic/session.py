@@ -533,6 +533,12 @@ def _patch_meeting_invite_to_terminal(
     mid = str((sess or {}).get("meeting_invite_message_id") or "").strip()
     if not mid or not token:
         return False
+    if str((sess or {}).get("meeting_invite_notice_kind") or "") == "text_unfurl":
+        log.info(
+            "patch meeting invite skipped kind=text_unfurl — Lark VC link preview updates in place mid=%s",
+            mid[:24],
+        )
+        return True
     try:
         meeting_no = str(sess.get("meeting_no") or "").strip()
         priority = str(sess.get("priority") or "P0").strip().upper()
@@ -1472,53 +1478,72 @@ def clear_p0_cooldown(chat_id: str) -> None:
     log.info("clear_p0_cooldown chat_id=%s", chat_id)
 
 
+def _post_meeting_link_unfurl_notice(
+    chat_id: str,
+    token: str,
+    *,
+    link: str,
+    priority: str,
+    emergency_topic: str = "",
+) -> str:
+    """
+    Post plain text with raw VC URL — Lark unfurls native meeting preview (participants, timer, Ended).
+    Returns ``message_id`` on success, else empty.
+    """
+    cid = (chat_id or "").strip()
+    if not cid or not token:
+        return ""
+    text = _cards.build_meeting_link_unfurl_text(
+        link, priority=priority, emergency_topic=emergency_topic
+    )
+    try:
+        st, body = _lark.post_text_to_chat(cid, token, text)
+        ok, code, msg = _lark.lark_im_message_create_ok(body)
+        mid = _lark.parse_im_message_id_from_response(body)
+        if st == 200 and ok and mid:
+            log.info(
+                "meeting unfurl notice ok chat_id_tail=%s priority=%s mid_tail=%s",
+                cid[-12:] if len(cid) > 12 else cid,
+                priority,
+                mid[-12:] if len(mid) > 12 else mid,
+            )
+            return mid
+        log.warning(
+            "meeting unfurl notice failed chat_id_tail=%s HTTP=%s lark_code=%s msg=%r",
+            cid[-12:] if len(cid) > 12 else cid,
+            st,
+            code,
+            msg,
+        )
+    except Exception as e:
+        log.warning("meeting unfurl notice exception chat_id_tail=%s err=%s", cid[-12:], e)
+    return ""
+
+
 def _fanout_p0_meeting_created_link_notice(
     token: str,
     source_incident_chat_id: str,
     prompt_chat_id: str,
     *,
     link: str,
+    priority: str = "P0",
     emergency_topic: str = "",
 ) -> None:
-    """Minimal link-style card to boss / hub — NOT the full red Meeting ID invite card."""
+    """Same unfurl text to boss / hub — native Lark VC preview below the link."""
     targets = _config.get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id)
     if not targets:
         return
-    card = _cards.build_p0_meeting_created_link_card(link, emergency_topic=emergency_topic)
     prompt = (prompt_chat_id or "").strip()
     for oc in targets:
         if oc == prompt:
             continue
-        try:
-            st, body, _ = _lark.post_card_to_chat(oc, token, card)
-            ok, code, msg = _lark.lark_im_message_create_ok(body)
-            if st == 200 and ok:
-                log.info(
-                    "start_p0: P0 meeting link-card fan-out ok chat_id_tail=%s source=%s",
-                    oc[-12:] if len(oc) > 12 else oc,
-                    source_incident_chat_id[:24],
-                )
-            else:
-                log.warning(
-                    "start_p0: P0 meeting link-card fan-out HTTP=%s lark_code=%s chat=%s msg=%r",
-                    st,
-                    code,
-                    oc[:24],
-                    msg,
-                )
-                fallback = _cards.build_p0_meeting_created_text(link, priority="P0")
-                st_fb, resp_fb = _lark.post_text_to_chat(oc, token, fallback)
-                if st_fb == 200:
-                    log.info("start_p0: P0 meeting link-card text fallback ok chat=%s", oc[:24])
-                else:
-                    log.warning(
-                        "start_p0: P0 meeting link-card text fallback HTTP=%s chat=%s body_head=%s",
-                        st_fb,
-                        oc[:24],
-                        (resp_fb or "")[:200],
-                    )
-        except Exception as e:
-            log.warning("start_p0: P0 meeting link-card fan-out exception chat=%s err=%s", oc[:24], e)
+        _post_meeting_link_unfurl_notice(
+            oc,
+            token,
+            link=link,
+            priority=priority,
+            emergency_topic=emergency_topic,
+        )
 
 
 def _fanout_p0_meeting_cancelled(
@@ -1683,57 +1708,55 @@ def start_p0(
                 log.warning("Failed seeding fallback host participant open_id=%s err=%s", trigger_open_id, e)
         log.info("start session created priority=%s source_chat=%s target_chat=%s trigger_open_id=%s", priority, chat_id, target_chat, trigger_open_id)
         meeting_no = str(vc.get("meeting_no", "")).strip()
-        card = _cards.build_meeting_link_notice_card(
+        invite_mid = _post_meeting_link_unfurl_notice(
+            target_chat,
+            token,
             link=link,
             priority=priority,
             emergency_topic=emergency_topic,
-            patchable=True,
         )
-        st, body, invite_mid = _lark.post_card_to_chat(target_chat, token, card)
-        ok_card, lark_code, lark_msg = _lark.lark_im_message_create_ok(body)
-        card_posted = st == 200 and ok_card
-        if not card_posted:
+        if not invite_mid:
             log.error(
-                "start_p0: meeting card failed target_tail=%s HTTP=%s lark_code=%s lark_msg=%r body=%s",
+                "start_p0: meeting unfurl notice failed target_tail=%s",
                 target_chat[-12:] if len(target_chat) > 12 else target_chat,
-                st,
-                lark_code,
-                lark_msg,
-                (body or "")[:500],
             )
             fallback_text = _cards.build_p0_meeting_created_text(link, priority=priority)
             st_fb, body_fb = _lark.post_text_to_chat(target_chat, token, fallback_text)
-            ok_fb, _, _ = _lark.lark_im_message_create_ok(body_fb)
+            ok_fb, _, lark_msg = _lark.lark_im_message_create_ok(body_fb)
+            invite_mid = _lark.parse_im_message_id_from_response(body_fb) if ok_fb else ""
             if st_fb != 200 or not ok_fb:
                 st_fb2, body_fb2 = _lark.post_text_to_chat(chat_id, token, fallback_text)
-                ok_fb2, _, _ = _lark.lark_im_message_create_ok(body_fb2)
+                ok_fb2, _, lark_msg2 = _lark.lark_im_message_create_ok(body_fb2)
                 if st_fb2 != 200 or not ok_fb2:
                     _lark.post_text_to_chat(
                         notify_chat,
                         token,
-                        "❌ Failed to post meeting card. Check bot is in the prompt group "
-                        f"(target_tail={target_chat[-12:] if len(target_chat) > 12 else target_chat}) "
-                        f"and Lark scopes for interactive messages. Lark: {lark_msg or 'unknown'}",
+                        "❌ Failed to post meeting link. Check bot is in the group "
+                        f"(target_tail={target_chat[-12:] if len(target_chat) > 12 else target_chat}). "
+                        f"Lark: {lark_msg or lark_msg2 or 'unknown'}",
                     )
                     P0_SESSIONS.pop(chat_id, None)
                     return
+                invite_mid = _lark.parse_im_message_id_from_response(body_fb2)
                 log.warning(
-                    "start_p0: meeting card failed but text fallback ok in source chat_tail=%s",
+                    "start_p0: meeting unfurl failed but text fallback ok in source chat_tail=%s",
                     chat_id[-12:] if len(chat_id) > 12 else chat_id,
                 )
             else:
                 log.warning(
-                    "start_p0: meeting card failed but text fallback ok target_tail=%s",
+                    "start_p0: meeting unfurl failed but text fallback ok target_tail=%s",
                     target_chat[-12:] if len(target_chat) > 12 else target_chat,
                 )
-        elif invite_mid:
+        if invite_mid:
             P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
+            P0_SESSIONS[chat_id]["meeting_invite_notice_kind"] = "text_unfurl"
         if priority == "P0":
             _fanout_p0_meeting_created_link_notice(
                 token,
                 chat_id,
                 target_chat,
                 link=link,
+                priority=priority,
                 emergency_topic=emergency_topic,
             )
         if _session_disk.enabled():

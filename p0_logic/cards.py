@@ -123,11 +123,36 @@ def format_duration(start_epoch: int, end_epoch: Optional[int] = None) -> str:
     return f"{seconds}s"
 
 
+MEETING_JOIN_LINK_LABEL = "join in meeting link"
+
+
 def build_p0_meeting_created_text(link: str, *, priority: str = "P0") -> str:
-    """Plain-text meeting alert — join link only."""
+    """
+    Plain-text meeting alert with **raw VC URL on its own line** so Lark unfurls the native
+    video-meeting preview (participants, timer, Ended state) below the message.
+    """
     prio = (priority or "P0").strip().upper()
     url = (link or "").strip()
-    return f"🚨 **{prio} meeting created.**\n\n**Join NOW:**\n{url}"
+    lines = [f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
+    if url:
+        lines.append(url)
+    return "\n".join(lines)
+
+
+def build_meeting_link_unfurl_text(
+    link: str,
+    *,
+    priority: str = "P0",
+    emergency_topic: str = "",
+) -> str:
+    """Topic as title line + meeting created + join label + raw URL (Lark VC unfurl)."""
+    prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    url = (link or "").strip()
+    lines = [f"**{topic}**", "", f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
+    if url:
+        lines.append(url)
+    return "\n".join(lines)
 
 
 def build_meeting_link_notice_card(
@@ -138,24 +163,23 @@ def build_meeting_link_notice_card(
     patchable: bool = False,
 ) -> Dict[str, Any]:
     """
-    Minimal link-style card (boss + incident groups): ``P0 meeting created`` + Join NOW + URL.
-    Not the full red invite card with Meeting ID / Join button / footer.
+    Minimal link-style card: topic in header, meeting created + join label + URL in body.
+    Prefer ``build_meeting_link_unfurl_text`` for native Lark VC preview (raw URL unfurl).
     """
     prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    title = topic[:100] if len(topic) > 100 else topic
     url = (link or "").strip()
-    lines = [f"🚨 **{prio} meeting created.**", "", "**Join NOW:**"]
+    lines = [f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
     if url:
         lines.append(f"[{url}]({url})")
-    topic = (emergency_topic or "").strip()
-    if topic:
-        lines.extend(["", f"_{topic}_"])
     cfg: Dict[str, Any] = {"enable_forward": True}
     if patchable:
         cfg["update_multi"] = True
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": f"{prio} meeting"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": title}},
         "body": {
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
