@@ -128,8 +128,7 @@ def resolve_overview_routing(detection_chat_id: str) -> Tuple[str, str, str]:
         if cid in m:
             target = str(m[cid] or "").strip()
     if not target:
-        fallback = _config.get_overview_target_group_chat_id()
-        target = fallback if fallback.startswith("oc_") else cid
+        target = _config.get_overview_target_chat_id_for_source_incident(cid) or cid
     if not cid.startswith("oc_"):
         cid = target or cid
     return cid, target, label
