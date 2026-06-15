@@ -2473,22 +2473,42 @@ def get_p0_adjustment_bitable_table_id() -> str:
 
 def get_p0_adjustment_bitable_hours() -> int:
     reload_env_runtime()
-    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_HOURS") or "24").strip()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_HOURS") or "48").strip()
     try:
         h = int(raw)
         return max(1, min(h, 168))
     except ValueError:
-        return 24
+        return 48
 
 
 def get_p0_adjustment_bitable_max_rows() -> int:
+    """
+    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — cap rows on the card. ``0`` = no limit (show all in window).
+    """
     reload_env_runtime()
-    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "10").strip()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "0").strip()
     try:
         n = int(raw)
-        return max(0, min(n, 50))
+        return max(0, n)
     except ValueError:
-        return 10
+        return 0
+
+
+def get_p0_adjustment_bitable_timezone_name() -> str:
+    """
+    IANA zone for Bitable window + displayed timestamps. Default **Malaysia Time**
+    (``Asia/Kuala_Lumpur``, MYT).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_TIMEZONE") or "").strip()
+    return raw if raw else "Asia/Kuala_Lumpur"
+
+
+def get_p0_adjustment_bitable_tz_label() -> str:
+    """Short label on cards/logs (default ``MYT``)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_TZ_LABEL") or "").strip()
+    return raw if raw else "MYT"
 
 
 def get_p0_adjustment_bitable_doc_url() -> str:
@@ -2525,7 +2545,7 @@ def _split_field_aliases(raw: str, default: str) -> Tuple[str, ...]:
 def get_p0_adjustment_bitable_field_names() -> Dict[str, Tuple[str, ...]]:
     """
     Bitable column names (pipe-separated aliases). Only **Blue Green Time** and
-    **Full Release Time** are used for the 24h window check.
+    **Full Release Time** are used for the lookback window check.
     """
     reload_env_runtime()
     return {
@@ -2554,3 +2574,82 @@ def get_p0_adjustment_bitable_field_names() -> Dict[str, Tuple[str, ...]]:
             "Project|项目",
         ),
     }
+
+
+def get_p0_adjustment_bitable_ops_table_id() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_TABLE_ID") or "").strip()
+
+
+def get_p0_adjustment_bitable_ops_doc_url() -> str:
+    reload_env_runtime()
+    return (
+        os.getenv("P0_ADJUSTMENT_BITABLE_OPS_DOC_URL")
+        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblTNzlhFdyrKgG8&view=vew3eqLIWs"
+    ).strip()
+
+
+def get_p0_adjustment_bitable_ops_field_names() -> Dict[str, Tuple[str, ...]]:
+    """
+    Column names for the **线上操作** Bitable (``tblTNzlhFdyrKgG8``).
+
+    Window check: **执行操作时间** and **执行完毕时间**.
+    Card body: 执行操作, 执行操作时间, 项目, 执行原因, 执行完毕时间.
+    """
+    reload_env_runtime()
+    return {
+        "op_start_time": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_START_TIME_FIELD") or "",
+            "执行操作时间",
+        ),
+        "op_done_time": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_DONE_TIME_FIELD") or "",
+            "执行完毕时间",
+        ),
+        "operation": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_OPERATION_FIELD") or "",
+            "执行操作",
+        ),
+        "project": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_PROJECT_FIELD") or "",
+            "项目",
+        ),
+        "reason": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_REASON_FIELD") or "",
+            "执行原因",
+        ),
+    }
+
+
+def get_p0_adjustment_bitable_sources() -> Tuple[Tuple[str, str, str, str, Dict[str, Tuple[str, ...]]], ...]:
+    """
+    Configured Bitable tables to check after Send overview.
+
+    Each entry: ``(source_id, table_id, card_title, kind, field_names)``.
+    ``kind`` is ``deployments`` or ``online_ops`` (controls columns + card subtitle).
+    """
+    reload_env_runtime()
+    out: List[Tuple[str, str, str, str, Dict[str, Tuple[str, ...]]]] = []
+    deploy_tbl = get_p0_adjustment_bitable_table_id()
+    if deploy_tbl:
+        out.append(
+            (
+                "deployments",
+                deploy_tbl,
+                "Deployments",
+                "deployments",
+                get_p0_adjustment_bitable_field_names(),
+            )
+        )
+    ops_tbl = get_p0_adjustment_bitable_ops_table_id()
+    if ops_tbl:
+        out.append(
+            (
+                "online_ops",
+                ops_tbl,
+                "线上操作",
+                "online_ops",
+                get_p0_adjustment_bitable_ops_field_names(),
+            )
+        )
+    return tuple(out)
