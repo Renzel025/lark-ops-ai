@@ -347,7 +347,7 @@ def _try_ring_session(
             _lark.post_text_to_open_id(
                 declarer,
                 tenant_token,
-                f"VC ring: invited {len(targets)} user(s) into the meeting.",
+                "Calling the check persons for major P0 issues.",
             )
         return True
 

@@ -361,19 +361,7 @@ def handle_declare_p0(
             log_label="declare-as-P0 reply",
         )
         if check_recipients:
-            from . import vc_ring as _vc_ring
-
             invite_reply = _config.get_p0_issue_watch_declare_check_person_reply_text()
-            mention_targets = list(ring_targets)
-            if not mention_targets:
-                mention_targets = _vc_ring._filter_ring_targets(
-                    _vc_ring._major_check_person_ring_open_ids(tok),
-                    operator_open_id=oid,
-                )
-            if mention_targets:
-                invite_reply = _vc_ring.format_declare_reply_with_mentions(
-                    invite_reply, mention_targets
-                )
             _post_declare_text_on_concern(
                 src_mid=src_mid,
                 detection_chat=detection_chat,
@@ -425,11 +413,6 @@ def handle_declare_p0(
             n_inv,
             detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
         )
-    _lark.post_text_to_open_id(
-        oid,
-        tok,
-        "P0 declare initiated. Check the detection group for the meeting card and your DM for the overview preview.",
-    )
 
 
 def handle_declare_dismiss(operator_open_id: str, tenant_token: str) -> None:
