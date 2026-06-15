@@ -1487,14 +1487,15 @@ def _post_meeting_link_unfurl_notice(
     emergency_topic: str = "",
 ) -> str:
     """
-    Post plain text with raw VC URL — Lark unfurls native meeting preview (participants, timer, Ended).
-    Returns ``message_id`` on success, else empty.
+    Option A: one plain-text message — topic, P0 created, join label, raw URL (Lark unfurl below).
+    No card, no markdown asterisks.
     """
     cid = (chat_id or "").strip()
+    url = (link or "").strip()
     if not cid or not token:
         return ""
-    text = _cards.build_meeting_link_unfurl_text(
-        link, priority=priority, emergency_topic=emergency_topic
+    text = _cards.build_p0_meeting_created_text(
+        url, priority=priority, emergency_topic=emergency_topic
     )
     try:
         st, body = _lark.post_text_to_chat(cid, token, text)
@@ -1502,21 +1503,21 @@ def _post_meeting_link_unfurl_notice(
         mid = _lark.parse_im_message_id_from_response(body)
         if st == 200 and ok and mid:
             log.info(
-                "meeting unfurl notice ok chat_id_tail=%s priority=%s mid_tail=%s",
+                "meeting plain-text notice ok chat_id_tail=%s priority=%s mid_tail=%s",
                 cid[-12:] if len(cid) > 12 else cid,
                 priority,
                 mid[-12:] if len(mid) > 12 else mid,
             )
             return mid
         log.warning(
-            "meeting unfurl notice failed chat_id_tail=%s HTTP=%s lark_code=%s msg=%r",
+            "meeting plain-text notice failed chat_id_tail=%s HTTP=%s lark_code=%s msg=%r",
             cid[-12:] if len(cid) > 12 else cid,
             st,
             code,
             msg,
         )
     except Exception as e:
-        log.warning("meeting unfurl notice exception chat_id_tail=%s err=%s", cid[-12:], e)
+        log.warning("meeting plain-text notice exception chat_id_tail=%s err=%s", cid[-12:], e)
     return ""
 
 
@@ -1720,7 +1721,9 @@ def start_p0(
                 "start_p0: meeting unfurl notice failed target_tail=%s",
                 target_chat[-12:] if len(target_chat) > 12 else target_chat,
             )
-            fallback_text = _cards.build_p0_meeting_created_text(link, priority=priority)
+            fallback_text = _cards.build_p0_meeting_created_text(
+                link, priority=priority, emergency_topic=emergency_topic
+            )
             st_fb, body_fb = _lark.post_text_to_chat(target_chat, token, fallback_text)
             ok_fb, _, lark_msg = _lark.lark_im_message_create_ok(body_fb)
             invite_mid = _lark.parse_im_message_id_from_response(body_fb) if ok_fb else ""

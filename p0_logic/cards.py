@@ -126,30 +126,17 @@ def format_duration(start_epoch: int, end_epoch: Optional[int] = None) -> str:
 MEETING_JOIN_LINK_LABEL = "join in meeting link"
 
 
-def build_p0_meeting_created_text(link: str, *, priority: str = "P0") -> str:
-    """
-    Plain-text meeting alert with **raw VC URL on its own line** so Lark unfurls the native
-    video-meeting preview (participants, timer, Ended state) below the message.
-    """
-    prio = (priority or "P0").strip().upper()
-    url = (link or "").strip()
-    lines = [f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
-    if url:
-        lines.append(url)
-    return "\n".join(lines)
-
-
-def build_meeting_link_unfurl_text(
+def build_p0_meeting_created_text(
     link: str,
     *,
     priority: str = "P0",
     emergency_topic: str = "",
 ) -> str:
-    """Topic as title line + meeting created + join label + raw URL (Lark VC unfurl)."""
+    """Single plain-text message (no asterisks) + raw URL on its own line for Lark VC unfurl."""
     prio = (priority or "P0").strip().upper()
     topic = (emergency_topic or "").strip() or MEETING_TOPIC
     url = (link or "").strip()
-    lines = [f"**{topic}**", "", f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
+    lines: List[str] = [topic, "", f"🚨 {prio} meeting created.", "", MEETING_JOIN_LINK_LABEL]
     if url:
         lines.append(url)
     return "\n".join(lines)
@@ -163,16 +150,14 @@ def build_meeting_link_notice_card(
     patchable: bool = False,
 ) -> Dict[str, Any]:
     """
-    Minimal link-style card: topic in header, meeting created + join label + URL in body.
-    Prefer ``build_meeting_link_unfurl_text`` for native Lark VC preview (raw URL unfurl).
+    Minimal card: **topic in header**, plain-text body (no ``**`` markdown).
+    Post the VC ``link`` as a **separate** plain-text message right after so Lark unfurls
+    the native meeting preview (participants, timer, Joined/Ended).
     """
+    _ = link
     prio = (priority or "P0").strip().upper()
     topic = (emergency_topic or "").strip() or MEETING_TOPIC
     title = topic[:100] if len(topic) > 100 else topic
-    url = (link or "").strip()
-    lines = [f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
-    if url:
-        lines.append(f"[{url}]({url})")
     cfg: Dict[str, Any] = {"enable_forward": True}
     if patchable:
         cfg["update_multi"] = True
@@ -182,7 +167,14 @@ def build_meeting_link_notice_card(
         "header": {"template": "blue", "title": {"tag": "plain_text", "content": title}},
         "body": {
             "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {
+                    "tag": "div",
+                    "text": {"tag": "plain_text", "content": f"🚨 {prio} meeting created."},
+                },
+                {
+                    "tag": "div",
+                    "text": {"tag": "plain_text", "content": MEETING_JOIN_LINK_LABEL},
+                },
             ],
         },
     }
@@ -208,25 +200,26 @@ def build_meeting_link_ended_card(
     update_multi: bool = False,
 ) -> Dict[str, Any]:
     """In-place update of the link notice card when the meeting ends."""
-    _ = emergency_topic
     prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    title = topic[:100] if len(topic) > 100 else topic
     dur = (duration_text or "Not available").strip() or "Not available"
-    lines = [f"✅ **{prio} meeting ended.**"]
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"✅ {prio} meeting ended."}},
+    ]
     if meeting_no:
-        lines.append(f"Meeting ID: {meeting_no}")
-    lines.append(f"Duration: {dur}")
+        elements.append(
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Meeting ID: {meeting_no}"}}
+        )
+    elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Duration: {dur}"}})
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"{prio} meeting ended"}},
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-            ],
-        },
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": elements},
     }
 
 
@@ -240,26 +233,32 @@ def build_meeting_link_cancelled_card(
     update_multi: bool = False,
 ) -> Dict[str, Any]:
     """In-place update of the link notice card when the meeting is cancelled."""
-    _ = emergency_topic
     prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    title = topic[:100] if len(topic) > 100 else topic
     dur = (duration_text or "Not available").strip() or "Not available"
     cancel_reason = (reason or "Unspecified").strip() or "Unspecified"
-    lines = [f"🛑 **{prio} meeting cancelled.**"]
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"🛑 {prio} meeting cancelled."}},
+    ]
     if meeting_no:
-        lines.append(f"Meeting ID: {meeting_no}")
-    lines.extend([f"Duration: {dur}", f"Reason: {cancel_reason}"])
+        elements.append(
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Meeting ID: {meeting_no}"}}
+        )
+    elements.extend(
+        [
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Duration: {dur}"}},
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Reason: {cancel_reason}"}},
+        ]
+    )
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"{prio} meeting cancelled"}},
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-            ],
-        },
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": elements},
     }
 
 
