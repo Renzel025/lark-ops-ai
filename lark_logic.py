@@ -28,7 +28,7 @@ from p0_logic.config import (
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
-from p0_logic.cards import build_help_commands_card, build_no_active_p0_session_card
+from p0_logic.cards import build_help_commands_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
 from p0_logic.graph_screenshot_request import try_handle_graph_screenshot_request
 from p0_logic.issue_watch import try_handle_issue_watch
@@ -1180,11 +1180,11 @@ def process_message(
                     session_source,
                 )
                 if token:
-                    st, body, _ = post_card_to_chat(
-                        notify_chat, token, build_no_active_p0_session_card("end")
+                    post_text_to_chat(
+                        notify_chat,
+                        token,
+                        "ℹ️ No active P0/P1 meeting in this chat to end.",
                     )
-                    if st != 200:
-                        log.warning("no-session end prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
         # Cancel command (optional reason after the keyword phrase)
@@ -1210,11 +1210,11 @@ def process_message(
                     session_source,
                 )
                 if token:
-                    st, body, _ = post_card_to_chat(
-                        notify_chat, token, build_no_active_p0_session_card("cancel")
+                    post_text_to_chat(
+                        notify_chat,
+                        token,
+                        "ℹ️ No active P0/P1 meeting in this chat to cancel.",
                     )
-                    if st != 200:
-                        log.warning("no-session cancel prompt card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
         # Cooldown reset only — no new VC. / 只清冷却，不创建会议
