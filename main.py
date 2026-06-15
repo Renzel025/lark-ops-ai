@@ -112,6 +112,13 @@ else:
         "P0_ADJUSTMENT_BITABLE_TABLE_ID in .env (and P0_ADJUSTMENT_BITABLE_ENABLED=1)"
     )
 
+from p0_logic.config import p0_single_incident_group_mode
+
+if p0_single_incident_group_mode():
+    log.info(
+        "routing: P0_SINGLE_INCIDENT_GROUP=1 — one group for declare, meeting cards, overview, end/cancel"
+    )
+
 app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()

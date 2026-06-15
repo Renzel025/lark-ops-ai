@@ -194,7 +194,21 @@ def get_p0_notification_hub_chat_ids() -> List[str]:
 def get_incident_overview_target_map() -> Dict[str, str]:
     """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> mirror ``oc_`` for meeting cards when split)."""
     reload_env_runtime()
+    if p0_single_incident_group_mode():
+        return {}
     return _parse_incident_overview_target_map(os.getenv("INCIDENT_OVERVIEW_TARGET_MAP") or "")
+
+
+def p0_single_incident_group_mode() -> bool:
+    """
+    ``P0_SINGLE_INCIDENT_GROUP=1`` — one Lark group for P0 (no detection/prompt split).
+
+    Meeting cards, overview, ended/cancelled, and typed commands all stay in ``INCIDENT_GROUP_IDS``.
+    ``INCIDENT_OVERVIEW_TARGET_MAP`` and global ``P0_OVERVIEW_POST_CHAT_ID`` are ignored.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_SINGLE_INCIDENT_GROUP") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_incident_overview_send_map() -> Dict[str, str]:
@@ -253,6 +267,8 @@ def get_p0_overview_post_to_source_incident_chat() -> bool:
     If ``INCIDENT_OVERVIEW_SEND_MAP`` has an entry for this incident ``oc_``, that map still **wins** (broadcast override).
     """
     reload_env_runtime()
+    if p0_single_incident_group_mode():
+        return True
     v = (os.getenv("P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
@@ -544,6 +560,8 @@ def get_session_meeting_card_post_chat_id(source_incident_chat_id: str) -> str:
     sid = (source_incident_chat_id or "").strip()
     if not sid:
         return ""
+    if p0_single_incident_group_mode():
+        return sid
     if get_p0_meeting_cards_in_source_incident_chat():
         return sid
     return get_overview_target_chat_id_for_source_incident(sid) or sid
@@ -565,6 +583,8 @@ def get_overview_target_chat_id_for_source_incident(source_incident_chat_id: str
     sid = (source_incident_chat_id or "").strip()
     if not sid:
         return ""
+    if p0_single_incident_group_mode():
+        return sid
     m = get_incident_overview_target_map()
     if sid in m:
         return m[sid]
