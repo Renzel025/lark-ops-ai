@@ -1,5 +1,5 @@
 """
-Claude + keyword classification for detection-group issue signals.
+Claude + Groq + keyword classification for detection-group issue signals.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 from typing import List, Optional, Tuple
 
 from . import config as _config
-from .groq_client import _parse_json_object
+from .groq_client import _parse_json_object, groq_chat_once
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -165,17 +165,53 @@ def _anthropic_key() -> str:
     return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
 
 
-def resolve_issue_watch_ai_provider() -> str:
+def _groq_key() -> str:
+    _config.reload_env_runtime()
+    return (os.getenv("GROQ_API_KEY") or "").strip()
+
+
+def _issue_watch_ai_providers_to_try() -> List[str]:
     """
-    ``P0_ISSUE_WATCH_AI_PROVIDER``: ``claude`` (default) | ``auto``.
+    LLM providers to attempt (in order) before keyword fallback.
+
+    ``P0_ISSUE_WATCH_AI_PROVIDER``:
+    - ``auto`` (default): Claude if key set, else Groq; on Claude fail try Groq
+    - ``claude``: Claude first, then Groq on fail
+    - ``groq``: Groq first, then Claude on fail
     """
     _config.reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_AI_PROVIDER") or "claude").strip().lower()
+    raw = (os.getenv("P0_ISSUE_WATCH_AI_PROVIDER") or "auto").strip().lower()
+    has_claude = bool(_anthropic_key())
+    has_groq = bool(_groq_key())
+    if raw == "groq":
+        order: List[str] = []
+        if has_groq:
+            order.append("groq")
+        if has_claude:
+            order.append("claude")
+        return order
     if raw == "claude":
-        return "claude" if _anthropic_key() else ""
-    if raw == "auto":
-        return "claude" if _anthropic_key() else ""
-    return "claude" if _anthropic_key() else ""
+        order = []
+        if has_claude:
+            order.append("claude")
+        if has_groq:
+            order.append("groq")
+        return order
+    # auto
+    if has_claude:
+        order = ["claude"]
+        if has_groq:
+            order.append("groq")
+        return order
+    if has_groq:
+        return ["groq"]
+    return []
+
+
+def resolve_issue_watch_ai_provider() -> str:
+    """Primary Issue Watch LLM provider, or empty when none configured."""
+    providers = _issue_watch_ai_providers_to_try()
+    return providers[0] if providers else ""
 
 
 def _norm_confidence(raw: object) -> float:
@@ -343,32 +379,52 @@ def _classify_via_claude(message_text: str) -> Optional[dict]:
     from .anthropic_client import anthropic_chat_once
 
     raw = anthropic_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=280)
+    if not (raw or "").strip():
+        return None
     return _parse_classification(raw, "claude")
+
+
+def _classify_via_groq(message_text: str) -> Optional[dict]:
+    raw = groq_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=280)
+    if not (raw or "").strip():
+        return None
+    return _parse_classification(raw, "groq")
+
+
+def _classify_via_provider(provider: str, message_text: str) -> Optional[dict]:
+    if provider == "claude":
+        return _classify_via_claude(message_text)
+    if provider == "groq":
+        return _classify_via_groq(message_text)
+    return None
 
 
 def classify_issue_watch_message(message_text: str) -> Optional[dict]:
     """
-    **Claude first** when ``ANTHROPIC_API_KEY`` is set — LLM decides incident vs noise.
-    Keyword rules are fallback only when AI is unavailable.
+    LLM triage with failover: Claude and/or Groq (per env), then keyword rules.
     """
     t = (message_text or "").strip()
     if not t:
         return None
-    provider = resolve_issue_watch_ai_provider()
-    if provider == "claude":
-        ai = _classify_via_claude(t)
+    providers = _issue_watch_ai_providers_to_try()
+    if not providers:
+        log.warning("issue_watch_ai: no ANTHROPIC/GROQ key — keyword rules only (more false positives)")
+    for i, provider in enumerate(providers):
+        ai = _classify_via_provider(provider, t)
         if ai is not None:
             log.info(
-                "issue_watch_ai: claude decision signal=%s categories=%s conf=%.2f reason=%r",
+                "issue_watch_ai: %s decision signal=%s categories=%s conf=%.2f reason=%r",
+                provider,
                 ai.get("is_incident_signal"),
                 ai.get("categories"),
                 float(ai.get("confidence") or 0),
                 (ai.get("reason") or "")[:160],
             )
             return ai
-        log.warning("issue_watch_ai: claude classify failed — falling back to keyword rules")
-    else:
-        log.warning("issue_watch_ai: no ANTHROPIC_API_KEY — keyword rules only (more false positives)")
+        if i + 1 < len(providers):
+            log.warning("issue_watch_ai: %s classify failed — trying %s", provider, providers[i + 1])
+        else:
+            log.warning("issue_watch_ai: %s classify failed — falling back to keyword rules", provider)
     kw = _keyword_classify(t)
     if kw and kw.get("is_incident_signal"):
         log.info(

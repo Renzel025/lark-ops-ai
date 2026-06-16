@@ -60,12 +60,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 log = logging.getLogger("lark-ops-ai")
 
 _load_dotenv_early()
-_slack_tok = (os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_BOT_USER_OAUTH_TOKEN") or "").strip()
-log.info(
-    "env loaded: SLACK_BOT_TOKEN %s (len=%s) — if len=0, Slack chat.postMessage will fail",
-    "set" if _slack_tok else "MISSING",
-    len(_slack_tok),
-)
 
 _ig = sorted(get_incident_group_chat_ids())
 _ig_disp = ", ".join(

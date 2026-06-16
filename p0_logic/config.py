@@ -2158,62 +2158,22 @@ def get_p0_graph_screenshot_blank_fallback_viewport() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
-def slack_automation_enabled() -> bool:
-    """Gate Playwright Slack huddle subprocess (default on when env vars are set)."""
-    reload_env_runtime()
-    v = (os.getenv("SLACK_AUTOMATION_ENABLED") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
-
-
-def slack_huddle_on_p0_start() -> bool:
+def p0_severity_prompt_enabled() -> bool:
     """
-    Run Playwright huddle automation when a P0/P1 VC session **starts** (``start_p0``).
+    When True (default): after **P0** session starts, the **2nd** bot DMs **Major / Minor**
+    while the **primary** bot DMs the green overview card in parallel.
 
-    Set ``SLACK_HUDDLE_ON_P0_START=0`` if you only want huddle when **Send overview** fires.
+    **P1** sessions do not use this prompt.
+
+    Set ``P0_SEVERITY_PROMPT_ENABLED=0`` to skip the Major/Minor DM.
+    Legacy alias (deprecated): ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION=0``.
     """
     reload_env_runtime()
-    v = (os.getenv("SLACK_HUDDLE_ON_P0_START") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
-
-
-def slack_huddle_on_overview_send() -> bool:
-    """
-    Run Playwright huddle automation when **Send overview** to the Lark group succeeds
-    (same moment as ``SLACK_OVERVIEW_WEBHOOK_MAP`` mirror).
-
-    Set ``SLACK_HUDDLE_ON_OVERVIEW_SEND=0`` to post overview to Slack only (webhook) without huddle.
-    """
-    reload_env_runtime()
-    v = (os.getenv("SLACK_HUDDLE_ON_OVERVIEW_SEND") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
-
-
-def slack_severity_prompt_enabled() -> bool:
-    """
-    When True (default): after a **P0** session starts, the **2nd** bot DMs **Major / Minor** while the
-    **primary** bot DMs the green overview card in parallel. **Major** runs the usual Slack automation;
-    **Minor** skips it.
-
-    **P1** sessions do not use this prompt (only the primary bot sends the green overview DM).
-
-    Set ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION=0`` to restore immediate Slack on meeting start
-    (no severity DM prompt).
-    """
-    reload_env_runtime()
-    v = (os.getenv("SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
-
-
-def slack_notify_channel_on_p0_declare_when_severity_prompt() -> bool:
-    """
-    When True (default): if ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION`` is on, the Slack incident channel
-    is notified as soon as P0 is declared (before Major/Minor). After **Major**, only huddle automation
-    runs (no duplicate channel ping). Set ``SLACK_NOTIFY_CHANNEL_ON_P0_DECLARE_WITH_SEVERITY=0`` to keep
-    the legacy behavior: first Slack channel ping only after **Major**.
-    """
-    reload_env_runtime()
-    v = (os.getenv("SLACK_NOTIFY_CHANNEL_ON_P0_DECLARE_WITH_SEVERITY") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
+    for key in ("P0_SEVERITY_PROMPT_ENABLED", "SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION"):
+        raw = (os.getenv(key) or "").strip()
+        if raw:
+            return raw.lower() not in ("0", "false", "no", "off")
+    return True
 
 
 def get_lark_primary_app_credentials() -> Tuple[str, str]:
@@ -2253,126 +2213,6 @@ def get_lark_severity_app_credentials() -> Tuple[str, str]:
         or ""
     )
     return sid, sec
-
-
-def get_slack_channel_url_for_incident_chat(chat_id: str) -> str:
-    """
-    Slack channel deep link for ``scripts/slack_huddle_invite_all.py``.
-
-    Preferred (multi-group): ``LARK_SLACK_CHANNEL_URL_MAP=oc_aaa=https://...,oc_bbb=...``
-
-    Legacy (single channel, direct ``SLACK_CHANNEL_URL``): if the map has no entry
-    for this chat, ``SLACK_CHANNEL_URL`` is used when ``chat_id`` is in ``INCIDENT_GROUP_IDS``.
-    """
-    reload_env_runtime()
-    cid = (chat_id or "").strip()
-    if not cid:
-        return ""
-    raw = (os.getenv("LARK_SLACK_CHANNEL_URL_MAP") or "").strip()
-    m = _parse_incident_keyed_url_map(raw)
-    v = (m.get(cid) or "").strip()
-    if v:
-        return v
-    fallback = (os.getenv("SLACK_CHANNEL_URL") or "").strip()
-    if fallback and cid in get_incident_group_chat_ids():
-        return fallback
-    return ""
-
-
-def get_slack_session_dir_for_incident_chat(chat_id: str) -> str:
-    """
-    Persistent Chromium profile for Slack (``SESSION_DIR`` in the huddle script).
-
-    Per-chat override: ``LARK_SLACK_SESSION_DIR_MAP=oc_aaa=/path1,oc_bbb=/path2``.
-    Fallback: ``SLACK_SESSION_DIR``, then ``SESSION_DIR`` (same name as old Puppeteer script).
-    """
-    reload_env_runtime()
-    cid = (chat_id or "").strip()
-    raw_map = (os.getenv("LARK_SLACK_SESSION_DIR_MAP") or "").strip()
-    if raw_map:
-        m = _parse_incident_keyed_url_map(raw_map)
-        v = (m.get(cid) or "").strip()
-        if v:
-            return v
-    return (os.getenv("SLACK_SESSION_DIR") or os.getenv("SESSION_DIR") or "").strip()
-
-
-def get_slack_overview_webhook_for_incident_chat(chat_id: str) -> str:
-    """
-    Incoming Webhook URL to mirror \"Send overview\" markdown to Slack for this incident ``oc_`` chat.
-
-    Env: ``SLACK_OVERVIEW_WEBHOOK_MAP=oc_aaa=https://hooks.slack.com/services/...,oc_bbb=...``
-    """
-    reload_env_runtime()
-    cid = (chat_id or "").strip()
-    if not cid:
-        return ""
-    raw = (os.getenv("SLACK_OVERVIEW_WEBHOOK_MAP") or "").strip()
-    m = _parse_incident_keyed_url_map(raw)
-    return (m.get(cid) or "").strip()
-
-
-def get_slack_incident_notify_webhook_for_incident_chat(chat_id: str) -> str:
-    """
-    Incoming Webhook for **P0/P1 declared** alerts (\"triggered in Lark\" + huddle status).
-
-    Prefer ``SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP=oc_aaa=https://hooks...`` (same shape as overview map).
-    If unset for this ``oc_``, falls back to ``SLACK_OVERVIEW_WEBHOOK_MAP`` (same URLs as overview channel).
-    """
-    reload_env_runtime()
-    cid = (chat_id or "").strip()
-    if not cid:
-        return ""
-    raw = (os.getenv("SLACK_INCIDENT_NOTIFY_WEBHOOK_MAP") or "").strip()
-    if raw:
-        m = _parse_incident_keyed_url_map(raw)
-        v = (m.get(cid) or "").strip()
-        if v:
-            return v
-    return get_slack_overview_webhook_for_incident_chat(chat_id)
-
-
-def get_slack_bot_token() -> str:
-    """
-    Slack **Bot User OAuth Token** (``xoxb-...``) for ``chat.postMessage``.
-
-    Env: ``SLACK_BOT_TOKEN`` or ``SLACK_BOT_USER_OAUTH_TOKEN`` (either name).
-    Scopes: at least ``chat:write``; bot must be in the target channel.
-    """
-    reload_env_runtime()
-    return (os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_BOT_USER_OAUTH_TOKEN") or "").strip()
-
-
-def get_slack_app_id() -> str:
-    """Optional ``App ID`` from api.slack.com (for your records only; not sent on every API call)."""
-    reload_env_runtime()
-    return (os.getenv("SLACK_APP_ID") or "").strip()
-
-
-def get_slack_bot_user_id() -> str:
-    """
-    Bot **Member ID** (``U...``) for ``<@U...>`` mentions in outgoing messages.
-
-    Slack: open the bot profile → **Copy member ID** (starts with ``U``).
-    """
-    reload_env_runtime()
-    return (os.getenv("SLACK_BOT_USER_ID") or "").strip()
-
-
-def get_slack_api_channel_id_for_incident_chat(chat_id: str) -> str:
-    """
-    Slack **channel ID** (``C...``) for ``chat.postMessage``, per Lark incident ``oc_``.
-
-    Env: ``SLACK_API_CHANNEL_MAP=oc_aaa=C0AAAA,oc_bbb=C0BBBB``
-    (same comma-separated shape as other maps).
-    """
-    reload_env_runtime()
-    cid = (chat_id or "").strip()
-    if not cid:
-        return ""
-    raw = (os.getenv("SLACK_API_CHANNEL_MAP") or "").strip()
-    m = _parse_incident_keyed_url_map(raw)
-    return (m.get(cid) or "").strip()
 
 
 def get_p0_issue_watch_enabled() -> bool:

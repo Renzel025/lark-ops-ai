@@ -91,7 +91,7 @@ IT / ops must add the bot to:
 | App | Purpose | Dev copy? |
 |-----|---------|-----------|
 | **Primary** (`LARK_APP_ID`) | Main P0 bot + webhook | **Yes** — create dev app |
-| **Severity** (`LARK_SEVERITY_APP_ID`) | Major/Minor Slack severity DM cards | Optional on dev; can disable `SLACK_SEVERITY_PROMPT` on dev |
+| **Severity** (`LARK_SEVERITY_APP_ID`) | Major/Minor severity DM cards (Lark) | Optional on dev; set `P0_SEVERITY_PROMPT_ENABLED=0` to skip |
 | **Overview forwarder** (`lark-forwarder`) | Second bot posts overview to broadcast room | Optional on dev; set `LARK_OVERVIEW_FORWARDER_ENABLED=0` |
 
 Each extra app needs its own **App ID / Secret** and (if it sends messages) similar **im:message** scopes. Only the **primary** app needs the **main webhook** for group messages.
