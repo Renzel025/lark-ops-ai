@@ -285,18 +285,27 @@ def fanout_recording_to_chats(
                 topic[:80],
             )
 
-    body = _cards.build_recording_available_text(
+    body = _cards.build_recording_available_card(
         topic,
         meeting_no,
         meeting_id=mid,
         recording_url=recording_url,
         duration_text=duration_text,
     )
+    meta_text = ""
+    if _config.get_vc_recording_fanout_plain_meta_enabled():
+        meta_text = _cards.build_recording_ready_meta_text(
+            topic,
+            meeting_no,
+            meeting_id=mid,
+            recording_url=recording_url,
+            duration_text=duration_text,
+        )
 
     ok_any = False
     for oc in targets:
         try:
-            st, resp = _lark.post_text_to_chat(oc, token, body)
+            st, resp, _msg_id = _lark.post_card_to_chat(oc, token, body)
             if st == 200:
                 ok_any = True
                 log.info(
@@ -305,6 +314,16 @@ def fanout_recording_to_chats(
                     oc[-12:] if len(oc) > 12 else oc,
                     mid[:20],
                 )
+                if meta_text:
+                    mst, mresp = _lark.post_text_to_chat(oc, token, meta_text)
+                    if mst != 200:
+                        log.warning(
+                            "vc recording fan-out meta HTTP=%s source=%s chat=%s body_head=%s",
+                            mst,
+                            source,
+                            oc[:24],
+                            (mresp or "")[:200],
+                        )
             else:
                 log.warning(
                     "vc recording fan-out HTTP=%s source=%s chat=%s body_head=%s",
@@ -318,7 +337,7 @@ def fanout_recording_to_chats(
 
     for ou in user_targets:
         try:
-            st, resp = _lark.post_text_to_open_id(ou, token, body)
+            st, resp, _msg_id = _lark.post_card_to_open_id(ou, token, body)
             if st == 200:
                 ok_any = True
                 log.info(
@@ -327,6 +346,16 @@ def fanout_recording_to_chats(
                     ou[-12:] if len(ou) > 12 else ou,
                     mid[:20],
                 )
+                if meta_text:
+                    mst, mresp = _lark.post_text_to_open_id(ou, token, meta_text)
+                    if mst != 200:
+                        log.warning(
+                            "vc recording fan-out meta DM HTTP=%s source=%s open_id=%s body_head=%s",
+                            mst,
+                            source,
+                            ou[:24],
+                            (mresp or "")[:200],
+                        )
             else:
                 log.warning(
                     "vc recording fan-out DM HTTP=%s source=%s open_id=%s body_head=%s",

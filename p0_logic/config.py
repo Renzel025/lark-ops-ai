@@ -499,6 +499,15 @@ def get_vc_recording_fanout_tenant_wide_view_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_vc_recording_fanout_plain_meta_enabled() -> bool:
+    """
+    After the recording **card**, also post a compact ``RECORDING_READY`` text line for downstream
+    Minutes bots. Set ``VC_RECORDING_FANOUT_PLAIN_META=0`` to send the card only.
+    """
+    v = (os.getenv("VC_RECORDING_FANOUT_PLAIN_META") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.
