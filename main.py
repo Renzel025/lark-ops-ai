@@ -16,6 +16,7 @@ from lark_logic import process_message
 from p0_logic import (
     get_incident_group_chat_ids,
     get_tenant_token,
+    get_lark_severity_app_credentials,
     handle_dm_generate_overview,
     handle_lark_card_action,
     handle_lark_card_action_show_participants_sync,
@@ -222,17 +223,18 @@ def _deep_get(d: Any, *path: str) -> Any:
 def _tenant_token_for_card_action(payload: Dict[str, Any]) -> str:
     """
     Primary app: overview / Build overview / most cards.
-    When ``LARK_SEVERITY_APP_ID`` is set, card actions from the severity bot use that app's token
-    (Lark sets ``header.app_id`` on the webhook payload).
+    When a second Lark app is configured (``LARK_SEVERITY_APP_ID``), card actions from that bot
+    use that app's token (Lark sets ``header.app_id`` on the webhook payload).
     """
+    sev_id, sev_sec = get_lark_severity_app_credentials()
     aid = _deep_get(payload, "header", "app_id")
     if (
         isinstance(aid, str)
         and aid.strip()
-        and LARK_SEVERITY_APP_ID
-        and aid.strip() == LARK_SEVERITY_APP_ID
+        and sev_id
+        and aid.strip() == sev_id
     ):
-        t = get_tenant_token(LARK_SEVERITY_APP_ID, LARK_SEVERITY_APP_SECRET)
+        t = get_tenant_token(sev_id, sev_sec)
         if t:
             return t
         log.error("Severity app tenant token empty; falling back to primary app.")
