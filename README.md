@@ -13,6 +13,17 @@ lark-ops-ai/
 └── README.md
 ```
 
+## Docs
+
+| Doc | Purpose |
+|-----|---------|
+| **[docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)** | **Master guide** — setup, architecture flowcharts, modules, all features |
+| [docs/ARCHITECTURE_AND_FLOW.md](docs/ARCHITECTURE_AND_FLOW.md) | Webhook + session Mermaid diagrams |
+| [docs/DEPLOYMENT_ARCHITECTURE.md](docs/DEPLOYMENT_ARCHITECTURE.md) | VPS, nginx, TLS, systemd |
+| [docs/P0_P1_OPERATOR_GUIDE.md](docs/P0_P1_OPERATOR_GUIDE.md) | Operator SOP |
+| [docs/HOW_IT_WORKS_AND_NAVIGATION.md](docs/HOW_IT_WORKS_AND_NAVIGATION.md) | DM button navigation |
+| [p0_logic/README.md](p0_logic/README.md) | Package module reference |
+
 ## Run
 
 ```bash
