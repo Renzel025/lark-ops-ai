@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -611,6 +611,53 @@ def delete_vc_reserve(token: str, reserve_id: str) -> bool:
     return False
 
 
+def invite_users_to_vc_meeting(
+    user_access_token: str,
+    meeting_id: str,
+    invitee_open_ids: List[str],
+) -> Tuple[bool, str]:
+    """
+    ``PATCH /vc/v1/meetings/{meeting_id}/invite`` — ring Lark users into an **ongoing** meeting.
+
+    Requires **user_access_token** of a participant already in the meeting (typically duty).
+    Up to 10 invitees per call.
+    """
+    tok = (user_access_token or "").strip()
+    mid = (meeting_id or "").strip()
+    ids = [x.strip() for x in (invitee_open_ids or []) if (x or "").strip().startswith("ou_")][:10]
+    if not tok or not mid or not ids:
+        return False, "missing token, meeting_id, or invitees"
+    invitees = [{"id": oid, "user_type": 1} for oid in ids]
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    payload = {"invitees": invitees}
+    last_err = ""
+    for base in VC_BASES:
+        url = f"{base}/vc/v1/meetings/{quote(mid, safe='')}/invite?user_id_type=open_id"
+        try:
+            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
+            log.info("VC invite try: %s -> HTTP=%s targets=%s", url, r.status_code, len(ids))
+            if r.status_code != 200:
+                last_err = (r.text or "")[:300]
+                continue
+            j = r.json() if r.text else {}
+            if not isinstance(j, dict) or j.get("code") != 0:
+                last_err = f"code={j.get('code')} msg={j.get('msg')}"
+                continue
+            results = ((j.get("data") or {}).get("invite_results") or [])
+            ok_n = sum(1 for row in results if isinstance(row, dict) and int(row.get("status") or 0) == 1)
+            detail = f"ok={ok_n}/{len(ids)}"
+            if ok_n > 0:
+                return True, detail
+            last_err = detail or "no successful invites"
+        except Exception as e:
+            last_err = str(e)
+    log.warning("invite_users_to_vc_meeting failed meeting_id=%s err=%s", mid[:24], last_err)
+    return False, last_err
+
+
 def end_vc_meeting(token: str, meeting_id: str) -> bool:
     """
     ``POST /vc/v1/meetings/{meeting_id}/end``.
@@ -682,6 +729,60 @@ def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:
     return ""
 
 
+def _patch_recording_set_permission(
+    token: str,
+    meeting_id: str,
+    permission_objects: List[Dict[str, Any]],
+    *,
+    user_id_type_open_id: bool = False,
+    label: str = "",
+) -> Tuple[bool, str]:
+    """One ``set_permission`` PATCH. Split user vs group objects — mixed + ``user_id_type`` → HTTP 400."""
+    tok = (token or "").strip()
+    mid = (meeting_id or "").strip()
+    objs = [o for o in (permission_objects or []) if isinstance(o, dict)]
+    if not tok or not mid or not objs:
+        return False, "missing token, meeting_id, or permission_objects"
+    payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
+    last_err = ""
+    tag = (label or "set_permission").strip()
+    for base in VC_BASES:
+        path = f"{base}/vc/v1/meetings/{quote(mid, safe='')}/recording/set_permission"
+        url = f"{path}?user_id_type=open_id" if user_id_type_open_id else path
+        try:
+            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
+            body_snip = (r.text or "")[:320].replace("\n", " ")
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={body_snip}"
+                log.warning(
+                    "VC recording %s try failed base=%s http=%s body=%s",
+                    tag,
+                    base,
+                    r.status_code,
+                    body_snip,
+                )
+                continue
+            j = r.json() if r.text else {}
+            if isinstance(j, dict) and j.get("code") == 0:
+                log.info("VC recording %s ok meeting_id=%s base=%s count=%s", tag, mid[:24], base, len(objs))
+                return True, ""
+            last_err = (
+                f"code={j.get('code') if isinstance(j, dict) else '?'} "
+                f"msg={j.get('msg') if isinstance(j, dict) else ''} body={body_snip}"
+            )
+            log.warning(
+                "VC recording %s API error base=%s %s",
+                tag,
+                base,
+                last_err[:280],
+            )
+        except Exception as e:
+            last_err = str(e)
+            log.warning("VC recording %s exception base=%s err=%s", tag, base, e)
+    return False, last_err
+
+
 def grant_vc_recording_view_to_chat_groups(
     token: str,
     meeting_id: str,
@@ -696,9 +797,7 @@ def grant_vc_recording_view_to_chat_groups(
 
     Optionally adds **type=3** (tenant-wide view) when ``VC_RECORDING_FANOUT_TENANT_WIDE_VIEW=1``.
 
-    Lets notification-group members (and listed users) open the Minutes URL even if they did not join the VC.
-    Requires **vc:record** (update recording) per Feishu docs — Lark docs show **user_access_token** for this
-    API; **tenant** may still work on some tenants.
+    User and group grants are **separate** API calls (Lark returns HTTP 400 if mixed with ``user_id_type=open_id``).
     """
     meeting_id = (meeting_id or "").strip()
     tok = (token or "").strip()
@@ -707,57 +806,276 @@ def grant_vc_recording_view_to_chat_groups(
     users_src = user_open_ids
     if users_src is None:
         users_src = _config.get_vc_recording_fanout_user_open_ids()
-    objs: List[Dict[str, Any]] = []
+    user_objs: List[Dict[str, Any]] = []
+    group_objs: List[Dict[str, Any]] = []
     seen_chat: set[str] = set()
     for raw in chat_ids:
         cid = (raw or "").strip()
         if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
             continue
         seen_chat.add(cid)
-        objs.append({"id": cid, "type": 2, "permission": 1})
+        group_objs.append({"id": cid, "type": 2, "permission": 1})
     seen_user: set[str] = set()
     for raw in users_src or []:
         uid = (raw or "").strip()
         if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
             continue
         seen_user.add(uid)
-        objs.append({"id": uid, "type": 1, "permission": 1})
-    if _config.get_vc_recording_fanout_tenant_wide_view_enabled():
-        objs.append({"type": 3, "permission": 1})
-    if not objs:
+        user_objs.append({"id": uid, "type": 1, "permission": 1})
+    tenant_wide = _config.get_vc_recording_fanout_tenant_wide_view_enabled()
+    if not user_objs and not group_objs and not tenant_wide:
         return False
-    payload: Dict[str, Any] = {"permission_objects": objs, "action_type": 0}
+
+    ok_user = ok_group = ok_tenant = True
+    errors: List[str] = []
+    if user_objs:
+        ok_user, err = _patch_recording_set_permission(
+            tok, meeting_id, user_objs, user_id_type_open_id=True, label="set_permission users"
+        )
+        if not ok_user and err:
+            errors.append(f"users: {err}")
+    if group_objs:
+        ok_group, err = _patch_recording_set_permission(
+            tok, meeting_id, group_objs, user_id_type_open_id=False, label="set_permission groups"
+        )
+        if not ok_group and err:
+            errors.append(f"groups: {err}")
+    if tenant_wide:
+        ok_tenant, err = _patch_recording_set_permission(
+            tok, meeting_id, [{"type": 3, "permission": 1}],
+            user_id_type_open_id=False,
+            label="set_permission tenant",
+        )
+        if not ok_tenant and err:
+            errors.append(f"tenant: {err}")
+
+    need_user = bool(user_objs)
+    need_group = bool(group_objs)
+    success = True
+    if need_user and not ok_user:
+        success = False
+    if need_group and not ok_group:
+        success = False
+    if tenant_wide and not ok_tenant:
+        success = False
+
+    if success:
+        log.info(
+            "VC recording set_permission ok meeting_id=%s groups=%s users=%s tenant_wide=%s",
+            meeting_id[:24],
+            len(seen_chat),
+            len(seen_user),
+            tenant_wide,
+        )
+        return True
+    log.warning(
+        "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s",
+        meeting_id[:24],
+        "; ".join(errors)[:500],
+    )
+    return False
+
+
+def minutes_token_from_recording_url(recording_url: str) -> str:
+    """Extract Minutes file token from a recording URL path (``.../minutes/{token}``)."""
+    s = (recording_url or "").strip()
+    if not s:
+        return ""
+    try:
+        parts = [p for p in urlparse(s).path.split("/") if p]
+        for i, seg in enumerate(parts):
+            if seg == "minutes" and i + 1 < len(parts):
+                tok = parts[i + 1].split("?")[0].strip()
+                if len(tok) >= 8:
+                    return tok
+    except Exception:
+        pass
+    return ""
+
+
+def _drive_minutes_member_perm(
+    token: str,
+    minutes_token: str,
+    *,
+    member_type: str,
+    member_id: str,
+    perm: str,
+    use_create: bool,
+    label: str,
+) -> Tuple[bool, str]:
+    """Create or update a Minutes collaborator via Drive API."""
+    tok = (token or "").strip()
+    mtok = (minutes_token or "").strip()
+    mid = (member_id or "").strip()
+    mtype = (member_type or "").strip()
+    prole = (perm or "edit").strip().lower()
+    if prole not in ("view", "edit"):
+        prole = "edit"
+    if not tok or not mtok or not mid or not mtype:
+        return False, "missing token, minutes_token, member_type, or member_id"
+    payload = {"member_type": mtype, "member_id": mid, "perm": prole}
     headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=utf-8"}
     last_err = ""
-    has_user_perm = bool(seen_user)
-    for base in VC_BASES:
-        path = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/recording/set_permission"
-        url = f"{path}?user_id_type=open_id" if has_user_perm else path
+    tag = (label or "drive_minutes_perm").strip()
+    bases = list(VC_BASES)
+    for base in bases:
+        enc_tok = quote(mtok, safe="")
+        if use_create:
+            url = f"{base.rstrip('/')}/drive/v1/permissions/{enc_tok}/members?type=minutes"
+            method = "post"
+        else:
+            enc_mid = quote(mid, safe="")
+            url = (
+                f"{base.rstrip('/')}/drive/v1/permissions/{enc_tok}/members/{enc_mid}"
+                f"?type=minutes&member_type={quote(mtype, safe='')}"
+            )
+            method = "put"
         try:
-            r = _lark_http().patch(url, headers=headers, json=payload, **_timeout_kw())
-            log.info("VC recording set_permission try: %s -> HTTP=%s", url, r.status_code)
+            fn = _lark_http().post if method == "post" else _lark_http().put
+            r = fn(url, headers=headers, json=payload, **_timeout_kw())
+            body_snip = (r.text or "")[:320].replace("\n", " ")
             if r.status_code != 200:
-                last_err = f"HTTP={r.status_code} body={(r.text or '')[:240]}"
+                last_err = f"HTTP={r.status_code} body={body_snip}"
+                log.warning("VC recording %s failed base=%s http=%s %s", tag, base, r.status_code, body_snip[:200])
                 continue
             j = r.json() if r.text else {}
             if isinstance(j, dict) and j.get("code") == 0:
                 log.info(
-                    "VC recording set_permission ok meeting_id=%s groups=%s users=%s tenant_wide=%s",
-                    meeting_id[:24],
-                    len(seen_chat),
-                    len(seen_user),
-                    _config.get_vc_recording_fanout_tenant_wide_view_enabled(),
+                    "VC recording %s ok minutes_token_tail=%s member_tail=%s perm=%s",
+                    tag,
+                    mtok[-8:] if len(mtok) > 8 else mtok,
+                    mid[-8:] if len(mid) > 8 else mid,
+                    prole,
                 )
-                return True
-            last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
+                return True, ""
+            last_err = (
+                f"code={j.get('code') if isinstance(j, dict) else '?'} "
+                f"msg={j.get('msg') if isinstance(j, dict) else ''} body={body_snip}"
+            )
+            log.warning("VC recording %s API error base=%s %s", tag, base, last_err[:280])
         except Exception as e:
             last_err = str(e)
-    log.warning(
-        "grant_vc_recording_view_to_chat_groups failed meeting_id=%s err=%s — "
-        "members may need manual Share on Minutes / user OAuth for vc:record",
-        meeting_id[:24],
-        last_err,
-    )
+            log.warning("VC recording %s exception base=%s err=%s", tag, base, e)
+    return False, last_err
+
+
+def grant_minutes_drive_collaborators(
+    token: str,
+    recording_url: str,
+    chat_ids: List[str],
+    *,
+    user_open_ids: Optional[List[str]] = None,
+    perm: str = "edit",
+) -> bool:
+    """
+    Drive API: add **edit** (or view) on the Minutes file for users (``openid``) and groups (``openchat``).
+    Complements VC ``set_permission`` (view-only). Requires duty **user_access_token** + docs scopes.
+    """
+    tok = (token or "").strip()
+    minutes_tok = minutes_token_from_recording_url(recording_url)
+    if not tok or not minutes_tok:
+        log.warning(
+            "grant_minutes_drive_collaborators skipped — missing token or minutes token url_head=%r",
+            (recording_url or "")[:80],
+        )
+        return False
+    users_src = user_open_ids
+    if users_src is None:
+        users_src = _config.get_vc_recording_fanout_user_open_ids()
+    prole = (perm or "edit").strip().lower()
+    if prole not in ("view", "edit"):
+        prole = "edit"
+    ok_any = False
+    errors: List[str] = []
+    # VC set_permission adds collaborators as **view** first; for **edit**, try PUT upgrade before POST create.
+    edit_first = prole == "edit"
+
+    def _grant_member(
+        *,
+        member_type: str,
+        member_id: str,
+        label_prefix: str,
+    ) -> Tuple[bool, str]:
+        if edit_first:
+            ok, err = _drive_minutes_member_perm(
+                tok,
+                minutes_tok,
+                member_type=member_type,
+                member_id=member_id,
+                perm=prole,
+                use_create=False,
+                label=f"{label_prefix} update",
+            )
+            if ok:
+                return True, ""
+            ok, err = _drive_minutes_member_perm(
+                tok,
+                minutes_tok,
+                member_type=member_type,
+                member_id=member_id,
+                perm=prole,
+                use_create=True,
+                label=f"{label_prefix} create",
+            )
+            return ok, err
+        ok, err = _drive_minutes_member_perm(
+            tok,
+            minutes_tok,
+            member_type=member_type,
+            member_id=member_id,
+            perm=prole,
+            use_create=True,
+            label=f"{label_prefix} create",
+        )
+        if ok:
+            return True, ""
+        return _drive_minutes_member_perm(
+            tok,
+            minutes_tok,
+            member_type=member_type,
+            member_id=member_id,
+            perm=prole,
+            use_create=False,
+            label=f"{label_prefix} update",
+        )
+
+    seen_user: set[str] = set()
+    for raw in users_src or []:
+        uid = (raw or "").strip()
+        if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
+            continue
+        seen_user.add(uid)
+        ok, err = _grant_member(member_type="openid", member_id=uid, label_prefix="drive_minutes user")
+        if ok:
+            ok_any = True
+        elif err:
+            errors.append(f"user {uid[-8:]}: {err}")
+    seen_chat: set[str] = set()
+    for raw in chat_ids:
+        cid = (raw or "").strip()
+        if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
+            continue
+        seen_chat.add(cid)
+        ok, err = _grant_member(member_type="openchat", member_id=cid, label_prefix="drive_minutes group")
+        if ok:
+            ok_any = True
+        elif err:
+            errors.append(f"group {cid[-8:]}: {err}")
+    if ok_any:
+        log.info(
+            "VC recording drive Minutes perm ok token_tail=%s users=%s groups=%s perm=%s",
+            minutes_tok[-8:] if len(minutes_tok) > 8 else minutes_tok,
+            len(seen_user),
+            len(seen_chat),
+            prole,
+        )
+        return True
+    if errors:
+        log.warning(
+            "grant_minutes_drive_collaborators failed token_tail=%s err=%s",
+            minutes_tok[-8:] if len(minutes_tok) > 8 else minutes_tok,
+            "; ".join(errors)[:500],
+        )
     return False
 
 
@@ -998,6 +1316,26 @@ def lookup_user_name_by_open_id(tenant_token: str, open_id: str) -> str:
     except Exception as e:
         log.warning("lookup host name exception open_id=%s err=%s", open_id, e)
     return ""
+
+
+def lookup_open_id_by_user_id(tenant_token: str, user_id: str) -> str:
+    """Resolve Lark ``open_id`` from tenant ``user_id`` (VC join events sometimes omit ``open_id``)."""
+    user_id = (user_id or "").strip()
+    if not tenant_token or not user_id:
+        return ""
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    url = f"{LARK_BASE}/contact/v3/users/{quote(user_id, safe='')}"
+    try:
+        r = _lark_http().get(url, headers=headers, params={"user_id_type": "user_id"}, **_timeout_kw())
+        if r.status_code != 200:
+            return ""
+        j = r.json() if r.text else {}
+        if j.get("code") != 0:
+            return ""
+        user = (j.get("data") or {}).get("user") or {}
+        return str(user.get("open_id") or "").strip()
+    except Exception:
+        return ""
 
 
 def get_tenant_user_id_by_open_id(tenant_token: str, open_id: str) -> str:

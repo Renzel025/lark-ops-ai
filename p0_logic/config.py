@@ -2332,6 +2332,162 @@ def get_lark_bot_open_id() -> str:
     return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
 
 
+def _normalize_major_check_person_token(raw: str) -> Tuple[str, str]:
+    """
+    Parse one entry from ``P0_MAJOR_CHECK_PERSON_IDS``.
+
+    Returns ``(open_id, user_id)`` — one may be empty. Accepts ``ou_...``, ``u_...`` (→ ``ou_``),
+    or tenant ``user_id`` (e.g. ``SNT0006`` or opaque hash without prefix).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "", ""
+    if s.startswith("ou_") and is_open_id(s):
+        return s, ""
+    if s.startswith("u_") and len(s) > 2:
+        candidate = f"ou_{s[2:]}"
+        if is_open_id(candidate):
+            return candidate, ""
+    if is_open_id(s):
+        return s, ""
+    return "", s
+
+
+def get_p0_major_check_person_recipients() -> List[Tuple[str, str]]:
+    """
+    ``P0_MAJOR_CHECK_PERSON_IDS`` — comma-separated ``ou_...`` / ``u_...`` / ``user_id``.
+
+    When set, Issue Watch **Declare as P0** DMs these users (no @-mention thread confirm).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_MAJOR_CHECK_PERSON_IDS") or "").strip()
+    if not raw:
+        return []
+    out: List[Tuple[str, str]] = []
+    seen: set = set()
+    for part in raw.split(","):
+        oid, uid = _normalize_major_check_person_token(part)
+        key = oid or uid
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append((oid, uid))
+    return out
+
+
+def get_p0_issue_watch_declare_check_person_reply_text() -> str:
+    """Thread reply on the concern when duty declares P0 (check-person flow)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_DECLARE_CHECK_PERSON_REPLY_TEXT") or "").strip()
+    if raw:
+        return raw
+    return (
+        "Calling and inviting the check persons for major P0 issues. Thank you."
+    )
+
+
+def get_p0_major_check_person_dm_enabled() -> bool:
+    """
+    ``P0_MAJOR_CHECK_PERSON_DM_ENABLED`` — DM check persons a meeting link after declare.
+
+    Default **off**. Invite is via **VC ring** when duty joins the meeting
+    (``P0_VC_RING_ENABLED=1`` + ``P0_MAJOR_CHECK_PERSON_IDS``).
+    Set ``1`` only if you also want a separate DM with ``{link}``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_MAJOR_CHECK_PERSON_DM_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_major_check_person_dm_text() -> str:
+    """DM body when ``P0_MAJOR_CHECK_PERSON_DM_ENABLED=1``. Use ``{link}`` for meeting URL."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MAJOR_CHECK_PERSON_DM_TEXT") or "").strip()
+    if raw:
+        return raw
+    return (
+        "Major P0 declared — please join the bridge meeting: {link}"
+    )
+
+
+def get_p0_major_check_person_join_thread_text() -> str:
+    """Reply on the concern thread when a check person joins VC. Use ``{name}``."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MAJOR_CHECK_PERSON_JOIN_THREAD_TEXT") or "").strip()
+    if raw:
+        return raw
+    return "{name} is already in the P0 meeting."
+
+
+def p0_thread_confirm_target_mentions_enabled() -> bool:
+    """
+    When ``P0_MAJOR_CHECK_PERSON_IDS`` is set, @-mention thread confirm arming is off by default.
+
+    Set ``P0_THREAD_CONFIRM_ALLOW_TARGET_MENTIONS=1`` to keep legacy @-tag arming anyway.
+    """
+    reload_env_runtime()
+    if get_p0_major_check_person_recipients():
+        v = (os.getenv("P0_THREAD_CONFIRM_ALLOW_TARGET_MENTIONS") or "0").strip().lower()
+        return v in ("1", "true", "yes", "on")
+    v = (os.getenv("P0_THREAD_CONFIRM_ALLOW_TARGET_MENTIONS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_lark_bot_open_id() -> str:
+    """``LARK_BOT_OPEN_ID`` — optional ``ou_...`` for this bot (excluded from VC ring @mentions)."""
+    reload_env_runtime()
+    return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
+
+
+def get_p0_vc_ring_enabled() -> bool:
+    """``P0_VC_RING_ENABLED`` — ring users into VC when duty joins (needs OAuth + ``vc:meeting``)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_VC_RING_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_vc_ring_fallback_open_ids() -> List[str]:
+    """``P0_VC_RING_FALLBACK_OPEN_IDS`` — comma-separated ``ou_...`` when concern has no @mention."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_RING_FALLBACK_OPEN_IDS") or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for part in raw.split(","):
+        oid = (part or "").strip()
+        if oid.startswith("ou_") and oid not in seen:
+            seen.add(oid)
+            out.append(oid)
+    return out
+
+
+def get_p0_vc_oauth_public_base_url() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def get_p0_vc_oauth_redirect_uri() -> str:
+    reload_env_runtime()
+    return (os.getenv("P0_VC_OAUTH_REDIRECT_URI") or "").strip()
+
+
+def get_p0_vc_oauth_scope() -> str:
+    """
+    ``P0_VC_OAUTH_SCOPE`` — Lark user OAuth scopes for VC ring + recording fan-out.
+
+    Default includes ``vc:meeting``, ``vc:record``, and Drive permission scopes for Minutes edit.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_VC_OAUTH_SCOPE") or "").strip()
+    if raw:
+        return raw
+    return (
+        "vc:meeting offline_access vc:record "
+        "docs:permission.member:create docs:permission.member:update"
+    )
+
+
 def p0_adjustment_bitable_enabled() -> bool:
     """``P0_ADJUSTMENT_BITABLE_ENABLED`` — post deployment notice after Send overview. Default ``1`` when app_token set."""
     reload_env_runtime()

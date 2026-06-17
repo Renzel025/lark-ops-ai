@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi.responses import HTMLResponse, RedirectResponse
 from Crypto.Cipher import AES
 import lark_oapi as lark
 
@@ -107,7 +108,16 @@ else:
         "P0_ADJUSTMENT_BITABLE_TABLE_ID in .env (and P0_ADJUSTMENT_BITABLE_ENABLED=1)"
     )
 
-from p0_logic.config import p0_single_incident_group_mode
+from p0_logic.config import get_p0_vc_ring_enabled, get_p0_vc_oauth_redirect_uri, p0_single_incident_group_mode
+
+if get_p0_vc_ring_enabled():
+    log.info(
+        "vc_ring: ENABLED — rings @mentions + P0_MAJOR_CHECK_PERSON_IDS when duty joins VC "
+        "(needs duty OAuth: %s)",
+        get_p0_vc_oauth_redirect_uri() or "(set P0_VC_OAUTH_REDIRECT_URI)",
+    )
+else:
+    log.info("vc_ring: disabled (set P0_VC_RING_ENABLED=1)")
 
 if p0_single_incident_group_mode():
     log.info(
@@ -551,6 +561,51 @@ def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
     return _first_non_empty_str(candidates)
 
 
+@app.get("/lark/oauth/start")
+async def lark_oauth_start(open_id: str = ""):
+    """Redirect duty to Lark OAuth (VC ring / recording fan-out user token)."""
+    from p0_logic.vc_user_oauth import build_lark_authorize_redirect_url
+
+    url = build_lark_authorize_redirect_url(open_id)
+    if not url:
+        return HTMLResponse(
+            "VC OAuth is not configured. Set P0_VC_OAUTH_REDIRECT_URI and Lark app credentials.",
+            status_code=500,
+        )
+    log.info("vc oauth start open_id_tail=%s", open_id[-8:] if len(open_id) > 8 else open_id)
+    return RedirectResponse(url)
+
+
+@app.get("/lark/oauth/callback")
+async def lark_oauth_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+):
+    """OAuth callback — store duty user token and retry pending VC rings."""
+    if error:
+        msg = (error_description or error or "unknown").strip()
+        log.warning("vc oauth callback error=%s desc=%s", error, (error_description or "")[:200])
+        return HTMLResponse(f"VC OAuth failed: {msg}", status_code=400)
+    from p0_logic.vc_user_oauth import exchange_code_for_tokens
+    from p0_logic.vc_ring import maybe_retry_pending_vc_ring_for_declarer
+
+    ok, oid, detail = exchange_code_for_tokens(code, open_id_hint=state)
+    if not ok or not oid:
+        log.warning("vc oauth callback exchange failed hint_tail=%s detail=%s", state[-8:] if state else "", detail[:200])
+        return HTMLResponse(f"VC OAuth failed: {detail or 'token exchange failed'}", status_code=400)
+    tenant_token = get_tenant_token(LARK_APP_ID, LARK_APP_SECRET)
+    if tenant_token:
+        n = maybe_retry_pending_vc_ring_for_declarer(oid, tenant_token)
+        log.info("vc oauth callback ok open_id_tail=%s retried_sessions=%s", oid[-8:], n)
+    return HTMLResponse(
+        "<html><body><h3>VC OAuth authorized</h3>"
+        "<p>You can close this tab. When you join the P0 VC, configured users will be rung in.</p>"
+        "</body></html>"
+    )
+
+
 @app.post("/lark/webhook")
 async def lark_webhook(req: Request, background: BackgroundTasks):
     try:
@@ -651,6 +706,32 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 record_vc_external_join_for_meeting_ref(meeting_ref, oid)
             if oid:
                 strip_seeded_host_placeholder_for_open_id(oid)
+
+            joiner_uid = (refs.get("user_id") or "").strip()
+            if meeting_ref and (oid or joiner_uid):
+                try:
+                    from p0_logic.vc_ring import maybe_ring_on_vc_join
+
+                    maybe_ring_on_vc_join(
+                        meeting_ref,
+                        oid,
+                        tenant_token,
+                        joiner_user_id=joiner_uid,
+                    )
+                except Exception as e_ring:
+                    log.warning("vc_ring on join failed: %s", e_ring)
+            try:
+                from p0_logic.issue_watch_declare import maybe_prompt_major_check_person_joined
+
+                maybe_prompt_major_check_person_joined(
+                    meeting_ref=meeting_ref or "",
+                    tenant_token=tenant_token,
+                    joiner_open_id=oid,
+                    joiner_user_id=joiner_uid,
+                    participant_name=participant_name or "",
+                )
+            except Exception as e_cp:
+                log.warning("major check-person join prompt hook failed: %s", e_cp)
 
             if participant_name:
                 add_meeting_participant(participant_name)
