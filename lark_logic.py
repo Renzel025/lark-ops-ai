@@ -111,6 +111,9 @@ _QUESTION_PRIORITY_PHRASE_RE = re.compile(
     r"should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"can\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"could\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
+    r"shall\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"can\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"could\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
     r"should\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
@@ -379,6 +382,26 @@ def _is_p0_ticket_handoff_not_declaration(text: str) -> bool:
     return False
 
 
+def _sanitize_priority_keyword_ai_triage(text_raw: str, result: Dict[str, str]) -> Dict[str, str]:
+    """Correct common Groq mislabels when only P0 or only P1 appears in the text."""
+    intent = str(result.get("intent") or "").strip().lower()
+    has_p0 = bool(P0_KEYWORD_RE.search(text_raw or ""))
+    has_p1 = bool(P1_KEYWORD_RE.search(text_raw or ""))
+    if has_p0 and not has_p1 and intent == "declare_p1":
+        log.warning(
+            "Priority keyword AI triage: Groq intent=declare_p1 but text is P0-only — remapping to question text_head=%r",
+            (text_raw or "")[:200],
+        )
+        return {**result, "intent": "question", "reason": "P0-only text; declare_p1 mislabel"}
+    if has_p1 and not has_p0 and intent == "declare_p0":
+        log.warning(
+            "Priority keyword AI triage: Groq intent=declare_p0 but text is P1-only — remapping to question text_head=%r",
+            (text_raw or "")[:200],
+        )
+        return {**result, "intent": "question", "reason": "P1-only text; declare_p0 mislabel"}
+    return result
+
+
 def _priority_keyword_ai_triage(text_raw: str, groq_key: str) -> Optional[Dict[str, str]]:
     """Run Groq classifier when ``P0_KEYWORD_AI_TRIAGE`` is on. None = use legacy regex path."""
     if not get_p0_keyword_ai_triage():
@@ -389,11 +412,17 @@ def _priority_keyword_ai_triage(text_raw: str, groq_key: str) -> Optional[Dict[s
     try:
         result = classify_priority_keyword(text_raw, provider=provider or None)
         if result:
+            result = _sanitize_priority_keyword_ai_triage(text_raw, result)
             log.info(
                 "Priority keyword AI triage provider=%s intent=%s reason=%r text_head=%r",
                 result.get("provider") or provider,
                 result.get("intent"),
                 result.get("reason"),
+                (text_raw or "")[:200],
+            )
+        else:
+            log.info(
+                "Priority keyword AI triage: no usable Groq result (legacy/GROQ_GATE path may apply) text_head=%r",
                 (text_raw or "")[:200],
             )
         return result
@@ -591,6 +620,9 @@ P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     r"|should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r"|could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|can\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|could\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
+    r"|shall\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
     r")"
 )
 # Reply must read like **P0 approval** — phrase-prefix match (not full NLP).
