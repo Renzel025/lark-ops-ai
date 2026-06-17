@@ -94,37 +94,42 @@ def _try_consume_keyword_trigger_dedupe(key: str) -> bool:
 P0_KEYWORD_RE = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
 P1_KEYWORD_RE = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
 
+# Shared subject: "it", "this", "this one", "this issue", "that outage", …
+_P0_SUBJECT = r"(?:it|(?:this|that)(?:\s+(?:one|issue|incident|outage|problem|ticket|case))?)"
+_PRIO01 = r"(?:p0|p1|priority\s*0|priority\s*1)"
+_P0_ONLY = r"(?:p0|priority\s*0)"
+
 # Do not start VC when the user is *asking* about P0/P1 (vs declaring). See _is_question_about_priority().
 _QUESTION_PRIORITY_PHRASE_RE = re.compile(
-    r"(?is)"
-    r"(?:"
-    r"is\s+this\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"is\s+that\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"is\s+it\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"are\s+we\s+(?:in\s+)?(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"is\s+this\s+possible\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"is\s+that\s+possible\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"can\s+we\s+refer\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"could\s+we\s+refer\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"can\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"could\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"should\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"can\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"could\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"shall\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"can\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"could\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"should\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"would\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"will\s+this\s+be\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"does\s+this\s+(?:count|qualify)\s+(?:as\s+)?(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"what\s+is\s+(?:a\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b|"
-    r"how\s+(?:do|can|to)\s+(?:i|we)\s+(?:know|tell|declare)\s+.*\b(?:p0|p1|priority\s*[01])\b|"
-    r"any(?:thing|one)\s+.*\b(?:p0|p1|priority\s*[01])\b"
-    r")"
+    rf"(?is)(?:"
+    rf"is\s+this\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"is\s+that\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"is\s+it\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"are\s+we\s+(?:in\s+)?(?:a\s+)?{_PRIO01}\b|"
+    rf"is\s+this\s+possible\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"is\s+that\s+possible\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"can\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"could\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"can\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"could\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"shall\s+we\s+tag\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"should\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"should\s+i\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"can\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"could\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"can\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"could\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"shall\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"can\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"could\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"should\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"would\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"will\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
+    rf"does\s+this\s+(?:count|qualify)\s+(?:as\s+)?(?:a\s+)?{_PRIO01}\b|"
+    rf"what\s+is\s+(?:a\s+)?{_PRIO01}\b|"
+    rf"how\s+(?:do|can|to)\s+(?:i|we)\s+(?:know|tell|declare)\s+.*\b(?:p0|p1|priority\s*[01])\b|"
+    rf"any(?:thing|one)\s+.*\b(?:p0|p1|priority\s*[01])\b"
+    rf")"
 )
 
 # Broken-English asks: "is this issue is p0" (extra words between "is … is p0") don't match phrases above.
@@ -383,8 +388,43 @@ def _is_p0_ticket_handoff_not_declaration(text: str) -> bool:
     return False
 
 
+def _regex_priority_keyword_intent_override(text_raw: str) -> Optional[str]:
+    """
+    Deterministic declare vs question when phrasing clearly matches regex (overrides Groq mislabels).
+    Returns ``declare_p0``, ``question``, or None (defer to Groq / legacy).
+    """
+    t = (text_raw or "").strip()
+    if not t or not P0_KEYWORD_RE.search(t):
+        return None
+    if _is_explicit_p0_negation(t):
+        return "question"
+    if _is_p0_thread_confirm_question(t):
+        return "question"
+    if _is_question_about_priority(t):
+        return "question"
+    if _is_explicit_direct_p0_declaration(t):
+        return "declare_p0"
+    return None
+
+
 def _sanitize_priority_keyword_ai_triage(text_raw: str, result: Dict[str, str]) -> Dict[str, str]:
     """Correct common Groq mislabels when only P0 or only P1 appears in the text."""
+    override = _regex_priority_keyword_intent_override(text_raw)
+    if override:
+        groq_intent = str((result or {}).get("intent") or "").strip().lower()
+        if groq_intent != override:
+            log.info(
+                "Priority keyword AI triage: regex override groq=%s -> %s text_head=%r",
+                groq_intent or "(none)",
+                override,
+                (text_raw or "")[:200],
+            )
+        return {
+            **(result or {}),
+            "intent": override,
+            "reason": f"regex_override:{override}",
+            "provider": (result or {}).get("provider") or "regex",
+        }
     intent = str(result.get("intent") or "").strip().lower()
     has_p0 = bool(P0_KEYWORD_RE.search(text_raw or ""))
     has_p1 = bool(P1_KEYWORD_RE.search(text_raw or ""))
@@ -404,28 +444,54 @@ def _sanitize_priority_keyword_ai_triage(text_raw: str, result: Dict[str, str]) 
 
 
 def _priority_keyword_ai_triage(text_raw: str, groq_key: str) -> Optional[Dict[str, str]]:
-    """Run Groq classifier when ``P0_KEYWORD_AI_TRIAGE`` is on. None = use legacy regex path."""
+    """Run LLM classifier (Claude → Gemini → Groq) when ``P0_KEYWORD_AI_TRIAGE`` is on."""
     if not get_p0_keyword_ai_triage():
         return None
-    provider = resolve_priority_keyword_ai_provider()
-    if not provider and not (groq_key or "").strip():
+    override = _regex_priority_keyword_intent_override(text_raw)
+    if override:
+        result = {
+            "intent": override,
+            "reason": f"regex_override:{override}",
+            "provider": "regex",
+        }
+        log.info(
+            "Priority keyword AI triage provider=regex intent=%s reason=%r text_head=%r",
+            override,
+            result["reason"],
+            (text_raw or "")[:200],
+        )
+        return result
+    if not resolve_priority_keyword_ai_provider():
         return None
     try:
-        result = classify_priority_keyword(text_raw, provider=provider or None)
+        result = classify_priority_keyword(text_raw, provider=None)
         if result:
             result = _sanitize_priority_keyword_ai_triage(text_raw, result)
             log.info(
                 "Priority keyword AI triage provider=%s intent=%s reason=%r text_head=%r",
-                result.get("provider") or provider,
+                result.get("provider") or "-",
                 result.get("intent"),
                 result.get("reason"),
                 (text_raw or "")[:200],
             )
         else:
-            log.info(
-                "Priority keyword AI triage: no usable Groq result (legacy/GROQ_GATE path may apply) text_head=%r",
-                (text_raw or "")[:200],
-            )
+            override = _regex_priority_keyword_intent_override(text_raw)
+            if override:
+                result = {
+                    "intent": override,
+                    "reason": f"regex_override:{override}",
+                    "provider": "regex",
+                }
+                log.info(
+                    "Priority keyword AI triage: LLM empty — regex override intent=%s text_head=%r",
+                    override,
+                    (text_raw or "")[:200],
+                )
+            else:
+                log.info(
+                    "Priority keyword AI triage: no usable Groq result (legacy/GROQ_GATE path may apply) text_head=%r",
+                    (text_raw or "")[:200],
+                )
         return result
     except Exception as e:
         log.warning("Priority keyword AI triage failed: %s", e)
@@ -531,7 +597,12 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
     if re.match(r"(?is)^(?:p0|priority\s*0)\s*[!?.…]*\s*$", t):
         return True
     # "we tag … as p0" — modal + we + tag stays with Groq / thread-confirm ("can we tag…").
-    if not re.search(r"(?is)\b(?:can|could|should|may|would)\s+we\s+(?:tag|treat)", t):
+    if not re.search(r"(?is)\b(?:can|could|should|may|would|shall)\s+we\s+(?:tag|treat|consider|declare)", t):
+        if re.search(
+            rf"(?is)\b(?:i|we)\s+consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
         if re.search(
             r"(?is)\b(?:i|we)\s+treat(?:ed|ing)?\s+(?:this|that|it|the\s+issue|this\s+issue)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
             t,
@@ -597,51 +668,50 @@ P1_PENDING_DECLINE_RE = re.compile(
 # ``?`` optional: "is this p0" / "can we tag this as p0" (not only questions with ``?``).
 # Phrase may appear after @mentions (e.g. "@QA Team is this P0?").
 P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
-    r"(?is)"
-    r"(?:is\s+this\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+that\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+it\s+(?:an?\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+this\s+[^\n?]+\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|if\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|if\s+that\s+[^\n?]+\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+this\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+that\s+[^\n?]+\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|could\s+we\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|shall\s+we\s+tag\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+this\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+that\s+be\s+tagged\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+we\s+tag\s+this\s+issue\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+we\s+refer\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|could\s+we\s+refer\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+this\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|is\s+that\s+possible\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|should\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|should\s+i\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|could\s+we\s+declare\s+(?:it|this|that)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|can\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|could\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r"|shall\s+we\s+consider\s+(?:(?:this|that|it)\s+one|(?:this|that|it))\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b"
-    r")"
+    rf"(?is)(?:"
+    rf"is\s+this\s+(?:an?\s+)?{_P0_ONLY}\b|"
+    rf"is\s+that\s+(?:an?\s+)?{_P0_ONLY}\b|"
+    rf"is\s+it\s+(?:an?\s+)?{_P0_ONLY}\b|"
+    rf"is\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"is\s+this\s+[^\n?]+\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"if\s+this\s+[^\n?]+\s+is\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"if\s+that\s+[^\n?]+\s+is\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"is\s+this\s+[^\n?]+\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"is\s+that\s+[^\n?]+\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"could\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"shall\s+we\s+tag\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+this\s+be\s+tagged\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+that\s+be\s+tagged\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"could\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"is\s+this\s+possible\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"is\s+that\s+possible\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"should\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"should\s+i\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"could\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"could\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"shall\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b"
+    rf")"
 )
 # Reply must read like **P0 approval** — phrase-prefix match (not full NLP).
 P0_THREAD_CONFIRM_YES_RE = re.compile(
-    r"(?is)^(?:"
-    r"(?:yes|yep|yeah|sure|ok|okay|agreed|agree|confirm|confirmed|是|对的|确认)\b|"
-    r"yes\s*,?\s*this\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"we\s+(?:will\s+)?consider\s+(?:it|this|that)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"we\s+consider\s+it\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"(?:we\s+)?(?:can|could)\s+tag\s+(?:(?:this|that|it)\s+)?as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"can\s+tag\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"treat(?:ing)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"(?:this|the)\s+issue\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b|"
-    r"go ahead|sounds good|approved\b|proceed\b|"
-    r"we\s+will\s+(?:consider|proceed)\b|"
-    r"\+\+"
-    r")"
+    rf"(?is)^(?:"
+    rf"(?:yes|yep|yeah|sure|ok|okay|agreed|agree|confirm|confirmed|是|对的|确认)\b|"
+    rf"yes\s*,?\s*this\s+is\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"we\s+(?:will\s+)?consider\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?{_P0_ONLY}\b|"
+    rf"we\s+consider\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?{_P0_ONLY}\b|"
+    rf"(?:we\s+)?(?:can|could)\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"can\s+tag\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"treat(?:ing)?\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"(?:this|the)\s+issue\s+is\s+(?:a\s+)?{_P0_ONLY}\b|"
+    rf"(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?{_P0_ONLY}\b|"
+    rf"go ahead|sounds good|approved\b|proceed\b|"
+    rf"we\s+will\s+(?:consider|proceed)\b|"
+    rf"\+\+"
+    rf")"
 )
 
 _P0_THREAD_LOCK = threading.RLock()

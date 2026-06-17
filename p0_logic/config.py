@@ -1317,21 +1317,60 @@ def get_p0_keyword_groq_gate() -> bool:
 
 def get_p0_keyword_ai_triage() -> bool:
     """
-    ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and ``GROQ_API_KEY`` is set, one Groq call classifies
-    each ``p0`` / ``p1`` keyword hit: **declaration** (start flow) vs **mention / handoff / question**
-    (ignore silently). Replaces ad-hoc handoff ack replies and overlaps with ``P0_KEYWORD_GROQ_GATE``.
+    ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and an AI key is set (``ANTHROPIC_API_KEY``,
+    ``GEMINI_API_KEY``, or ``GROQ_API_KEY``), one LLM call classifies each ``p0`` / ``p1`` keyword hit.
     """
     reload_env_runtime()
     v = (os.getenv("P0_KEYWORD_AI_TRIAGE") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
-def resolve_priority_keyword_ai_provider() -> str:
-    """Return ``groq`` when ``GROQ_API_KEY`` is set, else empty."""
+def _anthropic_api_key() -> str:
     reload_env_runtime()
-    if GROQ_API_KEY:
-        return "groq"
-    return ""
+    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+
+
+def get_anthropic_api_key() -> str:
+    """``ANTHROPIC_API_KEY`` for Claude triage. Never commit this value."""
+    return _anthropic_api_key()
+
+
+def _gemini_api_key() -> str:
+    reload_env_runtime()
+    return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+
+
+def get_gemini_api_key() -> str:
+    """``GEMINI_API_KEY`` or alias ``GOOGLE_API_KEY`` (Google AI Studio). Never commit this value."""
+    return _gemini_api_key()
+
+
+def priority_keyword_ai_provider_chain() -> list:
+    """
+    Ordered providers for P0/P1 keyword AI triage + failover.
+
+    ``auto`` (default): **claude → gemini → groq** (each step skipped if key missing).
+    Force one: ``P0_KEYWORD_AI_PROVIDER=claude|gemini|groq``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_KEYWORD_AI_PROVIDER") or "auto").strip().lower()
+    has_claude = bool(_anthropic_api_key())
+    has_gemini = bool(_gemini_api_key())
+    has_groq = bool(GROQ_API_KEY)
+    avail = {"claude": has_claude, "gemini": has_gemini, "groq": has_groq}
+    if raw in avail:
+        return [raw] if avail[raw] else []
+    chain: list = []
+    for name in ("claude", "gemini", "groq"):
+        if avail[name]:
+            chain.append(name)
+    return chain
+
+
+def resolve_priority_keyword_ai_provider() -> str:
+    """First provider in ``priority_keyword_ai_provider_chain()`` (for startup / availability checks)."""
+    chain = priority_keyword_ai_provider_chain()
+    return chain[0] if chain else ""
 
 
 def get_p0_keyword_use_builtin_context_filters() -> bool:

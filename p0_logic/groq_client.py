@@ -319,18 +319,58 @@ def _parse_priority_keyword_classification(raw: str, provider: str) -> Optional[
 
 def classify_priority_keyword(message_text: str, provider: Optional[str] = None) -> Optional[dict]:
     """
-    One Groq call: declaration vs mention/handoff/question for ``p0`` / ``p1`` keyword hits.
-    Requires ``GROQ_API_KEY``. ``provider`` is ignored (Groq-only).
+    One LLM call: declaration vs mention/handoff/question for ``p0`` / ``p1`` keyword hits.
+    Failover chain (``auto``): **claude → gemini → groq**. Pass ``provider`` to force one.
     """
+    from . import config as _cfg
+
     t = (message_text or "").strip()
     if not t:
         return None
-    if not GROQ_API_KEY:
-        return None
     t = t[:4500]
     user_prompt = f"MESSAGE:\n{t}"
-    raw = groq_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
-    return _parse_priority_keyword_classification(raw, "groq")
+
+    def _via_claude() -> Optional[dict]:
+        from .anthropic_client import anthropic_chat_once
+
+        if not _cfg.get_anthropic_api_key():
+            return None
+        raw = anthropic_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=180)
+        return _parse_priority_keyword_classification(raw, "claude")
+
+    def _via_gemini() -> Optional[dict]:
+        from .gemini_client import gemini_chat_once
+
+        if not _cfg.get_gemini_api_key():
+            return None
+        raw = gemini_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
+        return _parse_priority_keyword_classification(raw, "gemini")
+
+    def _via_groq() -> Optional[dict]:
+        if not GROQ_API_KEY:
+            return None
+        raw = groq_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
+        return _parse_priority_keyword_classification(raw, "groq")
+
+    _dispatch = {"claude": _via_claude, "gemini": _via_gemini, "groq": _via_groq}
+
+    names = (
+        [(provider or "").strip().lower()]
+        if provider
+        else _cfg.priority_keyword_ai_provider_chain()
+    )
+    for name in names:
+        fn = _dispatch.get(name)
+        if not fn:
+            continue
+        result = fn()
+        if result:
+            if len(names) > 1 or (provider is None and len(_cfg.priority_keyword_ai_provider_chain()) > 1):
+                if name != names[0]:
+                    log.info("classify_priority_keyword: failover succeeded via %s", name)
+            return result
+        log.info("classify_priority_keyword: %s returned no result — trying next provider", name)
+    return None
 
 
 def groq_classify_priority_keyword(message_text: str) -> Optional[dict]:
