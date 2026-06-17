@@ -431,16 +431,7 @@ https://vc-sg.larksuite.com/j/...
 
 Lark auto-unfurls VC preview (Meeting ID, timer, Joined/Ended).
 
-### 9.5 Severity Major / Minor (legacy optional — usually off)
-
-Not used on most deployments. The code still supports a second Lark app for Major/Minor DM if you set `P0_SEVERITY_PROMPT_ENABLED=1` and `LARK_SEVERITY_APP_ID`. Default practice: leave `P0_SEVERITY_PROMPT_ENABLED=0` and rely on ongoing buzz + VC ring only.
-
-If enabled, after P0 declare the severity bot DMs duty:
-
-- Major → Lark VC ring / check persons; 5 min ongoing buzz if meeting still active
-- Minor → lighter follow-up; 10 min ongoing buzz
-
-Ongoing buzz text includes root-cause escalation guidance (contact Greg, Eason and Rock).
+### 9.5 Ongoing DM buzz (P0 still active)
 
 ### 9.6 VC ring & check persons
 

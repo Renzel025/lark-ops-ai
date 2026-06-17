@@ -127,30 +127,8 @@ app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()
 LARK_APP_SECRET = os.getenv("LARK_APP_SECRET", "").strip()
-# Optional second app: severity / minor follow-up DMs (must match config.get_lark_severity_app_credentials).
-LARK_SEVERITY_APP_ID = (
-    os.getenv("LARK_SEVERITY_APP_ID")
-    or os.getenv("LARK_APP_ID_SEVERITY")
-    or os.getenv("LARK_APP_ID_2")
-    or ""
-).strip()
-LARK_SEVERITY_APP_SECRET = (
-    os.getenv("LARK_SEVERITY_APP_SECRET")
-    or os.getenv("LARK_APP_SECRET_SEVERITY")
-    or os.getenv("LARK_APP_SECRET_2")
-    or ""
-).strip()
 LARK_ENCRYPT_KEY = os.getenv("LARK_ENCRYPT_KEY", "").strip()
 
-log.info(
-    "Lark severity DM bot: %s",
-    (
-        f"second app (app_id tail …{LARK_SEVERITY_APP_ID[-8:]})"
-        if LARK_SEVERITY_APP_ID
-        else "NOT configured — severity cards use PRIMARY app (same as overview). "
-        "Set LARK_SEVERITY_APP_ID + LARK_SEVERITY_APP_SECRET (or LARK_APP_ID_2 + LARK_APP_SECRET_2)."
-    ),
-)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 lark_client = (

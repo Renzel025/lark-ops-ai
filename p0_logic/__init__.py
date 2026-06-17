@@ -88,11 +88,7 @@ build_help_commands_card = cards.build_help_commands_card
 build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
 build_overview_result_card = cards.build_overview_result_card
-build_p0_severity_prompt_card = cards.build_p0_severity_prompt_card
-build_slack_severity_prompt_card = cards.build_slack_severity_prompt_card
 build_bilingual_overview_md = cards.build_bilingual_overview_md
-apply_p0_severity_choice = session.apply_p0_severity_choice
-apply_slack_severity_choice = session.apply_slack_severity_choice
 
 # Config (for callers that need env)
 reload_env_runtime = config.reload_env_runtime
@@ -128,8 +124,6 @@ get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
 get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
 get_vc_reserve_end_offset_sec = config.get_vc_reserve_end_offset_sec
-p0_severity_prompt_enabled = config.p0_severity_prompt_enabled
-slack_severity_prompt_enabled = config.p0_severity_prompt_enabled
 get_lark_primary_app_credentials = config.get_lark_primary_app_credentials
 get_lark_severity_app_credentials = config.get_lark_severity_app_credentials
 
@@ -195,11 +189,7 @@ __all__ = [
     "build_preview_card",
     "build_edit_overview_card",
     "build_overview_result_card",
-    "build_p0_severity_prompt_card",
-    "build_slack_severity_prompt_card",
     "build_bilingual_overview_md",
-    "apply_p0_severity_choice",
-    "apply_slack_severity_choice",
     "reload_env_runtime",
     "get_incident_group_chat_ids",
     "get_emergency_topic_for_source_chat",
@@ -233,6 +223,4 @@ __all__ = [
     "get_dm_instruction_open_ids",
     "get_dm_repost_instruction_after_reset",
     "get_vc_reserve_end_offset_sec",
-    "p0_severity_prompt_enabled",
-    "slack_severity_prompt_enabled",
 ]

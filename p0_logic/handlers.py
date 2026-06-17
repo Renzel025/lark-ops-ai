@@ -45,53 +45,6 @@ _PREVIEW_WORKFLOW_ACTIONS = frozenset(
 
 _GROUP_OVERVIEW_EDIT_ACTIONS = frozenset({"edit_group_overview", "back_group_edit"})
 
-# DM card actions for P0 severity — must win over preview workflow if Lark misparses value.
-_P0_SEVERITY_DM_ACTIONS = frozenset(
-    {
-        "p0_severity_major",
-        "p0_severity_minor",
-        # legacy button ids on in-flight cards
-        "slack_severity_major",
-        "slack_severity_minor",
-    }
-)
-
-# Last-resort: find real button action in raw JSON (some tenants hide event.action.value oddly).
-_P0_SEVERITY_ACTION_IN_JSON_RE = re.compile(
-    r'"action"\s*:\s*"(p0_severity_(?:major|minor)|slack_severity_(?:major|minor))"'
-)
-
-
-def _p0_severity_action_from_payload_regex(payload: Dict[str, Any]) -> str:
-    try:
-        raw = json.dumps(payload, ensure_ascii=False)
-    except Exception:
-        return ""
-    m = _P0_SEVERITY_ACTION_IN_JSON_RE.search(raw)
-    return m.group(1) if m else ""
-
-
-def _forced_p0_severity_action_from_event_action(payload: Dict[str, Any]) -> str:
-    """
-    Match Slack severity / minor follow-up ids inside ``event.action`` only (not the whole webhook).
-
-    Some Lark builds mis-parse ``value.action``; substring match on the **action** subtree keeps
-    Major/Minor out of the overview preview path.
-    """
-    ev = payload.get("event") or {}
-    act = ev.get("action")
-    if not isinstance(act, dict):
-        return ""
-    try:
-        chunk = json.dumps(act, ensure_ascii=False)
-    except Exception:
-        return ""
-    for name in sorted(_P0_SEVERITY_DM_ACTIONS, key=len, reverse=True):
-        if name in chunk:
-            return name
-    return ""
-
-
 # DM text after Clear draft (chat command or button) — always sent; instruction-card repost stays env-gated.
 DM_DRAFT_CLEARED_PROMPT = (
     "🗑️ Draft cleared. Kindly paste screenshots or text again when you're ready."
@@ -252,74 +205,9 @@ def _extract_card_action_name(payload: Dict[str, Any]) -> str:
     return ""
 
 
-def _find_p0_severity_card_action_nested(payload: Dict[str, Any]) -> str:
-    """
-    Some Lark clients send button ``action`` under nested paths (not only ``event.action.value``).
-    Walk the payload and return the first ``p0_severity_*`` / legacy ``slack_severity_*`` id we see.
-    """
-    out: List[str] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            a = node.get("action")
-            if isinstance(a, str) and a.strip():
-                s = a.strip()
-                if s.startswith("p0_severity_") or s.startswith("slack_severity_"):
-                    out.append(s)
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for x in node:
-                walk(x)
-        elif isinstance(node, str) and node.strip().startswith("{"):
-            try:
-                walk(json.loads(node))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
-
-    walk(payload)
-    return out[0] if out else ""
-
-
-def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
-    """Primary parse + nested fallback so severity/minor buttons never fall through to the preview branch."""
-    forced = _forced_p0_severity_action_from_event_action(payload)
-    primary = (_extract_card_action_name(payload) or "").strip()
-    if forced and forced != primary:
-        log.info("card_action: using event.action substring %r (primary was %r)", forced, primary)
-        return forced
-    if forced:
-        return forced
-
-    nested = _find_p0_severity_card_action_nested(payload)
-    rx = _p0_severity_action_from_payload_regex(payload)
-
-    # If Lark reports send_preview / etc. but the payload still contains slack_severity_* / slack_minor_*,
-    # route to Slack DM handlers (otherwise operators see "No overview preview" when tapping Major/Minor).
-    if primary in _PREVIEW_WORKFLOW_ACTIONS:
-        if nested in _P0_SEVERITY_DM_ACTIONS:
-            log.info("card_action: overriding preview-like primary %r with nested %r", primary, nested)
-            return nested
-        if rx in _P0_SEVERITY_DM_ACTIONS:
-            log.info("card_action: overriding preview-like primary %r with regex %r", primary, rx)
-            return rx
-
-    if nested and nested != primary:
-        if not primary or primary not in _P0_SEVERITY_DM_ACTIONS:
-            log.info("card_action: nested action=%s (primary was %r)", nested, primary)
-            return nested
-    if not primary:
-        if nested in _P0_SEVERITY_DM_ACTIONS:
-            return nested
-        if rx in _P0_SEVERITY_DM_ACTIONS:
-            log.info("card_action: empty primary resolved to %r (regex)", rx)
-            return rx
-    return primary
-
-
 def card_action_name_from_payload(payload: Dict[str, Any]) -> str:
     """Public helper for webhook routing (e.g. fast path before BackgroundTasks)."""
-    return (_resolve_card_action_name(payload) or "").strip() or "unknown"
+    return (_extract_card_action_name(payload) or "").strip() or "unknown"
 
 
 def _show_participants_body_text() -> str:
@@ -376,51 +264,6 @@ def _send_help_commands_card(sender_open_id: str, tenant_token: str) -> None:
             (body or "")[:400],
         )
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to send the help card.")
-
-
-def _handle_p0_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
-    """DM card: Major / Minor after P0 declare."""
-    sender_open_id = _extract_card_action_sender_open_id(payload)
-    op_uid = _extract_card_action_operator_lark_user_id(payload)
-    _maybe_merge_dm_scope_from_card(sender_open_id, payload)
-    _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
-    chat_id = (src_inc or "").strip()
-    if not chat_id.startswith("oc_"):
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.", op_uid)
-        return
-    err = _session.apply_p0_severity_choice(
-        chat_id, tenant_token, sender_open_id, is_major, operator_lark_user_id=op_uid
-    )
-    if err == "no_session":
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ This incident session is no longer active.", op_uid)
-        return
-    if err == "already_answered":
-        if sender_open_id:
-            _post_dm_text_card_action(
-                sender_open_id,
-                tenant_token,
-                "ℹ️ A Major/Minor choice was already recorded for this incident.",
-                op_uid,
-            )
-        return
-    if err == "disabled":
-        if sender_open_id:
-            _post_dm_text_card_action(
-                sender_open_id,
-                tenant_token,
-                "ℹ️ Severity prompt is disabled in configuration.",
-                op_uid,
-            )
-        return
-    if err == "missing_user_id":
-        if sender_open_id:
-            _post_dm_text_primary_bot(
-                sender_open_id,
-                "⚠️ Cannot DM from the severity bot: missing tenant **user_id**. Grant **contact:user.base:readonly** (or equivalent) on the **primary** Lark app, or start the incident from a group message so the sender id is stored.",
-            )
-        return
 
 
 def handle_lark_card_action_show_participants_sync(
@@ -1056,8 +899,9 @@ def handle_dm_generate_overview(
 def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     from . import issues as _issues
 
-    # Resolve severity/minor actions even when Lark nests ``value`` oddly (see _resolve_card_action_name).
-    action_name = (_resolve_card_action_name(payload) or "").strip()
+    action_name = card_action_name_from_payload(payload)
+    if action_name == "unknown":
+        action_name = ""
     t0 = time.perf_counter()
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
@@ -1109,9 +953,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
 
         if not sender_open_id or not action_name:
             log.warning("card.action.trigger missing sender/action payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
-            return
-        if action_name in ("p0_severity_major", "p0_severity_minor", "slack_severity_major", "slack_severity_minor"):
-            _handle_p0_severity_choice(payload, tenant_token, action_name.endswith("_major"))
             return
         if action_name in ("issue_watch_use_overview", "issue_watch_manual_overview"):
             from . import issue_watch_overview as _iwo
