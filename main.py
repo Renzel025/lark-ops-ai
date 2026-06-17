@@ -542,9 +542,9 @@ def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
 @app.get("/lark/oauth/start")
 async def lark_oauth_start(open_id: str = ""):
     """Redirect duty to Lark OAuth (VC ring / recording fan-out user token)."""
-    from p0_logic.vc_user_oauth import build_authorize_url
+    from p0_logic.vc_user_oauth import build_lark_authorize_redirect_url
 
-    url = build_authorize_url(open_id)
+    url = build_lark_authorize_redirect_url(open_id)
     if not url:
         return HTMLResponse(
             "VC OAuth is not configured. Set P0_VC_OAUTH_REDIRECT_URI and Lark app credentials.",

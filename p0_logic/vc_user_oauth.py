@@ -381,24 +381,29 @@ def _fetch_open_id_from_user_info(access_token: str) -> str:
     return ""
 
 
-def build_authorize_url(open_id: str) -> str:
-    """Browser URL for duty to grant ``vc:meeting`` (one-time per user)."""
+def build_lark_authorize_redirect_url(open_id: str) -> str:
+    """Direct Lark ``accounts.*`` authorize URL — used by ``/lark/oauth/start`` handler."""
     app_id, _ = _config.get_lark_primary_app_credentials()
     app_id = (app_id or "").strip()
     redirect = _config.get_p0_vc_oauth_redirect_uri()
-    base_public = (_config.get_p0_vc_oauth_public_base_url() or "").strip().rstrip("/")
     oid = (open_id or "").strip()
     if not app_id or not redirect:
         return ""
-    # Optional: link via our start route so state is bound to open_id in logs.
-    if base_public and oid:
-        return f"{base_public}/lark/oauth/start?open_id={urllib.parse.quote(oid, safe='')}"
     return build_oauth_authorize_redirect_url(
         app_id=app_id,
         redirect=redirect,
         scope=_config.get_p0_vc_oauth_scope(),
         state=oid,
     )
+
+
+def build_authorize_url(open_id: str) -> str:
+    """User-facing link (DM): our ``/lark/oauth/start`` when public base is set, else Lark direct."""
+    base_public = (_config.get_p0_vc_oauth_public_base_url() or "").strip().rstrip("/")
+    oid = (open_id or "").strip()
+    if base_public and oid and build_lark_authorize_redirect_url(oid):
+        return f"{base_public}/lark/oauth/start?open_id={urllib.parse.quote(oid, safe='')}"
+    return build_lark_authorize_redirect_url(open_id)
 
 
 def exchange_code_for_tokens(code: str, *, open_id_hint: str = "") -> Tuple[bool, str, str]:
