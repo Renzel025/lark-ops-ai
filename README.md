@@ -44,12 +44,3 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ## Do you need to “connect” anything?
 
 No. **main.py** and **lark_logic.py** already import from **p0_logic**; the package is in this folder, so nothing else to connect.
-
-## Slack Huddle (`scripts/`)
-
-Headed Chrome + Playwright automation (same layout as **p1-p0-automation**): VNC on EC2, `.env`, `run_slack_huddle.py`, optional systemd `scripts/aws/slack-huddle.service.example`.
-
-- Copy **`scripts/env.ubuntu.paste.example`** → repo root **`.env`** and edit paths / `SLACK_CHANNEL_URL`.
-- Install: **`sudo python3 scripts/install_slack_huddle_deps.py`** (or `pip install -r scripts/requirements-huddle.txt` in a venv).
-- Login once: **`scripts/slack_open_login_browser.py`** with `DISPLAY` set.
-- Run: **`.venv/bin/python scripts/run_slack_huddle.py`**

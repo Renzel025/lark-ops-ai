@@ -345,7 +345,6 @@ If **two incidents** are declared around the same time, each operator gets **one
 | **`group_overview_store.py`** | Links primary + broadcast overview message IDs | `attach_broadcast_message`, used on Edit → Save |
 | **`vc_ring.py`** | Ring @mentions into VC | `maybe_ring_on_vc_join`, `resolve_declare_ring_targets` |
 | **`vc_recording_fanout.py`** | Minutes link after meeting | schedule on end |
-| **`slack_bridge.py`** | Slack ping + huddle | `notify_slack_p0_started`, `enqueue_slack_huddle_automation` |
 | **`graph_screenshot.py`** | Auto Grafana PNG on P0 | `schedule_p0_graph_screenshot` |
 | **`participants.py`** | VC join/leave tracking | `add_meeting_participant`, dept line for cards |
 | **`session_disk.py`** | Optional session persistence | save/load across restart |

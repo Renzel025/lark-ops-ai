@@ -43,7 +43,6 @@ request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
 get_last_ended_snapshot = session.get_last_ended_snapshot
 get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
 enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
-slack_cross_post_slack_enabled_for_incident_chat = session.slack_cross_post_slack_enabled_for_incident_chat
 release_dm_after_overview_sent = session.release_dm_after_overview_sent
 release_dm_slots_for_incident_chat = session.release_dm_slots_for_incident_chat
 release_standalone_overview_cancel = session.release_standalone_overview_cancel
@@ -89,12 +88,11 @@ build_help_commands_card = cards.build_help_commands_card
 build_preview_card = cards.build_preview_card
 build_edit_overview_card = cards.build_edit_overview_card
 build_overview_result_card = cards.build_overview_result_card
+build_p0_severity_prompt_card = cards.build_p0_severity_prompt_card
 build_slack_severity_prompt_card = cards.build_slack_severity_prompt_card
-build_slack_minor_role_prompt_card = cards.build_slack_minor_role_prompt_card
-build_slack_minor_backend_team_card = cards.build_slack_minor_backend_team_card
-build_slack_minor_fe_reach_card = cards.build_slack_minor_fe_reach_card
 build_bilingual_overview_md = cards.build_bilingual_overview_md
-apply_slack_minor_card_action = session.apply_slack_minor_card_action
+apply_p0_severity_choice = session.apply_p0_severity_choice
+apply_slack_severity_choice = session.apply_slack_severity_choice
 
 # Config (for callers that need env)
 reload_env_runtime = config.reload_env_runtime
@@ -130,20 +128,10 @@ get_dm_instruction_open_id = config.get_dm_instruction_open_id
 get_dm_instruction_open_ids = config.get_dm_instruction_open_ids
 get_dm_repost_instruction_after_reset = config.get_dm_repost_instruction_after_reset
 get_vc_reserve_end_offset_sec = config.get_vc_reserve_end_offset_sec
-slack_automation_enabled = config.slack_automation_enabled
-slack_huddle_on_p0_start = config.slack_huddle_on_p0_start
-slack_huddle_on_overview_send = config.slack_huddle_on_overview_send
-slack_severity_prompt_enabled = config.slack_severity_prompt_enabled
+p0_severity_prompt_enabled = config.p0_severity_prompt_enabled
+slack_severity_prompt_enabled = config.p0_severity_prompt_enabled
 get_lark_primary_app_credentials = config.get_lark_primary_app_credentials
 get_lark_severity_app_credentials = config.get_lark_severity_app_credentials
-get_slack_channel_url_for_incident_chat = config.get_slack_channel_url_for_incident_chat
-get_slack_session_dir_for_incident_chat = config.get_slack_session_dir_for_incident_chat
-get_slack_overview_webhook_for_incident_chat = config.get_slack_overview_webhook_for_incident_chat
-get_slack_incident_notify_webhook_for_incident_chat = config.get_slack_incident_notify_webhook_for_incident_chat
-get_slack_bot_token = config.get_slack_bot_token
-get_slack_app_id = config.get_slack_app_id
-get_slack_bot_user_id = config.get_slack_bot_user_id
-get_slack_api_channel_id_for_incident_chat = config.get_slack_api_channel_id_for_incident_chat
 
 __all__ = [
     "P0_SESSIONS",
@@ -172,7 +160,6 @@ __all__ = [
     "get_last_ended_snapshot",
     "get_dm_target_chat_for_operator",
     "enqueue_dm_instruction_if_needed",
-    "slack_cross_post_slack_enabled_for_incident_chat",
     "release_dm_after_overview_sent",
     "release_dm_slots_for_incident_chat",
     "release_standalone_overview_cancel",
@@ -208,12 +195,11 @@ __all__ = [
     "build_preview_card",
     "build_edit_overview_card",
     "build_overview_result_card",
+    "build_p0_severity_prompt_card",
     "build_slack_severity_prompt_card",
-    "build_slack_minor_role_prompt_card",
-    "build_slack_minor_backend_team_card",
-    "build_slack_minor_fe_reach_card",
     "build_bilingual_overview_md",
-    "apply_slack_minor_card_action",
+    "apply_p0_severity_choice",
+    "apply_slack_severity_choice",
     "reload_env_runtime",
     "get_incident_group_chat_ids",
     "get_emergency_topic_for_source_chat",
@@ -247,16 +233,6 @@ __all__ = [
     "get_dm_instruction_open_ids",
     "get_dm_repost_instruction_after_reset",
     "get_vc_reserve_end_offset_sec",
-    "slack_automation_enabled",
-    "slack_huddle_on_p0_start",
-    "slack_huddle_on_overview_send",
+    "p0_severity_prompt_enabled",
     "slack_severity_prompt_enabled",
-    "get_slack_channel_url_for_incident_chat",
-    "get_slack_session_dir_for_incident_chat",
-    "get_slack_overview_webhook_for_incident_chat",
-    "get_slack_incident_notify_webhook_for_incident_chat",
-    "get_slack_bot_token",
-    "get_slack_app_id",
-    "get_slack_bot_user_id",
-    "get_slack_api_channel_id_for_incident_chat",
 ]

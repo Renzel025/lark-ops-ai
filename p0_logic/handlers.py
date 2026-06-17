@@ -45,39 +45,35 @@ _PREVIEW_WORKFLOW_ACTIONS = frozenset(
 
 _GROUP_OVERVIEW_EDIT_ACTIONS = frozenset({"edit_group_overview", "back_group_edit"})
 
-# DM card actions for Slack severity / minor follow-up — must win over preview workflow if Lark misparses value.
-_SLACK_DM_SCOPE_ACTIONS = frozenset(
+# DM card actions for P0 severity — must win over preview workflow if Lark misparses value.
+_P0_SEVERITY_DM_ACTIONS = frozenset(
     {
+        "p0_severity_major",
+        "p0_severity_minor",
+        # legacy button ids on in-flight cards
         "slack_severity_major",
         "slack_severity_minor",
-        "slack_minor_sre_backend",
-        "slack_minor_sre_fe",
-        "slack_minor_no_need",
-        "slack_minor_team_fpms",
-        "slack_minor_team_cpms",
-        "slack_minor_team_pms",
-        "slack_minor_fe_reach",
     }
 )
 
 # Last-resort: find real button action in raw JSON (some tenants hide event.action.value oddly).
-_SLACK_DM_ACTION_IN_JSON_RE = re.compile(
-    r'"action"\s*:\s*"(slack_severity_(?:major|minor)|slack_minor_[a-z0-9_]+)"'
+_P0_SEVERITY_ACTION_IN_JSON_RE = re.compile(
+    r'"action"\s*:\s*"(p0_severity_(?:major|minor)|slack_severity_(?:major|minor))"'
 )
 
 
-def _slack_dm_action_from_payload_regex(payload: Dict[str, Any]) -> str:
+def _p0_severity_action_from_payload_regex(payload: Dict[str, Any]) -> str:
     try:
         raw = json.dumps(payload, ensure_ascii=False)
     except Exception:
         return ""
-    m = _SLACK_DM_ACTION_IN_JSON_RE.search(raw)
+    m = _P0_SEVERITY_ACTION_IN_JSON_RE.search(raw)
     return m.group(1) if m else ""
 
 
-def _forced_slack_dm_action_from_event_action(payload: Dict[str, Any]) -> str:
+def _forced_p0_severity_action_from_event_action(payload: Dict[str, Any]) -> str:
     """
-    Match Slack severity / minor follow-up ids inside ``event.action`` only (not the whole webhook).
+    Match severity ids inside ``event.action`` only (not the whole webhook).
 
     Some Lark builds mis-parse ``value.action``; substring match on the **action** subtree keeps
     Major/Minor out of the overview preview path.
@@ -90,7 +86,7 @@ def _forced_slack_dm_action_from_event_action(payload: Dict[str, Any]) -> str:
         chunk = json.dumps(act, ensure_ascii=False)
     except Exception:
         return ""
-    for name in sorted(_SLACK_DM_SCOPE_ACTIONS, key=len, reverse=True):
+    for name in sorted(_P0_SEVERITY_DM_ACTIONS, key=len, reverse=True):
         if name in chunk:
             return name
     return ""
@@ -256,10 +252,10 @@ def _extract_card_action_name(payload: Dict[str, Any]) -> str:
     return ""
 
 
-def _find_slack_dm_card_action_nested(payload: Dict[str, Any]) -> str:
+def _find_p0_severity_card_action_nested(payload: Dict[str, Any]) -> str:
     """
     Some Lark clients send button ``action`` under nested paths (not only ``event.action.value``).
-    Walk the payload and return the first ``slack_severity_*`` / ``slack_minor_*`` id we see.
+    Walk the payload and return the first ``p0_severity_*`` / legacy ``slack_severity_*`` id we see.
     """
     out: List[str] = []
 
@@ -268,7 +264,7 @@ def _find_slack_dm_card_action_nested(payload: Dict[str, Any]) -> str:
             a = node.get("action")
             if isinstance(a, str) and a.strip():
                 s = a.strip()
-                if s.startswith("slack_severity_") or s.startswith("slack_minor_"):
+                if s.startswith("p0_severity_") or s.startswith("slack_severity_"):
                     out.append(s)
             for v in node.values():
                 walk(v)
@@ -287,7 +283,7 @@ def _find_slack_dm_card_action_nested(payload: Dict[str, Any]) -> str:
 
 def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
     """Primary parse + nested fallback so severity/minor buttons never fall through to the preview branch."""
-    forced = _forced_slack_dm_action_from_event_action(payload)
+    forced = _forced_p0_severity_action_from_event_action(payload)
     primary = (_extract_card_action_name(payload) or "").strip()
     if forced and forced != primary:
         log.info("card_action: using event.action substring %r (primary was %r)", forced, primary)
@@ -295,27 +291,25 @@ def _resolve_card_action_name(payload: Dict[str, Any]) -> str:
     if forced:
         return forced
 
-    nested = _find_slack_dm_card_action_nested(payload)
-    rx = _slack_dm_action_from_payload_regex(payload)
+    nested = _find_p0_severity_card_action_nested(payload)
+    rx = _p0_severity_action_from_payload_regex(payload)
 
-    # If Lark reports send_preview / etc. but the payload still contains slack_severity_* / slack_minor_*,
-    # route to Slack DM handlers (otherwise operators see "No overview preview" when tapping Major/Minor).
     if primary in _PREVIEW_WORKFLOW_ACTIONS:
-        if nested in _SLACK_DM_SCOPE_ACTIONS:
+        if nested in _P0_SEVERITY_DM_ACTIONS:
             log.info("card_action: overriding preview-like primary %r with nested %r", primary, nested)
             return nested
-        if rx in _SLACK_DM_SCOPE_ACTIONS:
+        if rx in _P0_SEVERITY_DM_ACTIONS:
             log.info("card_action: overriding preview-like primary %r with regex %r", primary, rx)
             return rx
 
     if nested and nested != primary:
-        if not primary or primary not in _SLACK_DM_SCOPE_ACTIONS:
+        if not primary or primary not in _P0_SEVERITY_DM_ACTIONS:
             log.info("card_action: nested action=%s (primary was %r)", nested, primary)
             return nested
     if not primary:
-        if nested in _SLACK_DM_SCOPE_ACTIONS:
+        if nested in _P0_SEVERITY_DM_ACTIONS:
             return nested
-        if rx in _SLACK_DM_SCOPE_ACTIONS:
+        if rx in _P0_SEVERITY_DM_ACTIONS:
             log.info("card_action: empty primary resolved to %r (regex)", rx)
             return rx
     return primary
@@ -382,8 +376,8 @@ def _send_help_commands_card(sender_open_id: str, tenant_token: str) -> None:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ Failed to send the help card.")
 
 
-def _handle_slack_minor_followup(payload: Dict[str, Any], tenant_token: str, action_name: str) -> None:
-    """Minor severity sub-cards: SRE BACKEND/FE, team FPMS/CPMS/PMS, FE reach (duty stubs)."""
+def _handle_p0_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
+    """DM card: Major / Minor severity choice."""
     sender_open_id = _extract_card_action_sender_open_id(payload)
     op_uid = _extract_card_action_operator_lark_user_id(payload)
     _maybe_merge_dm_scope_from_card(sender_open_id, payload)
@@ -393,63 +387,7 @@ def _handle_slack_minor_followup(payload: Dict[str, Any], tenant_token: str, act
         if sender_open_id:
             _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.", op_uid)
         return
-    err = _session.apply_slack_minor_card_action(
-        chat_id, tenant_token, sender_open_id, action_name, operator_lark_user_id=op_uid
-    )
-    if err == "no_session":
-        if sender_open_id:
-            _post_dm_text_card_action(
-                sender_open_id, tenant_token, "⚠️ This incident session is no longer active.", op_uid
-            )
-        return
-    if err == "disabled":
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "ℹ️ Severity prompt is disabled in configuration.", op_uid)
-        return
-    if err == "not_minor":
-        if sender_open_id:
-            _post_dm_text_card_action(
-                sender_open_id, tenant_token, "ℹ️ Minor follow-up only applies when severity is **Minor**.", op_uid
-            )
-        return
-    if err == "already_done":
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "ℹ️ This minor flow was already completed.", op_uid)
-        return
-    if err == "bad_phase":
-        if sender_open_id:
-            _post_dm_text_card_action(
-                sender_open_id,
-                tenant_token,
-                "ℹ️ Use the latest card in this thread — an earlier step may be outdated.",
-                op_uid,
-            )
-        return
-    if err == "unknown_action":
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Unknown minor action.", op_uid)
-        return
-    if err == "missing_user_id":
-        if sender_open_id:
-            _post_dm_text_primary_bot(
-                sender_open_id,
-                "⚠️ Cannot DM from the severity bot: missing tenant **user_id** (grant contact scope on the primary app, or ensure the incident was started from a group message so the sender id is stored).",
-            )
-        return
-
-
-def _handle_slack_severity_choice(payload: Dict[str, Any], tenant_token: str, is_major: bool) -> None:
-    """DM card: Major / Minor before Slack automation."""
-    sender_open_id = _extract_card_action_sender_open_id(payload)
-    op_uid = _extract_card_action_operator_lark_user_id(payload)
-    _maybe_merge_dm_scope_from_card(sender_open_id, payload)
-    _tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
-    chat_id = (src_inc or "").strip()
-    if not chat_id.startswith("oc_"):
-        if sender_open_id:
-            _post_dm_text_card_action(sender_open_id, tenant_token, "⚠️ Missing incident scope on this card.", op_uid)
-        return
-    err = _session.apply_slack_severity_choice(
+    err = _session.apply_p0_severity_choice(
         chat_id, tenant_token, sender_open_id, is_major, operator_lark_user_id=op_uid
     )
     if err == "no_session":
@@ -1170,19 +1108,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         if not sender_open_id or not action_name:
             log.warning("card.action.trigger missing sender/action payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
             return
-        if action_name in (
-            "slack_minor_sre_backend",
-            "slack_minor_sre_fe",
-            "slack_minor_no_need",
-            "slack_minor_team_fpms",
-            "slack_minor_team_cpms",
-            "slack_minor_team_pms",
-            "slack_minor_fe_reach",
-        ):
-            _handle_slack_minor_followup(payload, tenant_token, action_name)
-            return
-        if action_name in ("slack_severity_major", "slack_severity_minor"):
-            _handle_slack_severity_choice(payload, tenant_token, action_name == "slack_severity_major")
+        if action_name in ("p0_severity_major", "p0_severity_minor", "slack_severity_major", "slack_severity_minor"):
+            _handle_p0_severity_choice(payload, tenant_token, action_name.endswith("_major"))
             return
         if action_name in ("issue_watch_use_overview", "issue_watch_manual_overview"):
             from . import issue_watch_overview as _iwo
@@ -1457,38 +1384,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 except Exception as e:
                     log.warning("send_preview: adjustment bitable notice failed: %s", e)
             prev_src = str(preview.get("source_incident_chat_id") or "").strip()
-            if md:
-                if not src_inc:
-                    log.warning(
-                        "send_preview: Slack overview mirror SKIPPED — preview has no source_incident_chat_id "
-                        "(need oc_... so SLACK_API_CHANNEL_MAP / webhooks can route). "
-                        "Use Build overview from the P0 flow in the incident group, not a broken draft."
-                    )
-                else:
-                    try:
-                        from .slack_bridge import post_text_to_slack_for_incident
-
-                        # Mirror overview text to Slack whenever the operator sends to the Lark group — no Major/Minor gate.
-                        # (Severity still gates ``run_slack_p0_notify_and_huddle``; huddle below skips only when Minor.)
-                        if not post_text_to_slack_for_incident(src_inc, md):
-                            log.warning(
-                                "send_preview: Slack mirror failed for oc_=%s — check SLACK_BOT_TOKEN, "
-                                "bot invited to channel, SLACK_API_CHANNEL_MAP, or SLACK_OVERVIEW_WEBHOOK_MAP",
-                                src_inc[:24],
-                            )
-                    except Exception as e:
-                        log.warning("send_preview: Slack overview mirror failed: %s", e)
-            if (
-                src_inc
-                and _config.slack_huddle_on_overview_send()
-                and _session.slack_cross_post_slack_enabled_for_incident_chat(src_inc)
-            ):
-                try:
-                    from .slack_bridge import enqueue_slack_huddle_automation
-
-                    enqueue_slack_huddle_automation(src_inc, pri)
-                except Exception as e:
-                    log.warning("send_preview: Slack huddle automation hook failed: %s", e)
             fwd_warn = ""
             if use_forwarder and broadcast_dest and not forwarder_ok:
                 fwd_warn = "⚠️ Broadcast room post via overview bot failed (see server log)."
