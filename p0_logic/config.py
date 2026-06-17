@@ -460,6 +460,23 @@ def get_vc_recording_fanout_tenant_wide_view_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_vc_recording_fanout_drive_perm() -> str:
+    """
+    Optional Drive API collaborator role for Minutes after VC ``set_permission`` (view-only).
+
+    ``VC_RECORDING_FANOUT_DRIVE_PERM``: ``edit`` or ``view`` to grant via Drive API; empty / ``0`` = skip.
+
+    Requires duty **user_access_token** with ``docs:permission.member:create`` (+ ``update`` for edit).
+    """
+    reload_env_runtime()
+    v = (os.getenv("VC_RECORDING_FANOUT_DRIVE_PERM") or "").strip().lower()
+    if not v or v in ("0", "false", "no", "off"):
+        return ""
+    if v in ("view", "edit"):
+        return v
+    return ""
+
+
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
     """
     Lark chat_id for the final **Send overview** card.
