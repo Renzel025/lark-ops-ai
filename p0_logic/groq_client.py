@@ -289,6 +289,8 @@ _PRIORITY_KEYWORD_CLASSIFY_SYSTEM = (
     "- **question** — asking if something is P0/P1 or asking permission, not declaring.\n"
     "- **negation** — clearly **not** P0/P1 or no escalation needed.\n\n"
     "If both P0 and P1 appear, pick the priority the speaker is **actually assigning** to the live incident.\n"
+    "If the message mentions **only P0** (no P1), never return **declare_p1**. If only P1 (no P0), never return **declare_p0**.\n"
+    "Phrases like **can we consider this (one) as P0** are **question** (asking permission), not declare_p0.\n"
     "When unsure between declare vs handoff, prefer **handoff** if they are mainly **sharing a link/ticket**.\n"
     "When unsure between declare vs mention_only, prefer **declare_p0** only if they sound like they want **action now**."
 )

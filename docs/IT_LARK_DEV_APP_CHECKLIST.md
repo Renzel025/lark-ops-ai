@@ -1,7 +1,7 @@
 # Lark app setup for IT — P1/P0 automation bot (prod + dev copy)
 
-Use this when creating a **second dev app** or reviewing the **production** app.  
-Copy **permissions + events** from prod → dev; only **App ID / Secret / Encrypt Key / Webhook URL** differ.
+Use this when creating a second dev app or reviewing the production app.  
+Copy permissions + events from prod → dev; only App ID / Secret / Encrypt Key / Webhook URL differ.
 
 ---
 
@@ -9,19 +9,19 @@ Copy **permissions + events** from prod → dev; only **App ID / Secret / Encryp
 
 | Item | Value |
 |------|--------|
-| **Request URL** | `https://<your-domain>/lark/webhook` |
-| **Prod** | e.g. `https://lark-ops.company.com/lark/webhook` |
-| **Dev** | e.g. `https://lark-ops-dev.company.com/lark/webhook` |
-| **Encrypt Key** | Set in app → same value as `LARK_ENCRYPT_KEY` in server `.env` |
-| **Verification** | Lark sends `url_verification` challenge — app must return `challenge` (already implemented) |
+| Request URL | `https://<your-domain>/lark/webhook` |
+| Prod | e.g. `https://lark-ops.company.com/lark/webhook` |
+| Dev | e.g. `https://lark-ops-dev.company.com/lark/webhook` |
+| Encrypt Key | Set in app → same value as `LARK_ENCRYPT_KEY` in server `.env` |
+| Verification | Lark sends `url_verification` challenge — app must return `challenge` (already implemented) |
 
-**Important:** One Lark app = **one** Request URL. Dev and prod need **two apps** if both receive live events.
+Important: One Lark app = one Request URL. Dev and prod need two apps if both receive live events.
 
 ---
 
 ## 2. Event subscriptions (required)
 
-Subscribe in **Developer Console → Events**:
+Subscribe in Developer Console → Events:
 
 | Event | Why |
 |-------|-----|
@@ -41,7 +41,7 @@ Subscribe in **Developer Console → Events**:
 
 ## 3. API permissions / scopes
 
-Names may appear slightly differently in Lark vs Feishu console — enable the **equivalent** of:
+Names may appear slightly differently in Lark vs Feishu console — enable the equivalent of:
 
 ### Required (core bot)
 
@@ -61,10 +61,10 @@ Names may appear slightly differently in Lark vs Feishu console — enable the *
 
 | Scope | Used for |
 |-------|----------|
-| `im:message.urgent` or `im:message:urgent` | Issue Watch buzz + P0 ongoing DM buzz (in-app 加急) |
+| `im:message.urgent` or `im:message:urgent` |
 | `im:message.reactions:write_only` | Grafana on-demand ✅/❌ reactions on request message |
 | `vc:record:readonly` | Fetch recording URL after meeting |
-| `vc:record` | Grant recording view to hub groups (`set_permission`) — **confirm with IT** (some tenants need user token) |
+| `vc:record` | Grant recording view to hub groups (`set_permission`) — confirm with IT (some tenants need user token) |
 
 ### Optional (only if enabled in `.env`)
 
@@ -79,10 +79,10 @@ Names may appear slightly differently in Lark vs Feishu console — enable the *
 
 IT / ops must add the bot to:
 
-- **Detection** incident group(s) (`INCIDENT_GROUP_IDS`)
-- **Prompt / mirror** group(s) (`INCIDENT_OVERVIEW_TARGET_MAP` values)
-- **Overview / fanout** groups if configured (`INCIDENT_OVERVIEW_SEND_MAP`, `P0_NOTIFICATION_HUB_CHAT_IDS`, etc.)
-- **DM**: bot can message users listed in `P0_DM_INSTRUCTION_OPEN_IDS` (no group add needed for DM)
+- Detection incident group(s) (`INCIDENT_GROUP_IDS`)
+- Prompt / mirror group(s) (`INCIDENT_OVERVIEW_TARGET_MAP` values)
+- Overview / fanout groups if configured (`INCIDENT_OVERVIEW_SEND_MAP`, `P0_NOTIFICATION_HUB_CHAT_IDS`, etc.)
+- DM: bot can message users listed in `P0_DM_INSTRUCTION_OPEN_IDS` (no group add needed for DM)
 
 ---
 
@@ -90,17 +90,16 @@ IT / ops must add the bot to:
 
 | App | Purpose | Dev copy? |
 |-----|---------|-----------|
-| **Primary** (`LARK_APP_ID`) | Main P0 bot + webhook | **Yes** — create dev app |
-| **Severity** (`LARK_SEVERITY_APP_ID`) | Major/Minor severity DM cards (Lark) | Optional on dev; set `P0_SEVERITY_PROMPT_ENABLED=0` to skip |
-| **Overview forwarder** (`lark-forwarder`) | Second bot posts overview to broadcast room | Optional on dev; set `LARK_OVERVIEW_FORWARDER_ENABLED=0` |
+| Primary (`LARK_APP_ID`) | Main P0 bot + webhook | Yes — create dev app |
+| Overview forwarder (`lark-forwarder`) | Second bot posts overview to broadcast room | Optional on dev; set `LARK_OVERVIEW_FORWARDER_ENABLED=0` |
 
-Each extra app needs its own **App ID / Secret** and (if it sends messages) similar **im:message** scopes. Only the **primary** app needs the **main webhook** for group messages.
+Each extra app needs its own App ID / Secret and (if it sends messages) similar im:message scopes. Only the primary app needs the main webhook for group messages.
 
 ---
 
 ## 6. Server `.env` (not in Lark console)
 
-After IT creates the dev app, ops fills on **dev server only**:
+After IT creates the dev app, ops fills on dev server only:
 
 ```bash
 LARK_APP_ID=cli_dev_...
@@ -110,7 +109,7 @@ INCIDENT_GROUP_IDS=oc_dev_...
 # see env.staging.example
 ```
 
-Prod server keeps **prod** credentials — never copy dev `.env` to prod.
+Prod server keeps prod credentials — never copy dev `.env` to prod.
 
 ---
 
@@ -124,4 +123,4 @@ For testing Issue Watch + P0 declare + overview DM only:
 
 ---
 
-*Generated from `lark-ops-ai` codebase — `main.py` webhook + `env.example`.*
+Generated from `lark-ops-ai` codebase — `main.py` webhook + `env.example`.

@@ -1,6 +1,6 @@
 # lark-ops-ai
 
-Single runnable project: **main.py** + **lark_logic.py** + **p0_logic** (refactored package). No extra wiring — imports are already correct.
+Single runnable project: main.py + lark_logic.py + p0_logic (refactored package). No extra wiring — imports are already correct.
 
 ## Layout
 
@@ -17,8 +17,8 @@ lark-ops-ai/
 
 | Doc | Purpose |
 |-----|---------|
-| **[docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)** | **Master guide** — setup, architecture flowcharts, modules, all features |
-| [docs/ARCHITECTURE_AND_FLOW.md](docs/ARCHITECTURE_AND_FLOW.md) | Webhook + session Mermaid diagrams |
+| [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) | Master guide — setup, architecture, modules, all features |
+| [docs/ARCHITECTURE_AND_FLOW.md](docs/ARCHITECTURE_AND_FLOW.md) | Webhook + session flow |
 | [docs/DEPLOYMENT_ARCHITECTURE.md](docs/DEPLOYMENT_ARCHITECTURE.md) | VPS, nginx, TLS, systemd |
 | [docs/P0_P1_OPERATOR_GUIDE.md](docs/P0_P1_OPERATOR_GUIDE.md) | Operator SOP |
 | [docs/HOW_IT_WORKS_AND_NAVIGATION.md](docs/HOW_IT_WORKS_AND_NAVIGATION.md) | DM button navigation |
@@ -43,4 +43,4 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ## Do you need to “connect” anything?
 
-No. **main.py** and **lark_logic.py** already import from **p0_logic**; the package is in this folder, so nothing else to connect.
+No. main.py and lark_logic.py already import from p0_logic; the package is in this folder, so nothing else to connect.
