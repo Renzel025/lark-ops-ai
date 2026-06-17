@@ -2119,24 +2119,6 @@ def get_p0_graph_screenshot_blank_fallback_viewport() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
-def p0_severity_prompt_enabled() -> bool:
-    """
-    When True (default): after **P0** session starts, the **2nd** bot DMs **Major / Minor**
-    while the **primary** bot DMs the green overview card in parallel.
-
-    **P1** sessions do not use this prompt.
-
-    Set ``P0_SEVERITY_PROMPT_ENABLED=0`` to skip the Major/Minor DM.
-    Legacy alias (deprecated): ``SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION=0``.
-    """
-    reload_env_runtime()
-    for key in ("P0_SEVERITY_PROMPT_ENABLED", "SLACK_SEVERITY_PROMPT_BEFORE_AUTOMATION"):
-        raw = (os.getenv(key) or "").strip()
-        if raw:
-            return raw.lower() not in ("0", "false", "no", "off")
-    return True
-
-
 def get_lark_primary_app_credentials() -> Tuple[str, str]:
     """Main bot: P0 meeting, green overview DM, most IM (``LARK_APP_ID`` / ``LARK_APP_SECRET``)."""
     reload_env_runtime()

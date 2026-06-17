@@ -813,18 +813,9 @@ def _p0_ongoing_buzz_sent_key(tier: str) -> str:
     return "p0_ongoing_buzz_major_sent" if t == "major" else "p0_ongoing_buzz_minor_sent"
 
 
-def _session_p0_severity(sess: Dict[str, Any]) -> str:
-    return str((sess or {}).get("p0_severity") or (sess or {}).get("slack_severity") or "").strip().lower()
-
-
-def _p0_ongoing_buzz_tier_allowed(sess: Dict[str, Any], tier: str, *, require_severity: bool) -> bool:
+def _p0_ongoing_buzz_tier_allowed(sess: Dict[str, Any], tier: str) -> bool:
     t = (tier or "").strip().lower()
-    if not require_severity:
-        return t == "minor"
-    sev = _session_p0_severity(sess)
-    if t == "major":
-        return sev == "major"
-    return sev == "minor"
+    return t in ("major", "minor")
 
 
 def _send_p0_ongoing_dm_buzz(
@@ -914,9 +905,8 @@ def _try_send_p0_ongoing_dm_buzz_now(
     *,
     tier: str,
     run_id: str = "",
-    require_severity: bool = True,
 ) -> bool:
-    """Send buzz if session active, tier matches severity, and not already sent."""
+    """Send buzz if session active and not already sent."""
     cid = (chat_id or "").strip()
     t = (tier or "").strip().lower()
     if not cid or t not in ("major", "minor"):
@@ -932,7 +922,7 @@ def _try_send_p0_ongoing_dm_buzz_now(
         return False
     if str(sess.get("priority") or "").strip().upper() != "P0":
         return False
-    if not _p0_ongoing_buzz_tier_allowed(sess, t, require_severity=require_severity):
+    if not _p0_ongoing_buzz_tier_allowed(sess, t):
         return False
     tok = _lark.get_tenant_token_primary()
     if not tok:
@@ -949,32 +939,6 @@ def _try_send_p0_ongoing_dm_buzz_now(
     return True
 
 
-def _try_p0_ongoing_buzz_after_severity_choice(chat_id: str) -> None:
-    """If Major/Minor was chosen after the delay, send the matching buzz immediately."""
-    cid = (chat_id or "").strip()
-    if not cid or not _config.get_p0_ongoing_dm_buzz_enabled():
-        return
-    if not _config.p0_severity_prompt_enabled():
-        return
-    sess = P0_SESSIONS.get(cid)
-    if not sess:
-        return
-    sev = _session_p0_severity(sess)
-    if sev not in ("major", "minor"):
-        return
-    start = int(sess.get("start_epoch") or 0)
-    if start <= 0:
-        return
-    elapsed = time.time() - start
-    run_id = str(sess.get("p0_ongoing_buzz_run_id") or "").strip()
-    if sev == "major":
-        if elapsed >= float(_config.get_p0_ongoing_dm_buzz_major_delay_sec()):
-            _try_send_p0_ongoing_dm_buzz_now(cid, tier="major", run_id=run_id)
-    elif sev == "minor":
-        if elapsed >= float(_config.get_p0_ongoing_dm_buzz_minor_delay_sec()):
-            _try_send_p0_ongoing_dm_buzz_now(cid, tier="minor", run_id=run_id)
-
-
 def _start_p0_ongoing_buzz_worker(
     chat_id: str,
     trigger_open_id: str,
@@ -982,7 +946,6 @@ def _start_p0_ongoing_buzz_worker(
     *,
     tier: str,
     delay_sec: float,
-    require_severity: bool,
 ) -> None:
     t = (tier or "").strip().lower()
 
@@ -999,16 +962,14 @@ def _start_p0_ongoing_buzz_worker(
             if str(sess.get("p0_ongoing_buzz_run_id") or "") != run_id:
                 log.info("p0 ongoing buzz: worker exit (stale run_id) chat_id=%s tier=%s", chat_id, t)
                 return
-            if not _p0_ongoing_buzz_tier_allowed(sess, t, require_severity=require_severity):
+            if not _p0_ongoing_buzz_tier_allowed(sess, t):
                 log.info(
-                    "p0 ongoing buzz: worker skip (severity=%s tier=%s require_severity=%s) chat_id=%s",
-                    _session_p0_severity(sess),
+                    "p0 ongoing buzz: worker skip (tier=%s) chat_id=%s",
                     t,
-                    require_severity,
                     chat_id,
                 )
                 return
-            _try_send_p0_ongoing_dm_buzz_now(chat_id, tier=t, run_id=run_id, require_severity=require_severity)
+            _try_send_p0_ongoing_dm_buzz_now(chat_id, tier=t, run_id=run_id)
         except Exception as e:
             log.warning("p0 ongoing buzz worker failed chat_id=%s tier=%s err=%s", chat_id, t, e)
 
@@ -1023,7 +984,6 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
     """
     After P0 start, DM operators when the meeting is still active:
     **Major** → 5 min (default); **Minor** → 10 min (default).
-    When severity prompt is off, only the 10-minute minor-style buzz runs.
     """
     chat_id = (chat_id or "").strip()
     if not chat_id or not _config.get_p0_ongoing_dm_buzz_enabled():
@@ -1035,10 +995,9 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
     if str(sess0.get("priority") or "").strip().upper() != "P0":
         log.info("p0 ongoing buzz: not scheduled chat_id=%s (priority is not P0)", chat_id)
         return
-    severity_gated = _config.p0_severity_prompt_enabled()
     major_delay = float(_config.get_p0_ongoing_dm_buzz_major_delay_sec())
     minor_delay = float(_config.get_p0_ongoing_dm_buzz_minor_delay_sec())
-    if not severity_gated and minor_delay <= 0:
+    if major_delay <= 0 and minor_delay <= 0:
         return
     run_id = secrets.token_hex(8)
     sess0["p0_ongoing_buzz_run_id"] = run_id
@@ -1049,40 +1008,27 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
     if _session_disk.enabled():
         _session_disk.save_session(chat_id, sess0)
     log.info(
-        "p0 ongoing buzz: scheduled chat_id=%s run_id=%s severity_gated=%s major_sec=%s minor_sec=%s",
+        "p0 ongoing buzz: scheduled chat_id=%s run_id=%s major_sec=%s minor_sec=%s",
         chat_id,
         run_id,
-        severity_gated,
         int(major_delay),
         int(minor_delay),
     )
-    if severity_gated:
-        if major_delay > 0:
-            _start_p0_ongoing_buzz_worker(
-                chat_id,
-                trigger_open_id,
-                run_id,
-                tier="major",
-                delay_sec=major_delay,
-                require_severity=True,
-            )
-        if minor_delay > 0:
-            _start_p0_ongoing_buzz_worker(
-                chat_id,
-                trigger_open_id,
-                run_id,
-                tier="minor",
-                delay_sec=minor_delay,
-                require_severity=True,
-            )
-    elif minor_delay > 0:
+    if major_delay > 0:
+        _start_p0_ongoing_buzz_worker(
+            chat_id,
+            trigger_open_id,
+            run_id,
+            tier="major",
+            delay_sec=major_delay,
+        )
+    if minor_delay > 0:
         _start_p0_ongoing_buzz_worker(
             chat_id,
             trigger_open_id,
             run_id,
             tier="minor",
             delay_sec=minor_delay,
-            require_severity=False,
         )
 
 
@@ -1579,12 +1525,6 @@ def p0_cooldown_remaining_sec(chat_id: str) -> int:
         return int(P0_COOLDOWN_SEC - elapsed)
 
 
-def _severity_second_app_active() -> bool:
-    sid, sec = _config.get_lark_severity_app_credentials()
-    pid, _ = _config.get_lark_primary_app_credentials()
-    return bool(sid and sec and pid and sid != pid)
-
-
 def _resolve_lark_user_id_for_dm(
     operator_open_id: str,
     sess: Dict[str, Any],
@@ -1843,66 +1783,6 @@ def start_p0(
         [x for x in dm_targets if (x or "").strip()],
     )
     dm_targets_list = [x for x in dm_targets if (x or "").strip()]
-    # Severity (2nd bot) only for **P0**. P1 sessions get the usual primary-bot overview DM immediately.
-    if (
-        _config.p0_severity_prompt_enabled()
-        and dm_targets_list
-        and priority == "P0"
-    ):
-        P0_SESSIONS[chat_id]["p0_severity"] = "pending"
-        if _session_disk.enabled():
-            _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
-        card = _cards.build_p0_severity_prompt_card(
-            source_incident_chat_id=chat_id,
-            target_chat=target_chat,
-            group_label=chat_label,
-            priority=priority,
-        )
-        s_id, s_sec = _config.get_lark_severity_app_credentials()
-        p_id, _p = _config.get_lark_primary_app_credentials()
-        log.info(
-            "start_p0 severity DM: secondary_env_ok=%s severity_app_tail=%s primary_app_tail=%s "
-            "severity_same_app_as_primary=%s (if True, use separate LARK_SEVERITY_APP_ID for dedicated severity bot)",
-            bool(s_id and s_sec),
-            (s_id[-12:] if s_id else "MISSING"),
-            (p_id[-12:] if p_id else "none"),
-            bool(s_id and p_id and s_id == p_id),
-        )
-        tok_sev = _lark.get_tenant_token_for_severity_dm()
-        tok_pri = _lark.get_tenant_token_primary()
-        sess_snap = P0_SESSIONS.get(chat_id) or {}
-        for oid in dm_targets_list:
-            uid = _resolve_lark_user_id_for_dm(oid, sess_snap, trigger_lark_user_id if oid == trigger_open_id else "")
-            use_uid = _severity_second_app_active() and bool(uid)
-            if _severity_second_app_active() and not uid:
-                log.warning(
-                    "start_p0: no tenant user_id for cross-app severity DM open_id_tail=%s — "
-                    "posting severity card from primary bot instead",
-                    oid[-12:] if oid else "",
-                )
-                st, body, _mid = _lark.post_card_to_open_id(oid, tok_pri, card)
-            else:
-                st, body, _mid = _lark.post_card_to_user_cross_app(
-                    oid, uid, tok_sev, card, use_user_id=use_uid
-                )
-            if st != 200:
-                log.warning(
-                    "start_p0: severity card HTTP=%s open_id=%s body=%s",
-                    st,
-                    oid,
-                    (body or "")[:300],
-                )
-            else:
-                try:
-                    jb = json.loads(body or "{}")
-                    if isinstance(jb, dict) and jb.get("code") not in (0, None):
-                        log.warning(
-                            "start_p0: severity card Lark API code=%s msg=%s (still using this token; check bot / permission)",
-                            jb.get("code"),
-                            jb.get("msg"),
-                        )
-                except Exception:
-                    pass
     try:
         from .graph_screenshot import schedule_p0_graph_screenshot
 
@@ -1980,53 +1860,3 @@ def _flush_deferred_dm_instruction_for_incident(chat_id: str) -> None:
     for oid in _dm_instruction_targets(trigger):
         if oid:
             enqueue_dm_instruction_if_needed(oid, tok, item)
-
-
-def apply_p0_severity_choice(
-    chat_id: str,
-    token: str,
-    sender_open_id: str,
-    is_major: bool,
-    operator_lark_user_id: str = "",
-) -> Optional[str]:
-    """
-    Handle Major/Minor DM button. Returns ``None`` on success, or
-    ``no_session`` / ``already_answered`` / ``disabled`` / ``missing_user_id``.
-    """
-    if not _config.p0_severity_prompt_enabled():
-        return "disabled"
-    cid = (chat_id or "").strip()
-    if not cid.startswith("oc_"):
-        return "no_session"
-    sess = P0_SESSIONS.get(cid)
-    if not sess:
-        return "no_session"
-    sev = _session_p0_severity(sess)
-    if sev not in ("pending", ""):
-        return "already_answered"
-    luid = _resolve_lark_user_id_for_dm(sender_open_id, sess, operator_lark_user_id or "")
-    if _severity_second_app_active() and not luid:
-        return "missing_user_id"
-    severity = "major" if is_major else "minor"
-    sess["p0_severity"] = severity
-    if _session_disk.enabled():
-        _session_disk.save_session(cid, sess)
-    try:
-        _try_p0_ongoing_buzz_after_severity_choice(cid)
-    except Exception as e_buzz:
-        log.warning("apply_p0_severity_choice: ongoing buzz hook failed: %s", e_buzz)
-    if (sender_open_id or "").strip():
-        tok_sev = _lark.get_tenant_token_for_severity_dm()
-        use_uid = _severity_second_app_active() and bool(luid)
-        msg = (
-            "✅ Recorded as **Major** — full escalation path (Lark ring / ongoing buzz as configured)."
-            if is_major
-            else "✅ Recorded as **Minor** — lighter follow-up. Use the green **Build overview** card in the primary bot DM if needed."
-        )
-        _lark.post_text_to_user_cross_app(sender_open_id, luid, tok_sev, msg, use_user_id=use_uid)
-    return None
-
-
-def apply_slack_severity_choice(*args, **kwargs) -> Optional[str]:
-    """Deprecated alias — use ``apply_p0_severity_choice``."""
-    return apply_p0_severity_choice(*args, **kwargs)
