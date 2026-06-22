@@ -342,6 +342,45 @@ def get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id: str) ->
     return out
 
 
+def p0_meeting_cancelled_fanout_enabled() -> bool:
+    """``P0_MEETING_CANCELLED_FANOUT_ENABLED`` — notify extra groups when a meeting is cancelled (default ``1``)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_MEETING_CANCELLED_FANOUT_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_meeting_cancelled_fanout_chat_ids(source_incident_chat_id: str) -> List[str]:
+    """
+    Lark groups that receive the **meeting cancelled** card when a session is cancelled
+    (manual cancel or auto-cancel). Falls back to ``get_p0_meeting_created_text_fanout_chat_ids``
+    when ``P0_MEETING_CANCELLED_FANOUT_CHAT_IDS`` is unset (same boss / hub groups as join alert).
+    """
+    reload_env_runtime()
+    if not p0_meeting_cancelled_fanout_enabled():
+        return []
+    sid = (source_incident_chat_id or "").strip()
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(cid: str) -> None:
+        c = (cid or "").strip()
+        if not c.startswith("oc_") or len(c) < 12 or c in seen:
+            return
+        seen.add(c)
+        out.append(c)
+
+    raw = (
+        os.getenv("P0_MEETING_CANCELLED_FANOUT_CHAT_IDS")
+        or os.getenv("P0_MEETING_CANCELLED_TEXT_CHAT_IDS")
+        or ""
+    ).strip()
+    if raw:
+        for part in raw.split(","):
+            _add(part.strip())
+        return out
+    return get_p0_meeting_created_text_fanout_chat_ids(sid)
+
+
 def is_overview_post_destination_detection(
     dest_chat_id: str, source_incident_chat_id: str, session_target_chat: str
 ) -> bool:
@@ -475,6 +514,15 @@ def get_vc_recording_fanout_drive_perm() -> str:
     if v in ("view", "edit"):
         return v
     return ""
+
+
+def get_vc_recording_fanout_plain_meta_enabled() -> bool:
+    """
+    After the recording **card**, also post a compact ``RECORDING_READY`` text line for downstream
+    Minutes bots. Set ``VC_RECORDING_FANOUT_PLAIN_META=0`` to send the card only.
+    """
+    v = (os.getenv("VC_RECORDING_FANOUT_PLAIN_META") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
@@ -1269,21 +1317,60 @@ def get_p0_keyword_groq_gate() -> bool:
 
 def get_p0_keyword_ai_triage() -> bool:
     """
-    ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and ``GROQ_API_KEY`` is set, one Groq call classifies
-    each ``p0`` / ``p1`` keyword hit: **declaration** (start flow) vs **mention / handoff / question**
-    (ignore silently). Replaces ad-hoc handoff ack replies and overlaps with ``P0_KEYWORD_GROQ_GATE``.
+    ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and an AI key is set (``ANTHROPIC_API_KEY``,
+    ``GEMINI_API_KEY``, or ``GROQ_API_KEY``), one LLM call classifies each ``p0`` / ``p1`` keyword hit.
     """
     reload_env_runtime()
     v = (os.getenv("P0_KEYWORD_AI_TRIAGE") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
-def resolve_priority_keyword_ai_provider() -> str:
-    """Return ``groq`` when ``GROQ_API_KEY`` is set, else empty."""
+def _anthropic_api_key() -> str:
     reload_env_runtime()
-    if GROQ_API_KEY:
-        return "groq"
-    return ""
+    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+
+
+def get_anthropic_api_key() -> str:
+    """``ANTHROPIC_API_KEY`` for Claude triage. Never commit this value."""
+    return _anthropic_api_key()
+
+
+def _gemini_api_key() -> str:
+    reload_env_runtime()
+    return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+
+
+def get_gemini_api_key() -> str:
+    """``GEMINI_API_KEY`` or alias ``GOOGLE_API_KEY`` (Google AI Studio). Never commit this value."""
+    return _gemini_api_key()
+
+
+def priority_keyword_ai_provider_chain() -> list:
+    """
+    Ordered providers for P0/P1 keyword AI triage + failover.
+
+    ``auto`` (default): **claude → gemini → groq** (each step skipped if key missing).
+    Force one: ``P0_KEYWORD_AI_PROVIDER=claude|gemini|groq``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_KEYWORD_AI_PROVIDER") or "auto").strip().lower()
+    has_claude = bool(_anthropic_api_key())
+    has_gemini = bool(_gemini_api_key())
+    has_groq = bool(GROQ_API_KEY)
+    avail = {"claude": has_claude, "gemini": has_gemini, "groq": has_groq}
+    if raw in avail:
+        return [raw] if avail[raw] else []
+    chain: list = []
+    for name in ("claude", "gemini", "groq"):
+        if avail[name]:
+            chain.append(name)
+    return chain
+
+
+def resolve_priority_keyword_ai_provider() -> str:
+    """First provider in ``priority_keyword_ai_provider_chain()`` (for startup / availability checks)."""
+    chain = priority_keyword_ai_provider_chain()
+    return chain[0] if chain else ""
 
 
 def get_p0_keyword_use_builtin_context_filters() -> bool:
@@ -2326,12 +2413,6 @@ def get_p0_issue_watch_declare_also_send_to_group() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-def get_lark_bot_open_id() -> str:
-    """``LARK_BOT_OPEN_ID`` — optional ``ou_...`` for this bot (excluded from VC ring @mentions)."""
-    reload_env_runtime()
-    return (os.getenv("LARK_BOT_OPEN_ID") or "").strip()
-
-
 def _normalize_major_check_person_token(raw: str) -> Tuple[str, str]:
     """
     Parse one entry from ``P0_MAJOR_CHECK_PERSON_IDS``.
@@ -2553,8 +2634,24 @@ def get_p0_adjustment_bitable_doc_url() -> str:
     reload_env_runtime()
     return (
         os.getenv("P0_ADJUSTMENT_BITABLE_DOC_URL")
-        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblr1CwAW1GVOkUR&view=vewRD952Gw"
+        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblHHa3NmHmWian6&view=vewRD952Gw"
     ).strip()
+
+
+def get_p0_adjustment_bitable_all_fields_table_ids() -> Tuple[str, ...]:
+    """
+    Bitable table IDs that show **every column** on the deployment card.
+
+    Comma-separated ``P0_ADJUSTMENT_BITABLE_ALL_FIELDS_TABLE_IDS``.
+    Default: ``tblHHa3NmHmWian6`` (new Deployments base). Other tables (e.g. 线上操作)
+    keep the fixed column set unless their table id is listed here too.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_ALL_FIELDS_TABLE_IDS") or "").strip()
+    if raw:
+        parts = tuple(x.strip() for x in raw.split(",") if x.strip())
+        return parts if parts else ("tblHHa3NmHmWian6",)
+    return ("tblHHa3NmHmWian6",)
 
 
 def p0_adjustment_bitable_reply_in_thread() -> bool:
