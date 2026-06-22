@@ -2634,8 +2634,24 @@ def get_p0_adjustment_bitable_doc_url() -> str:
     reload_env_runtime()
     return (
         os.getenv("P0_ADJUSTMENT_BITABLE_DOC_URL")
-        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblr1CwAW1GVOkUR&view=vewRD952Gw"
+        or "https://casinoplus.sg.larksuite.com/base/LVrubE8f8af1yTslQgqlIaWPgcg?table=tblHHa3NmHmWian6&view=vewRD952Gw"
     ).strip()
+
+
+def get_p0_adjustment_bitable_all_fields_table_ids() -> Tuple[str, ...]:
+    """
+    Bitable table IDs that show **every column** on the deployment card.
+
+    Comma-separated ``P0_ADJUSTMENT_BITABLE_ALL_FIELDS_TABLE_IDS``.
+    Default: ``tblHHa3NmHmWian6`` (new Deployments base). Other tables (e.g. 线上操作)
+    keep the fixed column set unless their table id is listed here too.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_ALL_FIELDS_TABLE_IDS") or "").strip()
+    if raw:
+        parts = tuple(x.strip() for x in raw.split(",") if x.strip())
+        return parts if parts else ("tblHHa3NmHmWian6",)
+    return ("tblHHa3NmHmWian6",)
 
 
 def p0_adjustment_bitable_reply_in_thread() -> bool:

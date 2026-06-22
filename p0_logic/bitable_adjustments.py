@@ -105,6 +105,27 @@ def _pick_field(fields: Dict[str, Any], names: Tuple[str, ...]) -> str:
     return ""
 
 
+def _format_field_display(val: Any) -> str:
+    """Human-readable cell value; timestamps use MYT ``YYYY-MM-DD HH:MM:SS``."""
+    ts = _field_epoch_ms(val)
+    if ts:
+        return _fmt_ts_full(ts)
+    return _field_text(val)
+
+
+def _all_detail_fields(fields: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Every Bitable column on the row (sorted by header name)."""
+    if not fields:
+        return []
+    out: List[Tuple[str, str]] = []
+    for key in sorted(fields.keys(), key=lambda k: str(k).casefold()):
+        label = str(key).strip()
+        if not label:
+            continue
+        out.append((label, _format_field_display(fields[key])))
+    return out
+
+
 def _pick_time_ms(fields: Dict[str, Any], names: Tuple[str, ...]) -> Optional[int]:
     for name in names:
         if name and name in fields:
@@ -188,6 +209,14 @@ class BitableNoticeRow:
         return f"**{index}.**\n" + "\n".join(lines)
 
 
+def _all_fields_for_table(table_id: str) -> bool:
+    """True when this Bitable table should show every column (per-table allowlist)."""
+    tid = (table_id or "").strip()
+    if not tid:
+        return False
+    return tid in _config.get_p0_adjustment_bitable_all_fields_table_ids()
+
+
 def _row_from_record(
     fields: Dict[str, Any],
     cfg: Dict[str, Tuple[str, ...]],
@@ -195,6 +224,7 @@ def _row_from_record(
     kind: str,
     cutoff_ms: int,
     end_ms: int,
+    table_id: str = "",
 ) -> Optional[BitableNoticeRow]:
     if kind == "online_ops":
         start_ms = _pick_time_ms(fields, cfg["op_start_time"]) or 0
@@ -204,13 +234,16 @@ def _row_from_record(
         ]
         if not in_window:
             return None
-        detail_fields = [
-            ("执行操作", _pick_field(fields, cfg["operation"])),
-            ("执行操作时间", _fmt_ts_full(start_ms) if start_ms else ""),
-            ("项目", _pick_field(fields, cfg["project"])),
-            ("执行原因", _pick_field(fields, cfg["reason"])),
-            ("执行完毕时间", _fmt_ts_full(done_ms) if done_ms else ""),
-        ]
+        if _all_fields_for_table(table_id):
+            detail_fields = _all_detail_fields(fields)
+        else:
+            detail_fields = [
+                ("执行操作", _pick_field(fields, cfg["operation"])),
+                ("执行操作时间", _fmt_ts_full(start_ms) if start_ms else ""),
+                ("项目", _pick_field(fields, cfg["project"])),
+                ("执行原因", _pick_field(fields, cfg["reason"])),
+                ("执行完毕时间", _fmt_ts_full(done_ms) if done_ms else ""),
+            ]
         return BitableNoticeRow(detail_fields=detail_fields, sort_ms=max(in_window))
 
     blue_green_ms = _pick_time_ms(fields, cfg["blue_green_time"]) or 0
@@ -222,15 +255,18 @@ def _row_from_record(
     ]
     if not in_window:
         return None
-    tag = (_pick_field(fields, cfg["image_tag"]) or "").strip()
-    detail_fields = [
-        ("Service", _pick_field(fields, cfg["service"])),
-        ("Namespace", _pick_field(fields, cfg["namespace"])),
-        ("Image Tag", tag),
-        ("Blue Green Time", _fmt_ts_full(blue_green_ms) if blue_green_ms else ""),
-        ("Full Release Time", _fmt_ts_full(full_release_ms) if full_release_ms else ""),
-        ("Project", _pick_field(fields, cfg["project"])),
-    ]
+    if _all_fields_for_table(table_id):
+        detail_fields = _all_detail_fields(fields)
+    else:
+        tag = (_pick_field(fields, cfg["image_tag"]) or "").strip()
+        detail_fields = [
+            ("Service", _pick_field(fields, cfg["service"])),
+            ("Namespace", _pick_field(fields, cfg["namespace"])),
+            ("Image Tag", tag),
+            ("Blue Green Time", _fmt_ts_full(blue_green_ms) if blue_green_ms else ""),
+            ("Full Release Time", _fmt_ts_full(full_release_ms) if full_release_ms else ""),
+            ("Project", _pick_field(fields, cfg["project"])),
+        ]
     return BitableNoticeRow(detail_fields=detail_fields, sort_ms=max(in_window))
 
 
@@ -287,7 +323,12 @@ def fetch_recent_adjustments(
         if not isinstance(fields, dict):
             fields = {}
         row = _row_from_record(
-            fields, cfg, kind=row_kind, cutoff_ms=cutoff_ms, end_ms=end_ms
+            fields,
+            cfg,
+            kind=row_kind,
+            cutoff_ms=cutoff_ms,
+            end_ms=end_ms,
+            table_id=table_id,
         )
         if row:
             rows.append(row)

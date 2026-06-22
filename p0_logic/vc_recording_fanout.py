@@ -22,6 +22,56 @@ from . import lark_client as _lark
 
 log = logging.getLogger("lark-ops-ai")
 
+
+def _cards_recording_fn(name: str):
+    """Late-bind recording helpers — top-level ``from . import cards`` can be partial during import cycles."""
+    fn = getattr(_cards, name, None)
+    if callable(fn):
+        return fn
+    import importlib
+
+    cards_mod = importlib.import_module("p0_logic.cards")
+    fn = getattr(cards_mod, name, None)
+    return fn if callable(fn) else None
+
+
+def _build_recording_fanout_card_body(
+    topic: str,
+    meeting_no: str,
+    *,
+    meeting_id: str = "",
+    recording_url: str = "",
+    duration_text: str = "",
+) -> Dict[str, Any]:
+    build_fn = _cards_recording_fn("build_recording_available_card")
+    if build_fn:
+        return build_fn(
+            topic,
+            meeting_no,
+            meeting_id=meeting_id,
+            recording_url=recording_url,
+            duration_text=duration_text,
+        )
+    text_fn = _cards_recording_fn("build_recording_available_text")
+    if text_fn:
+        text = text_fn(
+            topic,
+            meeting_no,
+            meeting_id=meeting_id,
+            recording_url=recording_url,
+            duration_text=duration_text,
+        )
+        return {
+            "schema": "2.0",
+            "config": {"enable_forward": True},
+            "header": {
+                "template": "blue",
+                "title": {"tag": "plain_text", "content": "☁️ Meeting recording ready · 会议录制可用"},
+            },
+            "body": {"elements": [{"tag": "div", "text": {"tag": "lark_md", "content": text}}]},
+        }
+    raise AttributeError("p0_logic.cards missing build_recording_available_card / build_recording_available_text")
+
 _FANOUT_LOCK = threading.Lock()
 _FANOUT_DONE: Set[str] = set()
 _POLL_ACTIVE: Set[str] = set()
@@ -285,7 +335,7 @@ def fanout_recording_to_chats(
                 topic[:80],
             )
 
-    body = _cards.build_recording_available_card(
+    body = _build_recording_fanout_card_body(
         topic,
         meeting_no,
         meeting_id=mid,
@@ -294,13 +344,15 @@ def fanout_recording_to_chats(
     )
     meta_text = ""
     if _config.get_vc_recording_fanout_plain_meta_enabled():
-        meta_text = _cards.build_recording_ready_meta_text(
-            topic,
-            meeting_no,
-            meeting_id=mid,
-            recording_url=recording_url,
-            duration_text=duration_text,
-        )
+        meta_fn = _cards_recording_fn("build_recording_ready_meta_text")
+        if meta_fn:
+            meta_text = meta_fn(
+                topic,
+                meeting_no,
+                meeting_id=mid,
+                recording_url=recording_url,
+                duration_text=duration_text,
+            )
 
     ok_any = False
     for oc in targets:
