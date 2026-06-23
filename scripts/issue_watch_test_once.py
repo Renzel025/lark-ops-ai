@@ -11,6 +11,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from p0_logic import config
+
+config.apply_env_layers()
+
 from p0_logic.issue_watch_ai import classify_issue_watch_message
 
 
@@ -27,6 +30,8 @@ def main() -> int:
     print("P0_ISSUE_WATCH_ENABLED:", config.get_p0_issue_watch_enabled())
     print("DM recipients:", config.get_dm_instruction_open_ids())
     print("ANTHROPIC_API_KEY set:", bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()))
+    print("GROQ_API_KEY set:", bool((os.getenv("GROQ_API_KEY") or "").strip()))
+    print("P0_ISSUE_WATCH_AI_PROVIDER:", os.getenv("P0_ISSUE_WATCH_AI_PROVIDER") or "auto")
     print("---")
     print("MESSAGE:", msg)
     out = classify_issue_watch_message(msg)
