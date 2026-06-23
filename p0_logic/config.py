@@ -2271,11 +2271,11 @@ def get_p0_issue_watch_enabled() -> bool:
 
 def get_p0_issue_watch_min_confidence() -> float:
     reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.75").strip()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.88").strip()
     try:
         c = float(raw)
     except ValueError:
-        c = 0.75
+        c = 0.88
     if c > 1.0:
         c = c / 100.0
     return max(0.5, min(c, 0.99))
@@ -2301,6 +2301,22 @@ def get_p0_issue_watch_min_reports() -> int:
     except ValueError:
         n = 4
     return max(2, min(n, 20))
+
+
+def get_p0_issue_watch_min_solo_reporters() -> int:
+    """
+    Without widespread (``MIN_REPORTS``) impact, require this many unique reporters
+    on the same ``issue_fingerprint`` before a high-confidence solo message triggers
+    a Major alert. Default **2** (single OM/player report never pages alone).
+    Set **1** to restore legacy behaviour (one high-confidence message can alert).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_SOLO_REPORTERS") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(1, min(n, 10))
 
 
 def get_p0_issue_watch_cooldown_min() -> int:

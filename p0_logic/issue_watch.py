@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
-from .issue_watch_ai import classify_issue_watch_message, extract_player_ids
+from .issue_watch_ai import classify_issue_watch_message, extract_player_ids, is_maintenance_or_test_message
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -247,6 +247,8 @@ def _should_skip_noise(text: str) -> bool:
     t = (text or "").strip()
     if _is_player_id_list_message(t):
         return False
+    if is_maintenance_or_test_message(t):
+        return True
     if len(t) < _config.get_p0_issue_watch_min_text_len():
         return True
     low = t.lower()
@@ -641,13 +643,22 @@ def try_handle_issue_watch(
         categories.append("widespread_impact")
     widespread = reporter_count >= min_reports or players_mentioned >= min_reports
     high_conf = confidence >= min_conf
+    min_solo_reporters = _config.get_p0_issue_watch_min_solo_reporters()
+    if min_solo_reporters <= 1:
+        threshold_ok = high_conf or widespread
+    else:
+        threshold_ok = widespread or (high_conf and reporter_count >= min_solo_reporters)
 
-    if not high_conf and not widespread:
+    if not threshold_ok:
         log.info(
-            "issue_watch: signal below threshold chat_id=%s conf=%.2f reporters=%s fp=%s",
+            "issue_watch: signal below threshold chat_id=%s conf=%.2f reporters=%s "
+            "players=%s widespread=%s min_solo_reporters=%s fp=%s",
             cid,
             confidence,
             reporter_count,
+            players_mentioned,
+            widespread,
+            min_solo_reporters,
             fingerprint,
         )
         return True

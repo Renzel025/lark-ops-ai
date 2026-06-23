@@ -42,6 +42,12 @@ _ISSUE_WATCH_SYSTEM = (
     "withdrawal failing, all games cannot enter.\n"
     "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
     "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
+    "- is_incident_signal=FALSE for **maintenance** or **test during maintenance** (maintenance icon, "
+    "game under maintenance, set back to maintenance, scheduled maintenance) — expected downtime, "
+    "even if unable to enter/login/bet during the window.\n"
+    "- Single-player **bet rejected** / one table error for **one** player is NOT a major outage — "
+    "use is_incident_signal=false or very low confidence unless many players or all games affected.\n"
+    "- gameplay_outage = most/all games or enter-game broadly broken — NOT one live-table bet error.\n"
     "- is_incident_signal=FALSE when staff confirms things work: \"able to withdraw without any issue\", "
     "\"we were able to withdraw realtime without encountering any issue\", \"deposit is working fine\", "
     "\"checked — no problem\", \"resolved / back to normal\". Words like withdraw/deposit/issue in the "
@@ -327,6 +333,28 @@ def _summary_with_players(
     return base_summary
 
 
+_MAINTENANCE_TEST_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?is)\btest\s+during\s+maintenance\b"),
+    re.compile(r"(?is)\bduring\s+(?:\w+\s+){0,4}maintenance\b"),
+    re.compile(r"(?is)\bmaintenance\s+(?:icon|mode|window|period|scheduled|test)\b"),
+    re.compile(r"(?is)\bset\s+(?:back\s+)?to\s+maintenance\b"),
+    re.compile(r"(?is)\b(?:back|put)\s+(?:on|to)\s+maintenance\b"),
+    re.compile(r"(?is)\bstill\s+(?:on\s+)?maintenance\b"),
+    re.compile(r"(?is)\bscheduled\s+maintenance\b"),
+    re.compile(r"(?is)\bunder\s+maintenance\b"),
+    re.compile(r"(?is)\bmaintenance\s+icon\b"),
+    re.compile(r"(?is)\b(?:in|on)\s+maintenance\b"),
+)
+
+
+def is_maintenance_or_test_message(text: str) -> bool:
+    """Planned maintenance / test chatter — never a Major P0 detection signal."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return any(p.search(t) for p in _MAINTENANCE_TEST_PATTERNS)
+
+
 def _is_non_incident_status_update(text: str) -> bool:
     """Staff/player confirms success or explicitly no problem — not a detection signal."""
     t = (text or "").strip()
@@ -406,6 +434,17 @@ def classify_issue_watch_message(message_text: str) -> Optional[dict]:
     t = (message_text or "").strip()
     if not t:
         return None
+    if is_maintenance_or_test_message(t):
+        return {
+            "is_incident_signal": False,
+            "categories": [],
+            "confidence": 0.0,
+            "summary": "",
+            "issue_fingerprint": "",
+            "players_mentioned_in_message": 0,
+            "reason": "maintenance or test-during-maintenance — not a production incident",
+            "provider": "maintenance_guard",
+        }
     providers = _issue_watch_ai_providers_to_try()
     if not providers:
         log.warning("issue_watch_ai: no ANTHROPIC/GROQ key — keyword rules only (more false positives)")
