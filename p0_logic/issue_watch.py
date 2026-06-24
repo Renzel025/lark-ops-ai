@@ -20,12 +20,16 @@ log = logging.getLogger("lark-ops-ai")
 _CATEGORY_LABELS: Dict[str, Tuple[str, int]] = {
     "website_downtime": ("Website Downtime", 1),
     "login_issues": ("Login Issues", 2),
-    "registration_failures": ("Registration Failures", 3),
+    "gameplay_outage": ("Games / Events Entry", 3),
     "withdrawal_issues": ("Withdrawal Issues", 4),
     "deposit_issues": ("Deposit Issues", 5),
-    "backend_downtime": ("Backend Downtime (FPMS/PMS)", 6),
-    "gameplay_outage": ("Gameplay Outage", 7),
-    "widespread_impact": ("Widespread Impact (4+ players)", 8),
+    "promotion_voucher": ("Promotion / Voucher", 6),
+    "rebate_issues": ("Rebate", 7),
+    "luckycoin_issues": ("LuckyCoin", 8),
+    "company_loss": ("Company / Financial Loss", 9),
+    "registration_failures": ("Registration Failures", 10),
+    "backend_downtime": ("Backend Downtime (FPMS/PMS)", 11),
+    "widespread_impact": ("Widespread Impact (4+ players)", 12),
 }
 
 _STORE_LOCK = threading.Lock()

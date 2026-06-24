@@ -15,7 +15,18 @@ log = logging.getLogger("lark-ops-ai")
 
 _ISSUE_WATCH_SYSTEM = (
     "You triage Lark **detection / emergency feedback** group chat for an on-call ops bot.\n"
-    "Decide if a message reports a **production or player-facing issue** that duty should know about.\n\n"
+    "Flag messages that may be **Major P0** — production/player-facing problems duty must see.\n\n"
+    "**Major issue scope (prioritize these):**\n"
+    "1 **Login** — cannot log in, OTP/credential failures\n"
+    "2 **Games / events entering** — cannot enter or join games/events/lobbies (not one-table bet glitch)\n"
+    "3 **Withdrawal** — withdraw fails, stuck, unavailable\n"
+    "4 **Deposit** — deposit/top-up fails, stuck, unavailable\n"
+    "5 **Promotion / voucher** — promo codes, vouchers, coupons, campaigns not applying or broken\n"
+    "6 **Rebate** — rebate/cashback not credited, wrong amount, unavailable\n"
+    "7 **LuckyCoin** — LuckyCoin balance, redemption, or rewards broken\n"
+    "8 **Company loss / financial impact** — wrong payout, duplicate credit, overpayment, mass incorrect "
+    "settlement, or any issue explicitly causing company/player financial loss\n"
+    "Also major: website down, registration broken, FPMS/PMS backend down.\n\n"
     "Output ONLY valid JSON:\n"
     "{\n"
     '  "is_incident_signal": true|false,\n'
@@ -27,19 +38,21 @@ _ISSUE_WATCH_SYSTEM = (
     '  "reason": "one short sentence"\n'
     "}\n\n"
     "Categories (use exact keys, one or more):\n"
-    "1 website_downtime — official site cannot be accessed, infinite loading, site down\n"
-    "2 login_issues — site loads but login fails, credential errors, OTP send/validate failures\n"
-    "3 registration_failures — new users cannot register\n"
-    "4 withdrawal_issues — withdraw fails or unavailable\n"
-    "5 deposit_issues — deposit fails or unavailable\n"
-    "6 backend_downtime — FPMS or PMS backend unreachable or unusable\n"
-    "7 gameplay_outage — all or most games unplayable / cannot enter\n"
-    "8 widespread_impact — ONLY if this single message itself mentions 4+ distinct players/users "
+    "1 login_issues — login fails, credential/OTP errors\n"
+    "2 gameplay_outage — games/events/lobbies cannot be entered or joined broadly (NOT one bet rejected on one table)\n"
+    "3 withdrawal_issues — withdraw fails or unavailable\n"
+    "4 deposit_issues — deposit/top-up fails or unavailable\n"
+    "5 promotion_voucher — promotion, voucher, coupon, campaign problems\n"
+    "6 rebate_issues — rebate/cashback problems\n"
+    "7 luckycoin_issues — LuckyCoin balance, redemption, reward problems\n"
+    "8 company_loss — wrong payout, duplicate credit, overpayment, financial/company loss\n"
+    "9 website_downtime — official site cannot be accessed, infinite loading, site down\n"
+    "10 registration_failures — new users cannot register\n"
+    "11 backend_downtime — FPMS or PMS backend unreachable or unusable\n"
+    "12 widespread_impact — ONLY if this single message itself mentions 4+ distinct players/users "
     "reporting the same issue (rare; bot also counts across messages separately)\n\n"
     "Rules:\n"
-    "- is_incident_signal=TRUE when OM/duty/staff OR players report a real symptom, e.g. "
-    "\"kindly help check the CP website — continuously loading\", login OTP failing, FPMS down, "
-    "withdrawal failing, all games cannot enter.\n"
+    "- is_incident_signal=TRUE when staff/OM report real symptoms in the **Major issue scope** above.\n"
     "- is_incident_signal=false for: pure greetings/thanks, jokes, meeting invites, "
     "declaring p0/p1 bridge, screenshot-only requests with no incident, status with NO problem.\n"
     "- is_incident_signal=FALSE for **maintenance** or **test during maintenance** (maintenance icon, "
@@ -47,15 +60,17 @@ _ISSUE_WATCH_SYSTEM = (
     "even if unable to enter/login/bet during the window.\n"
     "- Single-player **bet rejected** / one table error for **one** player is NOT a major outage — "
     "use is_incident_signal=false or very low confidence unless many players or all games affected.\n"
-    "- gameplay_outage = most/all games or enter-game broadly broken — NOT one live-table bet error.\n"
+    "- gameplay_outage = enter-game/event broadly broken — NOT one live-table bet error.\n"
+    "- promotion/voucher/rebate/LuckyCoin: TRUE when players cannot claim, redeem, or receive expected rewards.\n"
+    "- company_loss: TRUE when message implies financial harm (duplicate credit, wrong settlement, company loss).\n"
     "- is_incident_signal=FALSE when staff confirms things work: \"able to withdraw without any issue\", "
     "\"we were able to withdraw realtime without encountering any issue\", \"deposit is working fine\", "
     "\"checked — no problem\", \"resolved / back to normal\". Words like withdraw/deposit/issue in the "
     "same message do NOT mean an incident if the meaning is success or no problem.\n"
-    "- Staff asking the team to investigate a website/login/deposit/withdrawal/backend/game issue = TRUE (high confidence).\n"
+    "- Staff asking the team to investigate a login/deposit/withdrawal/game/promo/rebate/LuckyCoin issue = TRUE (high confidence).\n"
     "- ``players can't deposit``, ``cant proceed to deposit``, ``deposit on cp website``, ``充值失败`` = deposit_issues (NOT login_issues).\n"
     "- If message mentions **deposit** / top-up / 充值, use deposit_issues even when **cp website** appears.\n"
-    "- issue_fingerprint: stable key (login_otp_failure, website_loading_cp, fpms_backend_down).\n"
+    "- issue_fingerprint: stable key (login_otp_failure, deposit_failure_cp, promo_voucher_not_applied, rebate_not_credited, luckycoin_redemption_fail).\n"
     "- Multilingual input (English, Chinese, Tagalog) — classify by meaning.\n"
 )
 
@@ -143,12 +158,71 @@ _KEYWORD_RULES: Tuple[Tuple[re.Pattern[str], List[str], str, float, str], ...] =
     (
         re.compile(
             r"(?is)\b(?:all|every)\s+games?\b.{0,40}\b(?:down|cannot|can't|unplayable|not\s+working)\b|"
-            r"无法进入游戏|游戏.{0,10}(?:进不去|打不开|全部)"
+            rf"\b{_NEGATED}\s+(?:enter|join|access)\b.{0,60}\b(?:game|event|lobby|table|room)\b|"
+            r"\b(?:game|event|lobby)\b.{0,50}\b(?:not\s+clickable|unable\s+to\s+enter|cannot\s+enter|"
+            r"can't\s+enter|cant\s+enter|unplayable|not\s+working)\b|"
+            r"无法进入游戏|无法进入|游戏.{0,10}(?:进不去|打不开|全部)|活动.{0,10}(?:进不去|打不开)"
         ),
         ["gameplay_outage"],
-        "gameplay_outage",
+        "gameplay_entry_failure",
         0.9,
-        "Gameplay outage reported",
+        "Players unable to enter games or events",
+    ),
+    (
+        re.compile(
+            r"(?is)"
+            r"\b(?:promo(?:tion)?|voucher|coupon|campaign|bonus\s+code)\b.{0,80}\b(?:fail|error|issue|"
+            r"problem|not\s+working|cannot|can't|cant|invalid|expired|not\s+applied|missing)\b|"
+            r"\b(?:fail|error|issue|problem|not\s+working|cannot|can't|cant|invalid|not\s+applied)\b.{0,80}"
+            r"\b(?:promo(?:tion)?|voucher|coupon|campaign)\b|"
+            r"优惠(?:券|码)?.{0,20}(?:失败|无法|不能|领不到|用不了)|代金券|促销"
+        ),
+        ["promotion_voucher"],
+        "promotion_voucher_failure",
+        0.9,
+        "Promotion or voucher issue reported",
+    ),
+    (
+        re.compile(
+            r"(?is)"
+            r"\brebate\b.{0,80}\b(?:fail|error|issue|problem|not\s+received|missing|wrong|incorrect|"
+            r"cannot|can't|cant|not\s+credited)\b|"
+            r"\b(?:fail|error|issue|problem|not\s+received|missing|wrong|not\s+credited)\b.{0,80}\brebate\b|"
+            r"\bcashback\b.{0,60}\b(?:fail|error|issue|not\s+received|missing|wrong)\b|"
+            r"返水.{0,20}(?:失败|无法|没有|不对|未到账)|返利"
+        ),
+        ["rebate_issues"],
+        "rebate_failure",
+        0.9,
+        "Rebate or cashback issue reported",
+    ),
+    (
+        re.compile(
+            r"(?is)"
+            r"\b(?:lucky\s*coin|luckycoin)\b.{0,80}\b(?:fail|error|issue|problem|not\s+received|missing|"
+            r"wrong|cannot|can't|cant|not\s+credited|redeem)\b|"
+            r"\b(?:fail|error|issue|problem|not\s+received|missing|wrong|redeem)\b.{0,80}"
+            r"\b(?:lucky\s*coin|luckycoin)\b|"
+            r"幸运币.{0,20}(?:失败|无法|没有|不对|未到账|兑换)"
+        ),
+        ["luckycoin_issues"],
+        "luckycoin_failure",
+        0.9,
+        "LuckyCoin issue reported",
+    ),
+    (
+        re.compile(
+            r"(?is)"
+            r"\b(?:company|financial|player)\s+loss\b|"
+            r"\b(?:duplicate|double|wrong|incorrect|over)\s+(?:credit|payout|payment|settlement|pay)\b|"
+            r"\b(?:mass|multiple|many)\s+players?\b.{0,80}\b(?:wrong|incorrect|duplicate|over)\b.{0,40}"
+            r"\b(?:credit|payout|payment|settlement)\b|"
+            r"公司.{0,10}损失|重复.{0,10}(?:派发|到账|入账)|多.{0,6}(?:派|发|付)"
+        ),
+        ["company_loss"],
+        "company_financial_loss",
+        0.93,
+        "Issue may cause company or player financial loss",
     ),
 )
 
@@ -161,6 +235,10 @@ _ALLOWED_CATEGORIES = frozenset(
         "deposit_issues",
         "backend_downtime",
         "gameplay_outage",
+        "promotion_voucher",
+        "rebate_issues",
+        "luckycoin_issues",
+        "company_loss",
         "widespread_impact",
     }
 )
