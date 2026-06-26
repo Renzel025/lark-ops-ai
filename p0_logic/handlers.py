@@ -568,6 +568,57 @@ def _post_send_block_warning_dm(sender_open_id: str, tenant_token: str, text: st
         _drafts.set_send_block_warning_message_id(sender_open_id, mid)
 
 
+def _overview_send_pending_note(*, use_forwarder: bool, broadcast_dest: str) -> str:
+    tail: List[str] = []
+    if use_forwarder and (broadcast_dest or "").strip().startswith("oc_"):
+        tail.append("broadcast room")
+    if _config.p0_adjustment_bitable_enabled() and _config.get_p0_adjustment_bitable_sources():
+        tail.append("deployment notices")
+    if not tail:
+        return ""
+    return "⏳ Finishing " + " & ".join(tail) + "…"
+
+
+def _post_dm_overview_sent_card(
+    sender_open_id: str,
+    tenant_token: str,
+    *,
+    pri: str,
+    lab: str,
+    lark_overview_dest: str,
+    post_mid: str,
+    target_chat: str,
+    src_inc: str,
+    forwarder_warning: str = "",
+) -> None:
+    """Replace blue preview DM with green sent card (removes Send to group immediately)."""
+    extra = (forwarder_warning or "").strip()
+    if not (post_mid or "").strip():
+        return
+    if not _group_overview_store.group_overview_edit_enabled():
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "✅ Overview sent to the target group chat." + (f"\n{extra}" if extra else ""),
+        )
+        return
+    sent_card = _cards.build_dm_overview_sent_card(
+        pri,
+        source_chat_label=lab,
+        group_chat_id=lark_overview_dest,
+        group_message_id=post_mid,
+        target_chat=target_chat,
+        source_incident_chat_id=src_inc,
+        forwarder_warning=extra,
+    )
+    if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card):
+        _lark.post_text_to_open_id(
+            sender_open_id,
+            tenant_token,
+            "✅ Overview sent to the target group chat." + (f"\n{extra}" if extra else ""),
+        )
+
+
 def _recall_dm_overview_edit_card(sender_open_id: str, tenant_token: str) -> None:
     """Remove the DM edit form so only the sent-overview card stays visible."""
     edit_mid = _drafts.take_edit_message_id(sender_open_id)
@@ -1076,6 +1127,33 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 )
                 return
             _recall_send_block_warning_dm(sender_open_id, tenant_token)
+            claimed, claim_reason = _drafts.try_claim_overview_send(sender_open_id)
+            if not claimed:
+                if claim_reason == "already_sent":
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "ℹ️ Overview was already sent to the group. "
+                        "Use **Edit overview** on the green card if you need changes.",
+                    )
+                elif claim_reason == "in_progress":
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "⏳ Overview is still posting — please wait (do not tap Send again).",
+                    )
+                else:
+                    _lark.post_text_to_open_id(
+                        sender_open_id,
+                        tenant_token,
+                        "⚠️ Could not send — no active preview. Tap **Build overview** again.",
+                    )
+                log.info(
+                    "send_preview: blocked duplicate open_id_tail=%s reason=%s",
+                    sender_open_id[-12:] if len(sender_open_id) > 12 else sender_open_id,
+                    claim_reason or "unknown",
+                )
+                return
             edit_mid = str(preview.get("edit_message_id") or "").strip()
             preview_mid = str(preview.get("preview_message_id") or "").strip()
             lab = _session.get_source_chat_label_for_target_chat(target_chat)
@@ -1085,6 +1163,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             )
             if not lark_overview_dest.startswith("oc_"):
                 _lark.post_text_to_open_id(sender_open_id, tenant_token, "⚠️ No valid overview destination chat.")
+                _drafts.release_overview_send_claim(sender_open_id)
                 return
             log.info(
                 "send_preview: Lark overview primary chat_id=%s broadcast=%s forwarder=%s "
@@ -1112,6 +1191,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     tenant_token,
                     "❌ Lark refused the overview post (see server log: lark_code / bot in group?).",
                 )
+                _drafts.release_overview_send_claim(sender_open_id)
                 return
             post_mid = (post_mid or "").strip()
             if not post_mid:
@@ -1120,12 +1200,18 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     lark_overview_dest,
                     (body or "")[:350],
                 )
+                _drafts.release_overview_send_claim(sender_open_id)
             else:
                 log.info(
                     "send_preview: posted overview message_id=%s dest_chat_id=%s (session_target_chat=%s)",
                     post_mid,
                     lark_overview_dest,
                     target_chat,
+                )
+                _drafts.record_overview_group_post(
+                    sender_open_id,
+                    group_chat_id=lark_overview_dest,
+                    group_message_id=post_mid,
                 )
                 _finalize_group_overview_for_edit(
                     tenant_token,
@@ -1143,6 +1229,21 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     support=support,
                     start_epoch=start_epoch,
                     sent_by_open_id=sender_open_id,
+                )
+                pending_note = _overview_send_pending_note(
+                    use_forwarder=use_forwarder,
+                    broadcast_dest=broadcast_dest,
+                )
+                _post_dm_overview_sent_card(
+                    sender_open_id,
+                    tenant_token,
+                    pri=pri,
+                    lab=lab,
+                    lark_overview_dest=lark_overview_dest,
+                    post_mid=post_mid,
+                    target_chat=target_chat,
+                    src_inc=src_inc,
+                    forwarder_warning=pending_note,
                 )
             forwarder_ok = True
             forwarder_mid = ""
@@ -1255,29 +1356,26 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 group_edit_only=bool(post_mid),
             )
             dm_extra = (f"\n{fwd_warn}" if fwd_warn else "") + (f"\n{adj_dm_note}" if adj_dm_note else "")
-            if post_mid and _group_overview_store.group_overview_edit_enabled():
-                sent_card = _cards.build_dm_overview_sent_card(
-                    pri,
-                    source_chat_label=lab,
-                    group_chat_id=lark_overview_dest,
-                    group_message_id=post_mid,
+            if post_mid:
+                final_note = fwd_warn or ""
+                _post_dm_overview_sent_card(
+                    sender_open_id,
+                    tenant_token,
+                    pri=pri,
+                    lab=lab,
+                    lark_overview_dest=lark_overview_dest,
+                    post_mid=post_mid,
                     target_chat=target_chat,
-                    source_incident_chat_id=src_inc,
-                    forwarder_warning=fwd_warn,
+                    src_inc=src_inc,
+                    forwarder_warning=final_note,
                 )
-                if not _drafts.post_or_patch_preview_card(sender_open_id, tenant_token, sent_card):
-                    _lark.post_text_to_open_id(
-                        sender_open_id,
-                        tenant_token,
-                        "✅ Overview sent to the target group chat." + dm_extra,
-                    )
-                elif adj_dm_note:
+                if adj_dm_note:
                     _lark.post_text_to_open_id(sender_open_id, tenant_token, adj_dm_note)
-            else:
+            elif dm_extra.strip():
                 _lark.post_text_to_open_id(
                     sender_open_id,
                     tenant_token,
-                    "✅ Overview sent to the target group chat." + dm_extra,
+                    "⚠️ Overview post did not return a message id — check the group feed." + dm_extra,
                 )
             _drafts.clear_draft(sender_open_id)
             _drafts.cancel_preview_timer(sender_open_id)
