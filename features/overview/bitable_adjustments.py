@@ -661,6 +661,11 @@ def maybe_post_adjustment_notice_on_p0_declare(
     if priority != "P0" or not cid.startswith("oc_"):
         return
     if not _config.p0_adjustment_bitable_enabled():
+        log.warning(
+            "adjustment_bitable: skipped on P0 declare — not enabled. "
+            "Set P0_ADJUSTMENT_BITABLE_ENABLED=1 + P0_ADJUSTMENT_BITABLE_APP_TOKEN + "
+            "TABLE_ID / OPS_TABLE_ID in .env (or .env.dev), restart service."
+        )
         return
     if not _config.p0_adjustment_bitable_on_p0_declare():
         log.info("adjustment_bitable: on_p0_declare disabled (P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE=0)")
@@ -683,6 +688,14 @@ def maybe_post_adjustment_notice_on_p0_declare(
         )
         if posted:
             _mark_session_bitable_posted(cid)
+        else:
+            log.warning(
+                "adjustment_bitable: P0 declare — enabled but no cards posted "
+                "(0 rows in 48h window, fetch error, or missing TABLE_ID). "
+                "source_tail=%s dest_tail=%s — grep adjustment_bitable in journalctl",
+                cid[-12:] if len(cid) > 12 else cid,
+                dest[-12:] if len(dest) > 12 else dest,
+            )
     except Exception as e:
         log.warning("adjustment_bitable: on_p0_declare failed source=%s err=%s", cid[:24], e)
 
