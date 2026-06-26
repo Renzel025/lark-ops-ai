@@ -194,13 +194,11 @@ def build_ops_summary_card(
         [
             {"tag": "hr"},
             {
-                "tag": "note",
-                "elements": [
-                    {
-                        "tag": "plain_text",
-                        "content": "OSE 系统自动生成 · 如需完整记录请查阅 Lark Base",
-                    }
-                ],
+                "tag": "markdown",
+                "content": (
+                    "<font color='grey'>OSE 系统自动生成 · "
+                    "如需完整记录请查阅 Lark Base</font>"
+                ),
             },
         ]
     )
@@ -275,19 +273,10 @@ def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
                         },
                         {"tag": "markdown", "content": f"<font color='grey'>{_dash(row.email)}</font>"},
                         {
-                            "tag": "collapsible_panel",
-                            "expanded": False,
-                            "header": {
-                                "title": {
-                                    "tag": "markdown",
-                                    "content": "<font color='grey'>更新内容</font>",
-                                },
-                                "vertical_align": "center",
-                                "padding": "4px 0px",
-                            },
-                            "elements": [
-                                {"tag": "markdown", "content": _dash(row.changelog)},
-                            ],
+                            "tag": "markdown",
+                            "content": (
+                                f"<font color='grey'>更新内容</font>\n{_dash(row.changelog)}"
+                            ),
                         },
                     ],
                 },
@@ -353,16 +342,11 @@ def build_deploy_page_cards(
             [
                 {"tag": "hr"},
                 {
-                    "tag": "note",
-                    "elements": [
-                        {
-                            "tag": "plain_text",
-                            "content": (
-                                f"OSE 系统自动生成 · 第 {page_current} 页 · "
-                                f"条目 {item_start}–{item_end} / {total}"
-                            ),
-                        }
-                    ],
+                    "tag": "markdown",
+                    "content": (
+                        f"<font color='grey'>OSE 系统自动生成 · 第 {page_current} 页 · "
+                        f"条目 {item_start}–{item_end} / {total}</font>"
+                    ),
                 },
             ]
         )

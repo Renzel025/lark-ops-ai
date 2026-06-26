@@ -1907,6 +1907,7 @@ def start_p0(
         try:
             from features.overview import bitable_adjustments as _bitable_adj
 
+            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
             _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
                 token,
                 source_chat_id=chat_id,

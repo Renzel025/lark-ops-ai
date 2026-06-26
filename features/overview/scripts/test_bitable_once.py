@@ -80,11 +80,12 @@ def main() -> int:
         print("ERROR: --post requires --chat-id=oc_...", file=sys.stderr)
         return 3
 
-    posted, lines = adj._post_boss_style_notices(  # noqa: SLF001
+    posted, lines, diag = adj._post_boss_style_notices(  # noqa: SLF001
         token, group_chat_id=oc, trigger="manual_test"
     )
     print("---")
     print("posted:", posted)
+    print("diag:", diag)
     for line in lines:
         print(line)
     return 0 if posted else 4

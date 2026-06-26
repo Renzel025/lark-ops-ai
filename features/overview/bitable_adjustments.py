@@ -554,10 +554,17 @@ def _post_boss_style_notices(
     group_chat_id: str,
     overview_message_id: str = "",
     trigger: str = "overview",
-) -> Tuple[bool, List[str]]:
-    """Post ops summary card then paginated deployment cards. Returns (posted, dm_lines)."""
+) -> Tuple[bool, List[str], Dict[str, Any]]:
+    """Post ops summary card then paginated deployment cards. Returns (posted, dm_lines, diag)."""
+    diag: Dict[str, Any] = {
+        "ops_rows": 0,
+        "deploy_rows": 0,
+        "ops_err": "",
+        "deploy_err": "",
+        "card_post_failed": False,
+    }
     if not group_chat_id:
-        return False, []
+        return False, [], diag
     app_token = _config.get_p0_adjustment_bitable_app_token()
     dm_lines: List[str] = []
     posted_any = False
@@ -572,8 +579,10 @@ def _post_boss_style_notices(
             source_id="online_ops",
         )
         if err:
+            diag["ops_err"] = err[:300]
             log.warning("adjustment_bitable: ops fetch failed trigger=%s err=%s", trigger, err[:200])
         elif ops_rows:
+            diag["ops_rows"] = len(ops_rows)
             w_start, w_end = _window_start_end_labels(window_label)
             ops_card = build_ops_summary_card(ops_rows, window_start=w_start, window_end=w_end)
             cards = [ops_card]
@@ -587,6 +596,7 @@ def _post_boss_style_notices(
                     group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
                 )
             else:
+                diag["card_post_failed"] = True
                 log.warning(
                     "adjustment_bitable: ops card build ok but Lark post failed trigger=%s rows=%s",
                     trigger,
@@ -609,8 +619,10 @@ def _post_boss_style_notices(
         )
         window_label = win2 or window_label
         if err:
+            diag["deploy_err"] = err[:300]
             log.warning("adjustment_bitable: deploy fetch failed trigger=%s err=%s", trigger, err[:200])
         elif dep_rows:
+            diag["deploy_rows"] = len(dep_rows)
             w_start, w_end = _window_start_end_labels(window_label)
             page_size = _config.get_p0_adjustment_bitable_deploy_page_size()
             dep_cards = build_deploy_page_cards(
@@ -633,6 +645,7 @@ def _post_boss_style_notices(
                     group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
                 )
             else:
+                diag["card_post_failed"] = True
                 log.warning(
                     "adjustment_bitable: deploy cards build ok but Lark post failed trigger=%s rows=%s",
                     trigger,
@@ -645,8 +658,35 @@ def _post_boss_style_notices(
                 window_label or "(unknown)",
             )
 
+    diag["window_label"] = window_label
     _ = overview_message_id  # boss cards post to group feed; thread reply optional later
-    return posted_any, dm_lines
+    return posted_any, dm_lines, diag
+
+
+def _format_p0_declare_bitable_miss_text(diag: Dict[str, Any]) -> str:
+    """One-line hint in group when P0 declare expected cards but none posted."""
+    ops_err = (diag.get("ops_err") or "").strip()
+    dep_err = (diag.get("deploy_err") or "").strip()
+    ops_n = int(diag.get("ops_rows") or 0)
+    dep_n = int(diag.get("deploy_rows") or 0)
+    win = (diag.get("window_label") or "").strip()
+    if ops_err or dep_err:
+        hint = ops_err or dep_err
+        return (
+            "⚠️ **Bitable (P0 declare):** fetch failed — check DEV bot has "
+            "`bitable:app:readonly` scope + access to the Base.\n"
+            f"Detail: `{hint[:180]}`"
+        )
+    if diag.get("card_post_failed") and (ops_n or dep_n):
+        return (
+            f"⚠️ **Bitable (P0 declare):** found {ops_n} ops + {dep_n} deploy row(s) "
+            "but interactive card post failed — see server log `adjustment_bitable`."
+        )
+    win_part = f" ({win})" if win else ""
+    return (
+        f"ℹ️ **Bitable (P0 declare):** no ops/deploy rows in 48h window{win_part}. "
+        "Cards only show when Base has matching times."
+    )
 
 
 def _mark_session_bitable_posted(source_chat_id: str) -> None:
@@ -705,7 +745,7 @@ def maybe_post_adjustment_notice_on_p0_declare(
         dest[-12:] if len(dest) > 12 else dest,
     )
     try:
-        posted, _lines = _post_boss_style_notices(
+        posted, _lines, diag = _post_boss_style_notices(
             tenant_token,
             group_chat_id=dest,
             trigger="p0_declare",
@@ -715,11 +755,17 @@ def maybe_post_adjustment_notice_on_p0_declare(
         else:
             log.warning(
                 "adjustment_bitable: P0 declare — enabled but no cards posted "
-                "(0 rows in 48h window, fetch error, or missing TABLE_ID). "
-                "source_tail=%s dest_tail=%s — grep adjustment_bitable in journalctl",
+                "(0 rows in 48h window, fetch error, or card post failed). "
+                "source_tail=%s dest_tail=%s diag=%s",
                 cid[-12:] if len(cid) > 12 else cid,
                 dest[-12:] if len(dest) > 12 else dest,
+                diag,
             )
+            try:
+                hint = _format_p0_declare_bitable_miss_text(diag)
+                _lark.post_text_to_chat(dest, tenant_token, hint)
+            except Exception as hint_err:
+                log.warning("adjustment_bitable: p0_declare hint post failed: %s", hint_err)
     except Exception as e:
         log.warning("adjustment_bitable: on_p0_declare failed source=%s err=%s", cid[:24], e)
 
@@ -936,7 +982,7 @@ def maybe_post_adjustment_notice_after_overview(
     )
 
     try:
-        posted_any, dm_lines = _post_boss_style_notices(
+        posted_any, dm_lines, _diag = _post_boss_style_notices(
             tenant_token,
             group_chat_id=group_chat_id,
             overview_message_id=overview_message_id,
