@@ -1,22 +1,28 @@
 # p0_logic
 
-Refactored P0 incident logic as a Python package. Drop this folder into your project and use the public API.
+Shared **core** for the bot (config, Lark client, cards, handlers, AI clients).
 
-## Layout
+Feature-specific logic lives under **`features/`** — see [`features/README.md`](../features/README.md).
+
+| Area | Location |
+|------|----------|
+| Grafana screenshot | `features/screenshot/` |
+| Overview draft/send | `features/overview/` |
+| VC recording fan-out | `features/recording/` |
+| Issue Watch | `features/issue_watch/` |
+| P0/P1 session | `features/session/` |
+
+Thin **shim files** in this folder (e.g. `graph_screenshot.py`) re-export from `features.*` so existing `from p0_logic import …` keeps working.
+
+## Core modules here
 
 | Module | Role |
 |--------|------|
-| `config` | Env reload, timeouts, API bases, regex patterns, timing constants |
-| `lark_client` | Tenant token, post message/card, VC reserve/end, Sheets, image download |
-| `groq_client` | Groq chat, vision OCR, translate to Chinese |
-| `text_processing` | Normalization, player count, impact scope, clean pasted text |
-| `issues` | Issue summarization and regeneration (Groq) |
-| `support` | Support map from sheet, department matching, support request text |
-| `cards` | All Lark card builders and bilingual overview markdown |
-| `session` | P0 session state, start/end/cancel, timers, session lookup |
-| `participants` | Meeting participants list and add/remove |
-| `drafts` | Draft and preview state, build preview from draft |
-| `handlers` | DM message handler and Lark card action handler |
+| `config` | Env reload, routing, feature flags |
+| `lark_client` | Tenant token, post message/card, VC API |
+| `cards` | Lark card builders |
+| `handlers` | DM + card action orchestration |
+| `groq_client` / `anthropic_client` / `gemini_client` | LLM providers |
 
 ## Usage from your app
 

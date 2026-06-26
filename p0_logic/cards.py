@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from . import config as _config
 from . import groq_client as _groq
-from . import session as _session
+from features.session import session as _session
 from . import text_processing as _text
 
 PHT = _config.PHT

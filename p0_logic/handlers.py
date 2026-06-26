@@ -10,15 +10,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import bitable_adjustments as _bitable_adj
+from features.overview import bitable_adjustments as _bitable_adj
 from . import cards as _cards
 from . import config as _config
-from . import drafts as _drafts
+from features.overview import drafts as _drafts
 from . import lark_client as _lark
-from . import group_overview_store as _group_overview_store
-from . import overview_forwarder as _overview_forwarder
-from . import participants as _participants
-from . import session as _session
+from features.overview import group_overview_store as _group_overview_store
+from features.overview import overview_forwarder as _overview_forwarder
+from features.session import participants as _participants
+from features.session import session as _session
 from . import support as _support
 from . import text_processing as _text
 from .perf_log import perf_log
@@ -948,7 +948,7 @@ def handle_dm_generate_overview(
 
 
 def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
-    from . import issues as _issues
+    from features.overview import issues as _issues
 
     action_name = card_action_name_from_payload(payload)
     if action_name == "unknown":
@@ -1006,7 +1006,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             log.warning("card.action.trigger missing sender/action payload=%s", json.dumps(payload, ensure_ascii=False)[:4000])
             return
         if action_name in ("issue_watch_use_overview", "issue_watch_manual_overview"):
-            from . import issue_watch_overview as _iwo
+            from features.issue_watch import issue_watch_overview as _iwo
 
             val = _card_action_value_dict(payload)
             alert_key = str(val.get("issue_watch_alert_key") or "").strip()
@@ -1030,7 +1030,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 )
             return
         if action_name in ("issue_watch_declare_p0", "issue_watch_declare_p0_dismiss"):
-            from . import issue_watch_declare as _iwd
+            from features.issue_watch import issue_watch_declare as _iwd
 
             val = _card_action_value_dict(payload)
             if action_name == "issue_watch_declare_p0_dismiss":
@@ -1324,6 +1324,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         group_chat_id=lark_overview_dest,
                         overview_message_id=post_mid,
                         sender_open_id=sender_open_id,
+                        source_chat_id=src_inc,
                     )
                 except Exception as e:
                     log.warning("send_preview: adjustment bitable notice failed: %s", e)

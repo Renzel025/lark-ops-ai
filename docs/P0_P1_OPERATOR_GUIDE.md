@@ -159,7 +159,7 @@ Unless noted, matching is case-insensitive. Incident group = chats listed in `IN
 ### Card buttons (not typed)
 
 - DM: Build overview, Clear draft, Participants, preview (Send to group, Generate, Edit, Cancel), edit form (Save, Back).
-- Group: P1 Create meeting / Not needed; P1 15‑min Declare as P0 / Still P1; overview/edit flows as implemented in `p0_logic/handlers.py`.
+- Group: P1 Create meeting / Not needed; P1 15‑min Declare as P0 / Still P1; overview/edit flows in `p0_logic/handlers.py` and `features/overview/`.
 
 ### Operator restriction (optional)
 

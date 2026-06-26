@@ -28,11 +28,11 @@ from p0_logic.config import (
     HELP_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
-from p0_logic.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
+from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
-from p0_logic.graph_screenshot_request import try_handle_graph_screenshot_request
-from p0_logic.issue_watch import try_handle_issue_watch
+from features.screenshot.graph_screenshot_request import try_handle_graph_screenshot_request
+from features.issue_watch.issue_watch import try_handle_issue_watch
 from p0_logic import (
     start_p0,
     cancel_p0_session,

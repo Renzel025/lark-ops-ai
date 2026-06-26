@@ -1,46 +1,50 @@
-# lark-ops-ai
+# lark-ops-ai-dev
 
-Single runnable project: main.py + lark_logic.py + p0_logic (refactored package). No extra wiring — imports are already correct.
+Lark/Feishu bot for P0/P1 incidents: VC meetings, DM overview builder, optional Issue Watch, Grafana screenshots, recording fan-out.
 
 ## Layout
 
 ```
-lark-ops-ai/
-├── main.py           # FastAPI webhook, VC events, DM, card actions
-├── lark_logic.py      # P0/P1 triggers, wiki routing, process_message
-├── wiki_ai_logic.py   # Wiki/doc + Groq answers
-├── p0_logic/          # P0 session, drafts, cards (package)
-└── README.md
+├── main.py              # FastAPI webhook
+├── lark_logic.py        # Message routing (incident / wiki / DM)
+├── p0_logic/            # Shared core (config, cards, handlers, Lark client, AI clients)
+├── features/            # Feature modules + manual scripts (see features/README.md)
+│   ├── screenshot/
+│   ├── overview/
+│   ├── recording/
+│   ├── issue_watch/
+│   └── session/
+├── scripts/             # Dev/deploy helpers (run_dev.sh, nginx/, systemd/)
+└── docs/                # Operator + deploy + IT checklist
+```
+
+## Run locally
+
+```bash
+pip install -r p0_logic/requirements.txt
+pip install fastapi uvicorn lark-oapi pycryptodome
+cp env.dev.example .env.dev
+ENV_PROFILE=dev bash scripts/run_dev.sh
 ```
 
 ## Docs
 
 | Doc | Purpose |
 |-----|---------|
-| [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) | Master guide — setup, architecture, modules, all features |
-| [docs/ARCHITECTURE_AND_FLOW.md](docs/ARCHITECTURE_AND_FLOW.md) | Webhook + session flow |
-| [docs/DEPLOYMENT_ARCHITECTURE.md](docs/DEPLOYMENT_ARCHITECTURE.md) | VPS, nginx, TLS, systemd |
-| [docs/P0_P1_OPERATOR_GUIDE.md](docs/P0_P1_OPERATOR_GUIDE.md) | Operator SOP |
-| [docs/HOW_IT_WORKS_AND_NAVIGATION.md](docs/HOW_IT_WORKS_AND_NAVIGATION.md) | DM button navigation |
-| [p0_logic/README.md](p0_logic/README.md) | Package module reference |
+| [docs/P0_P1_OPERATOR_GUIDE.md](docs/P0_P1_OPERATOR_GUIDE.md) | How to use the bot (operators) |
+| [docs/IT_LARK_DEV_APP_CHECKLIST.md](docs/IT_LARK_DEV_APP_CHECKLIST.md) | Lark app scopes & events |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Server deploy & restart |
+| [features/README.md](features/README.md) | Feature folders + test scripts |
+| [env.example](env.example) | Full env reference |
 
-## Run
+## Manual test scripts
 
 ```bash
-cd /Users/slphc/lark-ops-ai
-pip install -r p0_logic/requirements.txt
-pip install fastapi uvicorn lark-oapi pycryptodome
-uvicorn main:app --host 0.0.0.0 --port 8000
+python3 features/recording/scripts/post_card_once.py
+python3 features/screenshot/scripts/grafana_screenshot_run_once.py --post-lark
+python3 features/issue_watch/scripts/test_once.py "website loading"
 ```
 
-## Env
+## Env (minimum)
 
-- `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_ENCRYPT_KEY`
-- `GROQ_API_KEY`
-- `INCIDENT_GROUP_ID`, `WIKI_GROUP_CHAT_ID` (optional)
-- `WIKI_DOC_TOKEN` (optional, for wiki_ai_logic)
-- Other p0_logic vars: see `p0_logic/README.md`
-
-## Do you need to “connect” anything?
-
-No. main.py and lark_logic.py already import from p0_logic; the package is in this folder, so nothing else to connect.
+`LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_ENCRYPT_KEY`, `INCIDENT_GROUP_IDS`, `GROQ_API_KEY` — see `env.example`.

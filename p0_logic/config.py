@@ -1604,7 +1604,7 @@ def get_p0_graph_screenshot_ai_enabled() -> bool:
 
 def get_p0_graph_screenshot_ai_provider() -> str:
     """``claude`` | ``groq`` | ``auto`` — see ``graph_screenshot_ai.resolve_graph_screenshot_ai_provider``."""
-    from .graph_screenshot_ai import resolve_graph_screenshot_ai_provider
+    from features.screenshot.graph_screenshot_ai import resolve_graph_screenshot_ai_provider
 
     return resolve_graph_screenshot_ai_provider()
 
@@ -2677,6 +2677,24 @@ def p0_adjustment_bitable_reply_in_thread() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def p0_adjustment_bitable_on_p0_declare() -> bool:
+    """Post ops + deployment cards when P0 is declared (default on when bitable enabled)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_adjustment_bitable_deploy_page_size() -> int:
+    """Rows per deployment card page (max 8). Default 8."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_PAGE_SIZE") or "8").strip()
+    try:
+        n = int(raw)
+        return max(1, min(n, 8))
+    except ValueError:
+        return 8
+
+
 def p0_adjustment_bitable_also_send_to_group() -> bool:
     """
     ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — after thread reply on the overview,
@@ -2724,6 +2742,22 @@ def get_p0_adjustment_bitable_field_names() -> Dict[str, Tuple[str, ...]]:
             os.getenv("P0_ADJUSTMENT_BITABLE_PROJECT_FIELD") or "",
             "Project|项目",
         ),
+        "version": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_VERSION_FIELD") or "",
+            "Version|版本|Image Tag|镜像标签",
+        ),
+        "pm": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_PM_FIELD") or "",
+            "PM|产品经理|Product Manager",
+        ),
+        "email": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_EMAIL_FIELD") or "",
+            "Email|Release Title|邮件标题|Release",
+        ),
+        "changelog": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_CHANGELOG_FIELD") or "",
+            "Changelog|更新内容|Change log|Notes",
+        ),
     }
 
 
@@ -2768,6 +2802,14 @@ def get_p0_adjustment_bitable_ops_field_names() -> Dict[str, Tuple[str, ...]]:
         "reason": _split_field_aliases(
             os.getenv("P0_ADJUSTMENT_BITABLE_OPS_REASON_FIELD") or "",
             "执行原因",
+        ),
+        "operator": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_OPERATOR_FIELD") or "",
+            "操作人员|Operator",
+        ),
+        "status": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_STATUS_FIELD") or "",
+            "执行状况阶段|Status",
         ),
     }
 
