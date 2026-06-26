@@ -165,8 +165,35 @@ def _ops_entry_elements(row: OpsCardRow) -> List[Dict[str, Any]]:
     ]
 
 
+def _changelog_collapsible_panel(changelog: str) -> Dict[str, Any]:
+    """Boss template collapsible — padding must be 4-side in Schema 2.0 (not ``4px 0px``)."""
+    return {
+        "tag": "collapsible_panel",
+        "expanded": False,
+        "header": {
+            "title": {
+                "tag": "markdown",
+                "content": "<font color='grey'>更新内容</font>",
+            },
+            "vertical_align": "center",
+            "padding": "4px 0px 4px 0px",
+        },
+        "elements": [
+            {"tag": "markdown", "content": _dash(changelog)},
+        ],
+    }
+
+
+def _card_footer_note(text: str) -> Dict[str, Any]:
+    """
+    Schema 2.0 dropped ``note`` tag (Lark returns unsupported tag note).
+    Same text via grey markdown — official v2 replacement.
+    """
+    return {"tag": "markdown", "content": f"<font color='grey'>{text}</font>"}
+
+
 def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
-    """Boss card2 column_set — no collapsible_panel (Lark API rejects it)."""
+    """Boss card2 column_set + collapsible_panel (padding fixed for Schema 2.0)."""
     return [
         {
             "tag": "column_set",
@@ -239,12 +266,7 @@ def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
                             "tag": "markdown",
                             "content": f"<font color='grey'>{_dash(row.email)}</font>",
                         },
-                        {
-                            "tag": "markdown",
-                            "content": (
-                                f"<font color='grey'>更新内容</font>\n{_dash(row.changelog)}"
-                            ),
-                        },
+                        _changelog_collapsible_panel(row.changelog),
                     ],
                 },
             ],
@@ -262,7 +284,8 @@ def build_ops_summary_card(
     raw = json.loads((_TEMPLATES / "card1_ops.json").read_text(encoding="utf-8"))
     shown = len(rows)
     total = total_in_window or shown
-    count_label = str(total) if total <= shown else f"{shown}/{total}"
+    # Boss spec: total_count = all matching rows in window (not just rows on card).
+    count_label = str(total)
     variables = {
         "window_start": window_start,
         "window_end": window_end,
@@ -277,13 +300,11 @@ def build_ops_summary_card(
         elements.extend(_ops_entry_elements(row))
         if i < len(rows) - 1:
             elements.append({"tag": "hr"})
-    footer = "OSE 系统自动生成 · 如需完整记录请查阅 Lark Base"
-    if total > shown:
-        footer += f"（显示 {shown}/{total} 条）"
+    # Boss footer text; Schema 2.0 uses grey markdown instead of deprecated ``note`` tag.
     elements.extend(
         [
             {"tag": "hr"},
-            {"tag": "markdown", "content": f"<font color='grey'>{footer}</font>"},
+            _card_footer_note("OSE 系统自动生成 · 如需完整记录请查阅 Lark Base"),
         ]
     )
     return _wrap_schema_v2(raw, elements)
@@ -345,13 +366,10 @@ def build_deploy_page_cards(
             if i < len(page) - 1:
                 elements.append({"tag": "hr"})
         elements.append(
-            {
-                "tag": "markdown",
-                "content": (
-                    f"<font color='grey'>OSE 系统自动生成 · 第 {page_current} 页 · "
-                    f"条目 {item_start}–{item_end} / {total}</font>"
-                ),
-            }
+            _card_footer_note(
+                f"OSE 系统自动生成 · 第 {page_current} 页 · "
+                f"条目 {item_start}–{item_end} / {total}"
+            )
         )
         cards.append(
             {
