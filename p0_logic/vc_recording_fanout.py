@@ -61,6 +61,13 @@ def _build_recording_fanout_card_body(
             recording_url=recording_url,
             duration_text=duration_text,
         )
+        # Plain-text layout uses single newlines; lark_md needs blank lines between fields.
+        if "\n---\n" in text:
+            text = text.split("\n---\n", 1)[0].strip()
+        if text.startswith("☁️"):
+            text = "\n\n".join(text.splitlines()[2:]).strip()
+        else:
+            text = "\n\n".join(line for line in text.splitlines() if line.strip())
         return {
             "schema": "2.0",
             "config": {"enable_forward": True},

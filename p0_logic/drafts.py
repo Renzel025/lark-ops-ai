@@ -327,6 +327,72 @@ def patch_preview_fields(sender_open_id: str, **fields: Any) -> None:
         tx.set(p)
 
 
+_OVERVIEW_SEND_CLAIM_STALE_SEC = 120
+
+
+def try_claim_overview_send(sender_open_id: str) -> Tuple[bool, str]:
+    """
+    Atomically begin **Send to group** so double-taps / slow forwarder+bitable cannot post twice.
+
+    Returns ``(claimed, reason)`` where ``reason`` is ``already_sent``, ``in_progress``, or ``""``.
+    """
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return False, "no_session"
+    with _store.preview_transaction(oid) as tx:
+        p = tx.get()
+        if not p:
+            return False, "no_preview"
+        if str(p.get("group_message_id") or "").strip() and p.get("group_edit_only"):
+            return False, "already_sent"
+        if p.get("send_in_progress"):
+            claimed_at = int(p.get("send_claimed_at") or 0)
+            if claimed_at and (int(time.time()) - claimed_at) < _OVERVIEW_SEND_CLAIM_STALE_SEC:
+                return False, "in_progress"
+        p["send_in_progress"] = True
+        p["send_claimed_at"] = int(time.time())
+        tx.set(p)
+        return True, ""
+
+
+def release_overview_send_claim(sender_open_id: str) -> None:
+    """Drop in-flight send lock when the group post never succeeded."""
+    oid = (sender_open_id or "").strip()
+    if not oid:
+        return
+    with _store.preview_transaction(oid) as tx:
+        p = tx.get()
+        if not p:
+            return
+        if str(p.get("group_message_id") or "").strip():
+            p["send_in_progress"] = False
+            tx.set(p)
+            return
+        p.pop("send_in_progress", None)
+        p.pop("send_claimed_at", None)
+        tx.set(p)
+
+
+def record_overview_group_post(
+    sender_open_id: str, *, group_chat_id: str, group_message_id: str
+) -> None:
+    """Persist group overview ids immediately after first successful post (before forwarder/bitable)."""
+    oid = (sender_open_id or "").strip()
+    gcid = (group_chat_id or "").strip()
+    gmid = (group_message_id or "").strip()
+    if not oid or not gmid:
+        return
+    with _store.preview_transaction(oid) as tx:
+        p = tx.get()
+        if not p:
+            return
+        p["group_chat_id"] = gcid
+        p["group_message_id"] = gmid
+        p["group_edit_only"] = True
+        p["send_in_progress"] = False
+        tx.set(p)
+
+
 def orphan_incident_draft_if_session_ended(sender_open_id: str) -> bool:
     """
     If the draft is tied to a real incident ``oc_`` but that P0/P1 row is gone, retarget as standalone.
