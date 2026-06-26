@@ -47,8 +47,8 @@ def main() -> int:
     if dep_tbl:
         raw, err = lark.list_bitable_records(token, app, dep_tbl)
         print(f"deploy RAW records: {len(raw)}" + (f" | ERR: {err}" if err else ""))
-        dep_rows, err2, win2 = adj.fetch_deploy_card_rows(token)
-        print(f"deploy IN-WINDOW rows: {len(dep_rows)}" + (f" | ERR: {err2}" if err2 else ""))
+        dep_rows, err2, win2, dep_total = adj.fetch_deploy_card_rows(token)
+        print(f"deploy IN-WINDOW rows: {len(dep_rows)}/{dep_total}" + (f" | ERR: {err2}" if err2 else ""))
         if raw and not dep_rows and not err2:
             sample = raw[0].get("fields") if isinstance(raw[0], dict) else {}
             if isinstance(sample, dict):
@@ -61,8 +61,8 @@ def main() -> int:
     if ops_tbl:
         raw, err = lark.list_bitable_records(token, app, ops_tbl)
         print(f"ops RAW records: {len(raw)}" + (f" | ERR: {err}" if err else ""))
-        ops_rows, err2, win2 = adj.fetch_ops_card_rows(token)
-        print(f"ops IN-WINDOW rows: {len(ops_rows)}" + (f" | ERR: {err2}" if err2 else ""))
+        ops_rows, err2, win2, ops_total = adj.fetch_ops_card_rows(token)
+        print(f"ops IN-WINDOW rows: {len(ops_rows)}/{ops_total}" + (f" | ERR: {err2}" if err2 else ""))
         if raw and not ops_rows and not err2:
             sample = raw[0].get("fields") if isinstance(raw[0], dict) else {}
             if isinstance(sample, dict):

@@ -415,6 +415,21 @@ def _ops_card_row_from_record(
     )
 
 
+def _ops_row_meaningful(row: OpsCardRow) -> bool:
+    """Skip timestamp-only placeholders with no action/project/operator/reason."""
+    for val in (row.action, row.project, row.operator, row.reason):
+        if (val or "").strip():
+            return True
+    return False
+
+
+def _deploy_row_meaningful(row: DeployCardRow) -> bool:
+    for val in (row.service, row.version, row.image_tag):
+        if (val or "").strip():
+            return True
+    return False
+
+
 def _deploy_card_row_from_record(
     fields: Dict[str, Any],
     cfg: Dict[str, Tuple[str, ...]],
@@ -475,7 +490,7 @@ def fetch_ops_card_rows(
     table_id: str = "",
     field_names: Optional[Dict[str, Tuple[str, ...]]] = None,
     source_id: str = "online_ops",
-) -> Tuple[List[OpsCardRow], str, str]:
+) -> Tuple[List[OpsCardRow], str, str, int]:
     app_token = (app_token or _config.get_p0_adjustment_bitable_app_token()).strip()
     table_id = (table_id or _config.get_p0_adjustment_bitable_ops_table_id()).strip()
     cfg = field_names or _config.get_p0_adjustment_bitable_ops_field_names()
@@ -483,20 +498,21 @@ def fetch_ops_card_rows(
         tenant_token, app_token=app_token, table_id=table_id, source_id=source_id
     )
     if err:
-        return [], err, window_label
+        return [], err, window_label, 0
     rows: List[OpsCardRow] = []
     for rec in records:
         fields = rec.get("fields") if isinstance(rec, dict) else None
         if not isinstance(fields, dict):
             continue
         row = _ops_card_row_from_record(fields, cfg, cutoff_ms=cutoff_ms, end_ms=end_ms)
-        if row:
+        if row and _ops_row_meaningful(row):
             rows.append(row)
     rows.sort(key=lambda r: r.sort_ms, reverse=True)
-    max_rows = _config.get_p0_adjustment_bitable_max_rows()
+    total = len(rows)
+    max_rows = _config.get_p0_adjustment_bitable_ops_max_rows()
     if max_rows > 0 and len(rows) > max_rows:
         rows = rows[:max_rows]
-    return rows, "", window_label
+    return rows, "", window_label, total
 
 
 def fetch_deploy_card_rows(
@@ -506,7 +522,7 @@ def fetch_deploy_card_rows(
     table_id: str = "",
     field_names: Optional[Dict[str, Tuple[str, ...]]] = None,
     source_id: str = "deployments",
-) -> Tuple[List[DeployCardRow], str, str]:
+) -> Tuple[List[DeployCardRow], str, str, int]:
     app_token = (app_token or _config.get_p0_adjustment_bitable_app_token()).strip()
     table_id = (table_id or _config.get_p0_adjustment_bitable_table_id()).strip()
     cfg = field_names or _config.get_p0_adjustment_bitable_field_names()
@@ -514,20 +530,21 @@ def fetch_deploy_card_rows(
         tenant_token, app_token=app_token, table_id=table_id, source_id=source_id
     )
     if err:
-        return [], err, window_label
+        return [], err, window_label, 0
     rows: List[DeployCardRow] = []
     for rec in records:
         fields = rec.get("fields") if isinstance(rec, dict) else None
         if not isinstance(fields, dict):
             continue
         row = _deploy_card_row_from_record(fields, cfg, cutoff_ms=cutoff_ms, end_ms=end_ms)
-        if row:
+        if row and _deploy_row_meaningful(row):
             rows.append(row)
     rows.sort(key=lambda r: (r.sort_ms or 0), reverse=True)
-    max_rows = _config.get_p0_adjustment_bitable_max_rows()
+    total = len(rows)
+    max_rows = _config.get_p0_adjustment_bitable_deploy_max_rows()
     if max_rows > 0 and len(rows) > max_rows:
         rows = rows[:max_rows]
-    return rows, "", window_label
+    return rows, "", window_label, total
 
 
 def _post_cards_to_chat(tenant_token: str, group_chat_id: str, cards: List[Dict[str, Any]]) -> bool:
@@ -572,7 +589,7 @@ def _post_boss_style_notices(
 
     ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
     if ops_tbl:
-        ops_rows, err, window_label = fetch_ops_card_rows(
+        ops_rows, err, window_label, ops_total = fetch_ops_card_rows(
             tenant_token,
             app_token=app_token,
             table_id=ops_tbl,
@@ -584,7 +601,12 @@ def _post_boss_style_notices(
         elif ops_rows:
             diag["ops_rows"] = len(ops_rows)
             w_start, w_end = _window_start_end_labels(window_label)
-            ops_card = build_ops_summary_card(ops_rows, window_start=w_start, window_end=w_end)
+            ops_card = build_ops_summary_card(
+                ops_rows,
+                window_start=w_start,
+                window_end=w_end,
+                total_in_window=ops_total,
+            )
             cards = [ops_card]
             if _post_cards_to_chat(tenant_token, group_chat_id, cards):
                 posted_any = True
@@ -611,7 +633,7 @@ def _post_boss_style_notices(
 
     deploy_tbl = _config.get_p0_adjustment_bitable_table_id()
     if deploy_tbl:
-        dep_rows, err, win2 = fetch_deploy_card_rows(
+        dep_rows, err, win2, dep_total = fetch_deploy_card_rows(
             tenant_token,
             app_token=app_token,
             table_id=deploy_tbl,
@@ -630,6 +652,7 @@ def _post_boss_style_notices(
                 window_start=w_start,
                 window_end=w_end,
                 page_size=page_size,
+                total_in_window=dep_total,
             )
             if _post_cards_to_chat(tenant_token, group_chat_id, dep_cards):
                 posted_any = True

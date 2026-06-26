@@ -2618,7 +2618,9 @@ def get_p0_adjustment_bitable_hours() -> int:
 
 def get_p0_adjustment_bitable_max_rows() -> int:
     """
-    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — cap rows on the card. ``0`` = no limit (show all in window).
+    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — legacy cap for **both** tables when > 0.
+    Prefer ``P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS`` / ``DEPLOY_MAX_ROWS`` (defaults apply).
+    ``0`` = use per-table defaults only.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "0").strip()
@@ -2627,6 +2629,34 @@ def get_p0_adjustment_bitable_max_rows() -> int:
         return max(0, n)
     except ValueError:
         return 0
+
+
+def get_p0_adjustment_bitable_ops_max_rows() -> int:
+    """Cap ops rows on card. Default **8**. ``0`` = no limit."""
+    reload_env_runtime()
+    legacy = get_p0_adjustment_bitable_max_rows()
+    if legacy > 0:
+        return legacy
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS") or "8").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        return 8
+
+
+def get_p0_adjustment_bitable_deploy_max_rows() -> int:
+    """Cap deployment rows (before pagination). Default **16** (~2 pages). ``0`` = no limit."""
+    reload_env_runtime()
+    legacy = get_p0_adjustment_bitable_max_rows()
+    if legacy > 0:
+        return legacy
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS") or "16").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        return 16
 
 
 def get_p0_adjustment_bitable_timezone_name() -> str:

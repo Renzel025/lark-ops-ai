@@ -1,12 +1,11 @@
-"""Build deployment / ops Lark cards (boss template layout)."""
+"""Build deployment / ops Lark cards (boss template layout, Lark API-safe)."""
 from __future__ import annotations
 
 import copy
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _EM = "—"
@@ -19,10 +18,7 @@ def _dash(val: str) -> str:
 
 
 def _text_tag_md(color: str, text: str) -> str:
-    t = _dash(text)
-    if t == _EM:
-        return _EM
-    return f'<text_tag color="{color}">{t}</text_tag>'
+    return f'<text_tag color="{color}">{_dash(text)}</text_tag>'
 
 
 def _wrap_schema_v2(raw: Dict[str, Any], elements: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -75,8 +71,8 @@ class DeployCardRow:
     sort_ms: int = 0
 
 
-def _ops_entry_elements(prefix: str, row: OpsCardRow) -> List[Dict[str, Any]]:
-    p = prefix
+def _ops_entry_elements(row: OpsCardRow) -> List[Dict[str, Any]]:
+    """Boss card1: grey column_set blocks per field."""
     return [
         {
             "tag": "column_set",
@@ -169,43 +165,8 @@ def _ops_entry_elements(prefix: str, row: OpsCardRow) -> List[Dict[str, Any]]:
     ]
 
 
-def build_ops_summary_card(
-    rows: List[OpsCardRow],
-    *,
-    window_start: str,
-    window_end: str,
-) -> Dict[str, Any]:
-    raw = json.loads((_TEMPLATES / "card1_ops.json").read_text(encoding="utf-8"))
-    variables = {
-        "window_start": window_start,
-        "window_end": window_end,
-        "total_count": str(len(rows)),
-    }
-    raw = _substitute_obj(raw, variables)
-    elements: List[Dict[str, Any]] = [
-        {"tag": "markdown", "content": "**操作记录**（按执行时间倒序 · 已过滤 Rejected）"},
-        {"tag": "hr"},
-    ]
-    for i, row in enumerate(rows):
-        elements.extend(_ops_entry_elements(f"op{i + 1}", row))
-        if i < len(rows) - 1:
-            elements.append({"tag": "hr"})
-    elements.extend(
-        [
-            {"tag": "hr"},
-            {
-                "tag": "markdown",
-                "content": (
-                    "<font color='grey'>OSE 系统自动生成 · "
-                    "如需完整记录请查阅 Lark Base</font>"
-                ),
-            },
-        ]
-    )
-    return _wrap_schema_v2(raw, elements)
-
-
 def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
+    """Boss card2 column_set — no collapsible_panel (Lark API rejects it)."""
     return [
         {
             "tag": "column_set",
@@ -262,7 +223,10 @@ def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
                                     "tag": "column",
                                     "width": "auto",
                                     "elements": [
-                                        {"tag": "markdown", "content": _text_tag_md("purple", row.pm)},
+                                        {
+                                            "tag": "markdown",
+                                            "content": _text_tag_md("purple", row.pm),
+                                        }
                                     ],
                                 },
                             ],
@@ -271,7 +235,10 @@ def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
                             "tag": "markdown",
                             "content": f"<font color='grey'>{_dash(row.image_tag)}</font>",
                         },
-                        {"tag": "markdown", "content": f"<font color='grey'>{_dash(row.email)}</font>"},
+                        {
+                            "tag": "markdown",
+                            "content": f"<font color='grey'>{_dash(row.email)}</font>",
+                        },
                         {
                             "tag": "markdown",
                             "content": (
@@ -285,12 +252,50 @@ def _deploy_entry_elements(row: DeployCardRow) -> List[Dict[str, Any]]:
     ]
 
 
+def build_ops_summary_card(
+    rows: List[OpsCardRow],
+    *,
+    window_start: str,
+    window_end: str,
+    total_in_window: int = 0,
+) -> Dict[str, Any]:
+    raw = json.loads((_TEMPLATES / "card1_ops.json").read_text(encoding="utf-8"))
+    shown = len(rows)
+    total = total_in_window or shown
+    count_label = str(total) if total <= shown else f"{shown}/{total}"
+    variables = {
+        "window_start": window_start,
+        "window_end": window_end,
+        "total_count": count_label,
+    }
+    raw = _substitute_obj(raw, variables)
+    elements: List[Dict[str, Any]] = [
+        {"tag": "markdown", "content": "**操作记录**（按执行时间倒序 · 已过滤 Rejected）"},
+        {"tag": "hr"},
+    ]
+    for i, row in enumerate(rows):
+        elements.extend(_ops_entry_elements(row))
+        if i < len(rows) - 1:
+            elements.append({"tag": "hr"})
+    footer = "OSE 系统自动生成 · 如需完整记录请查阅 Lark Base"
+    if total > shown:
+        footer += f"（显示 {shown}/{total} 条）"
+    elements.extend(
+        [
+            {"tag": "hr"},
+            {"tag": "markdown", "content": f"<font color='grey'>{footer}</font>"},
+        ]
+    )
+    return _wrap_schema_v2(raw, elements)
+
+
 def build_deploy_page_cards(
     rows: List[DeployCardRow],
     *,
     window_start: str,
     window_end: str,
     page_size: int = _DEPLOY_PAGE_SIZE,
+    total_in_window: int = 0,
 ) -> List[Dict[str, Any]]:
     if not rows:
         return []
@@ -298,7 +303,8 @@ def build_deploy_page_cards(
     pages: List[List[DeployCardRow]] = [
         rows[i : i + page_size] for i in range(0, len(rows), page_size)
     ]
-    total = len(rows)
+    shown = len(rows)
+    total = total_in_window or shown
     page_total = len(pages)
     cards: List[Dict[str, Any]] = []
     for page_idx, page in enumerate(pages):
@@ -338,17 +344,14 @@ def build_deploy_page_cards(
             elements.extend(_deploy_entry_elements(row))
             if i < len(page) - 1:
                 elements.append({"tag": "hr"})
-        elements.extend(
-            [
-                {"tag": "hr"},
-                {
-                    "tag": "markdown",
-                    "content": (
-                        f"<font color='grey'>OSE 系统自动生成 · 第 {page_current} 页 · "
-                        f"条目 {item_start}–{item_end} / {total}</font>"
-                    ),
-                },
-            ]
+        elements.append(
+            {
+                "tag": "markdown",
+                "content": (
+                    f"<font color='grey'>OSE 系统自动生成 · 第 {page_current} 页 · "
+                    f"条目 {item_start}–{item_end} / {total}</font>"
+                ),
+            }
         )
         cards.append(
             {
