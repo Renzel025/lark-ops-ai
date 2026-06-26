@@ -264,6 +264,53 @@ def _strip_video_meeting_prefix(raw: str) -> str:
     return t
 
 
+def _recording_ready_meta_lines(
+    *,
+    topic: str = "",
+    meeting_no: str = "",
+    meeting_id: str = "",
+    recording_url: str = "",
+    duration_text: str = "",
+) -> List[str]:
+    """Machine-parseable key=value lines for downstream Minutes bots."""
+    label = _strip_video_meeting_prefix(topic)
+    no = (meeting_no or "").strip()
+    mid = (meeting_id or "").strip()
+    dur = (duration_text or "").strip()
+    url = (recording_url or "").strip()
+    meta: List[str] = ["RECORDING_READY"]
+    if mid:
+        meta.append(f"meeting_id={mid}")
+    if no:
+        meta.append(f"meeting_no={no}")
+    if url:
+        meta.append(f"recording_url={url}")
+    if label:
+        meta.append(f"topic={label}")
+    if dur:
+        meta.append(f"duration={dur}")
+    return meta
+
+
+def build_recording_ready_meta_text(
+    topic: str = "",
+    meeting_no: str = "",
+    *,
+    meeting_id: str = "",
+    recording_url: str = "",
+    duration_text: str = "",
+) -> str:
+    """Compact text block (``RECORDING_READY`` only) for downstream bot parsers."""
+    meta = _recording_ready_meta_lines(
+        topic=topic,
+        meeting_no=meeting_no,
+        meeting_id=meeting_id,
+        recording_url=recording_url,
+        duration_text=duration_text,
+    )
+    return "\n".join(meta) if len(meta) > 1 else ""
+
+
 def build_recording_available_text(
     topic: str = "",
     meeting_no: str = "",
@@ -293,21 +340,83 @@ def build_recording_available_text(
         lines.append(
             "Recording · 录制链接: (pending — Lark is still processing; use meeting_id or check Minutes)"
         )
-    # Machine-parseable footer for downstream bots (boss Minutes pipeline).
-    meta: List[str] = ["---", "RECORDING_READY"]
-    if mid:
-        meta.append(f"meeting_id={mid}")
-    if no:
-        meta.append(f"meeting_no={no}")
-    if url:
-        meta.append(f"recording_url={url}")
-    if label:
-        meta.append(f"topic={label}")
-    if dur:
-        meta.append(f"duration={dur}")
-    if len(meta) > 2:
-        lines.extend(meta)
+    meta = _recording_ready_meta_lines(
+        topic=topic,
+        meeting_no=meeting_no,
+        meeting_id=meeting_id,
+        recording_url=recording_url,
+        duration_text=duration_text,
+    )
+    if len(meta) > 1:
+        lines.extend(["---", *meta])
     return "\n".join(lines).rstrip()
+
+
+def build_recording_available_card(
+    topic: str = "",
+    meeting_no: str = "",
+    *,
+    meeting_id: str = "",
+    recording_url: str = "",
+    duration_text: str = "",
+) -> Dict[str, Any]:
+    """Interactive card when VC cloud recording is ready."""
+    label = _strip_video_meeting_prefix(topic)
+    no = (meeting_no or "").strip()
+    mid = (meeting_id or "").strip()
+    dur = (duration_text or "").strip()
+    url = (recording_url or "").strip()
+
+    md_parts: List[str] = []
+    if label:
+        md_parts.append(f"**Topic · 主题:** {label}")
+    if no:
+        md_parts.append(f"**Meeting no · 会议号:** {no}")
+    if mid:
+        md_parts.append(f"**Lark meeting_id · 会议ID:** {mid}")
+    if dur:
+        md_parts.append(f"**Duration · 时长:** {dur}")
+    if url:
+        md_parts.append(f"**Recording · 录制链接:** [Open Minutes · 打开录制]({url})")
+    elif mid:
+        md_parts.append(
+            "**Recording · 录制链接:** pending — Lark is still processing; "
+            "check Minutes or use meeting ID above."
+        )
+    else:
+        md_parts.append("**Recording · 录制链接:** not available yet.")
+
+    elements: List[Dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "\n\n".join(md_parts) if md_parts else "Cloud recording is ready.",
+            },
+        },
+    ]
+    if url:
+        elements.extend(
+            [
+                {"tag": "hr"},
+                _button_open_url(
+                    content="Open recording · 打开录制",
+                    url=url,
+                    button_type="primary",
+                    element_id="open_recording",
+                ),
+            ]
+        )
+
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "☁️ Meeting recording ready · 会议录制可用"},
+        },
+        "body": {"elements": elements},
+    }
 
 
 def build_meeting_card(
