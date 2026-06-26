@@ -586,6 +586,18 @@ def _post_boss_style_notices(
                     len(ops_rows),
                     group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
                 )
+            else:
+                log.warning(
+                    "adjustment_bitable: ops card build ok but Lark post failed trigger=%s rows=%s",
+                    trigger,
+                    len(ops_rows),
+                )
+        else:
+            log.warning(
+                "adjustment_bitable: ops 0 rows in window trigger=%s window=%s",
+                trigger,
+                window_label or "(unknown)",
+            )
 
     deploy_tbl = _config.get_p0_adjustment_bitable_table_id()
     if deploy_tbl:
@@ -620,6 +632,18 @@ def _post_boss_style_notices(
                     pages,
                     group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
                 )
+            else:
+                log.warning(
+                    "adjustment_bitable: deploy cards build ok but Lark post failed trigger=%s rows=%s",
+                    trigger,
+                    len(dep_rows),
+                )
+        else:
+            log.warning(
+                "adjustment_bitable: deploy 0 rows in window trigger=%s window=%s",
+                trigger,
+                window_label or "(unknown)",
+            )
 
     _ = overview_message_id  # boss cards post to group feed; thread reply optional later
     return posted_any, dm_lines
