@@ -2735,6 +2735,17 @@ def get_p0_adjustment_bitable_deploy_page_size() -> int:
         return 8
 
 
+def get_p0_adjustment_bitable_ops_page_size() -> int:
+    """Rows per ops card page (max 8). Default 8."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_PAGE_SIZE") or "8").strip()
+    try:
+        n = int(raw)
+        return max(1, min(n, 8))
+    except ValueError:
+        return 8
+
+
 def p0_adjustment_bitable_also_send_to_group() -> bool:
     """
     ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — legacy path only: after thread reply on

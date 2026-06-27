@@ -17,7 +17,7 @@ from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
 
-from .deployment_card_builder import DeployCardRow, OpsCardRow, build_deploy_page_cards, build_ops_summary_card
+from .deployment_card_builder import DeployCardRow, OpsCardRow, build_deploy_page_cards, build_ops_page_cards
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -415,6 +415,16 @@ def _ops_card_row_from_record(
     )
 
 
+def _field_meaningful(val: str) -> bool:
+    s = (val or "").strip()
+    return bool(s) and s not in ("—", "-", "–")
+
+
+def _ops_row_meaningful(row: OpsCardRow) -> bool:
+    """Skip timestamp-only rows with no operation text (boss: exclude incomplete entries)."""
+    return _field_meaningful(row.action)
+
+
 def _deploy_card_row_from_record(
     fields: Dict[str, Any],
     cfg: Dict[str, Tuple[str, ...]],
@@ -490,7 +500,7 @@ def fetch_ops_card_rows(
         if not isinstance(fields, dict):
             continue
         row = _ops_card_row_from_record(fields, cfg, cutoff_ms=cutoff_ms, end_ms=end_ms)
-        if row:
+        if row and _ops_row_meaningful(row):
             rows.append(row)
     rows.sort(key=lambda r: r.sort_ms, reverse=True)
     total = len(rows)
@@ -609,7 +619,7 @@ def _post_boss_style_notices(
     overview_message_id: str = "",
     trigger: str = "overview",
 ) -> Tuple[bool, List[str], Dict[str, Any]]:
-    """Post ops summary card then paginated deployment cards. Returns (posted, dm_lines, diag)."""
+    """Post deployment then ops — each series: page 1 in group, rest in that card's thread."""
     diag: Dict[str, Any] = {
         "ops_rows": 0,
         "deploy_rows": 0,
@@ -622,38 +632,8 @@ def _post_boss_style_notices(
     app_token = _config.get_p0_adjustment_bitable_app_token()
     dm_lines: List[str] = []
     window_label = ""
-    all_cards: List[Dict[str, Any]] = []
     thread_followups = _config.p0_adjustment_bitable_thread_followups()
-
-    ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
-    if ops_tbl:
-        ops_rows, err, window_label, ops_total = fetch_ops_card_rows(
-            tenant_token,
-            app_token=app_token,
-            table_id=ops_tbl,
-            source_id="online_ops",
-        )
-        if err:
-            diag["ops_err"] = err[:300]
-            log.warning("adjustment_bitable: ops fetch failed trigger=%s err=%s", trigger, err[:200])
-        elif ops_rows:
-            diag["ops_rows"] = len(ops_rows)
-            w_start, w_end = _window_start_end_labels(window_label)
-            all_cards.append(
-                build_ops_summary_card(
-                    ops_rows,
-                    window_start=w_start,
-                    window_end=w_end,
-                    total_in_window=ops_total,
-                )
-            )
-            dm_lines.append(f"🔴 **线上操作汇总**: {len(ops_rows)} row(s) ({window_label})")
-        else:
-            log.warning(
-                "adjustment_bitable: ops 0 rows in window trigger=%s window=%s",
-                trigger,
-                window_label or "(unknown)",
-            )
+    posted_any = False
 
     deploy_tbl = _config.get_p0_adjustment_bitable_table_id()
     if deploy_tbl:
@@ -670,64 +650,73 @@ def _post_boss_style_notices(
         elif dep_rows:
             diag["deploy_rows"] = len(dep_rows)
             w_start, w_end = _window_start_end_labels(window_label)
-            page_size = _config.get_p0_adjustment_bitable_deploy_page_size()
             dep_cards = build_deploy_page_cards(
                 dep_rows,
                 window_start=w_start,
                 window_end=w_end,
-                page_size=page_size,
+                page_size=_config.get_p0_adjustment_bitable_deploy_page_size(),
                 total_in_window=dep_total,
             )
-            all_cards.extend(dep_cards)
-            pages = len(dep_cards)
-            dm_lines.append(
-                f"📦 **部署流水**: {len(dep_rows)} row(s), {pages} card(s) ({window_label})"
+            ok, _root = _post_cards_group_then_thread(
+                tenant_token,
+                group_chat_id,
+                dep_cards,
+                thread_followups=thread_followups,
+                log_label=f"{trigger}:deploy",
             )
+            if ok:
+                posted_any = True
+                dm_lines.append(
+                    f"📦 **部署流水**: {len(dep_rows)} row(s), {len(dep_cards)} card(s) ({window_label})"
+                )
+            else:
+                diag["card_post_failed"] = True
+
+    ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
+    if ops_tbl:
+        ops_rows, err, win_ops, ops_total = fetch_ops_card_rows(
+            tenant_token,
+            app_token=app_token,
+            table_id=ops_tbl,
+            source_id="online_ops",
+        )
+        window_label = win_ops or window_label
+        if err:
+            diag["ops_err"] = err[:300]
+            log.warning("adjustment_bitable: ops fetch failed trigger=%s err=%s", trigger, err[:200])
+        elif ops_rows:
+            diag["ops_rows"] = len(ops_rows)
+            w_start, w_end = _window_start_end_labels(window_label)
+            ops_cards = build_ops_page_cards(
+                ops_rows,
+                window_start=w_start,
+                window_end=w_end,
+                page_size=_config.get_p0_adjustment_bitable_ops_page_size(),
+                total_in_window=ops_total,
+            )
+            ok, _root = _post_cards_group_then_thread(
+                tenant_token,
+                group_chat_id,
+                ops_cards,
+                thread_followups=thread_followups,
+                log_label=f"{trigger}:ops",
+            )
+            if ok:
+                posted_any = True
+                dm_lines.append(
+                    f"🔴 **线上操作汇总**: {len(ops_rows)} row(s), {len(ops_cards)} card(s) ({window_label})"
+                )
+            else:
+                diag["card_post_failed"] = True
         else:
             log.warning(
-                "adjustment_bitable: deploy 0 rows in window trigger=%s window=%s",
+                "adjustment_bitable: ops 0 meaningful rows in window trigger=%s window=%s",
                 trigger,
                 window_label or "(unknown)",
             )
 
-    posted_any = False
-    if all_cards:
-        ok, root_mid = _post_cards_group_then_thread(
-            tenant_token,
-            group_chat_id,
-            all_cards,
-            thread_followups=thread_followups,
-            log_label=trigger,
-        )
-        if ok:
-            posted_any = True
-            dest_tail = group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id
-            if len(all_cards) > 1 and thread_followups:
-                log.info(
-                    "adjustment_bitable: posted %s card(s) trigger=%s first=group followups=thread(%s) dest_tail=%s root_tail=%s",
-                    len(all_cards),
-                    trigger,
-                    len(all_cards) - 1,
-                    dest_tail,
-                    root_mid[-12:] if len(root_mid) > 12 else root_mid,
-                )
-            else:
-                log.info(
-                    "adjustment_bitable: posted %s card(s) trigger=%s dest_tail=%s (flat group)",
-                    len(all_cards),
-                    trigger,
-                    dest_tail,
-                )
-        else:
-            diag["card_post_failed"] = True
-            log.warning(
-                "adjustment_bitable: %s card(s) built but Lark post failed trigger=%s",
-                len(all_cards),
-                trigger,
-            )
-
     diag["window_label"] = window_label
-    _ = overview_message_id  # boss cards anchor on first card in group, not overview thread
+    _ = overview_message_id
     return posted_any, dm_lines, diag
 
 

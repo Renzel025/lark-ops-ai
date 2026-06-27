@@ -265,27 +265,89 @@ def build_ops_summary_card(
     window_end: str,
     total_in_window: int = 0,
 ) -> Dict[str, Any]:
-    total = total_in_window or len(rows)
-    header = {
-        "template": "red",
-        "title": {"tag": "plain_text", "content": "🔴 线上操作汇总"},
-        "subtitle": {"tag": "plain_text", "content": f"{window_start} — {window_end} MYT"},
-        "text_tag_list": [
-            {
-                "tag": "text_tag",
-                "text": {"tag": "plain_text", "content": f"{total} 条"},
-                "color": "neutral",
-            }
-        ],
-    }
-    elements: List[Dict[str, Any]] = [
-        {"tag": "markdown", "content": "**操作记录**（按执行时间倒序）"},
-        {"tag": "hr"},
+    """Single-page ops card (legacy helper). Prefer ``build_ops_page_cards``."""
+    cards = build_ops_page_cards(
+        rows,
+        window_start=window_start,
+        window_end=window_end,
+        total_in_window=total_in_window,
+    )
+    return cards[0] if cards else {}
+
+
+def build_ops_page_cards(
+    rows: List[OpsCardRow],
+    *,
+    window_start: str,
+    window_end: str,
+    page_size: int = _DEPLOY_PAGE_SIZE,
+    total_in_window: int = 0,
+) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    page_size = max(1, min(int(page_size or _DEPLOY_PAGE_SIZE), 8))
+    pages: List[List[OpsCardRow]] = [
+        rows[i : i + page_size] for i in range(0, len(rows), page_size)
     ]
-    for row in rows:
-        elements.extend(_ops_entry_elements(row))
-    elements.append(_card_footer_note("OSE 系统自动生成"))
-    return _wrap_schema_v2(header, elements)
+    total = total_in_window or len(rows)
+    page_total = len(pages)
+    cards: List[Dict[str, Any]] = []
+    for page_idx, page in enumerate(pages):
+        page_current = page_idx + 1
+        item_start = page_idx * page_size + 1
+        item_end = item_start + len(page) - 1
+        header: Dict[str, Any] = {
+            "template": "red" if page_current == 1 else "carmine",
+            "title": {"tag": "plain_text", "content": "🔴 线上操作汇总"},
+            "subtitle": {"tag": "plain_text", "content": f"{window_start} — {window_end} MYT"},
+        }
+        if page_total > 1:
+            header["text_tag_list"] = [
+                {
+                    "tag": "text_tag",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": f"第 {page_current} 页 / 共 {page_total} 页",
+                    },
+                    "color": "neutral",
+                }
+            ]
+        else:
+            header["text_tag_list"] = [
+                {
+                    "tag": "text_tag",
+                    "text": {"tag": "plain_text", "content": f"{total} 条"},
+                    "color": "neutral",
+                }
+            ]
+        elements: List[Dict[str, Any]] = []
+        if page_total > 1:
+            elements.append(
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"<font color='grey'>条目 {item_start}–{item_end} · {total} 条 · "
+                        f"按执行时间倒序</font>"
+                    ),
+                }
+            )
+        else:
+            elements.append(
+                {"tag": "markdown", "content": "**操作记录**（按执行时间倒序）"},
+            )
+        elements.append({"tag": "hr"})
+        for row in page:
+            elements.extend(_ops_entry_elements(row))
+        if page_total > 1:
+            elements.append(
+                _card_footer_note(
+                    f"OSE 系统自动生成 · 第 {page_current} 页 · 条目 {item_start}–{item_end} / {total}"
+                )
+            )
+        else:
+            elements.append(_card_footer_note("OSE 系统自动生成"))
+        cards.append(_wrap_schema_v2(header, elements))
+    return cards
 
 
 def build_deploy_page_cards(
