@@ -17,19 +17,10 @@
         "tag": "text_tag",
         "text": {
           "tag": "plain_text",
-          "content": "P0"
-        },
-        "color": "red"
-      },
-      {
-        "tag": "text_tag",
-        "text": {
-          "tag": "plain_text",
           "content": "{{total_count}} 条"
         },
         "color": "neutral"
       }
     ]
-  },
-  "elements": []
+  }
 }

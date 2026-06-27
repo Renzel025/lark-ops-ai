@@ -2707,6 +2707,16 @@ def p0_adjustment_bitable_reply_in_thread() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def p0_adjustment_bitable_thread_followups() -> bool:
+    """
+    ``P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS`` — first ops/deploy card in main group feed;
+    remaining pages reply in that message's thread only (default ``1``).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def p0_adjustment_bitable_on_p0_declare() -> bool:
     """Post ops + deployment cards when P0 is declared (default on when bitable enabled)."""
     reload_env_runtime()
@@ -2727,11 +2737,11 @@ def get_p0_adjustment_bitable_deploy_page_size() -> int:
 
 def p0_adjustment_bitable_also_send_to_group() -> bool:
     """
-    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — after thread reply on the overview,
-    also post the same deployment card to the main group feed. Default ``1``.
+    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — legacy path only: after thread reply on
+    the overview card, also duplicate the notice in the main group feed. Default ``0``.
     """
     reload_env_runtime()
-    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

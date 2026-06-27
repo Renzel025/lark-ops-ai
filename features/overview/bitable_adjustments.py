@@ -415,21 +415,6 @@ def _ops_card_row_from_record(
     )
 
 
-def _ops_row_meaningful(row: OpsCardRow) -> bool:
-    """Skip timestamp-only placeholders with no action/project/operator/reason."""
-    for val in (row.action, row.project, row.operator, row.reason):
-        if (val or "").strip():
-            return True
-    return False
-
-
-def _deploy_row_meaningful(row: DeployCardRow) -> bool:
-    for val in (row.service, row.version, row.image_tag):
-        if (val or "").strip():
-            return True
-    return False
-
-
 def _deploy_card_row_from_record(
     fields: Dict[str, Any],
     cfg: Dict[str, Tuple[str, ...]],
@@ -505,7 +490,7 @@ def fetch_ops_card_rows(
         if not isinstance(fields, dict):
             continue
         row = _ops_card_row_from_record(fields, cfg, cutoff_ms=cutoff_ms, end_ms=end_ms)
-        if row and _ops_row_meaningful(row):
+        if row:
             rows.append(row)
     rows.sort(key=lambda r: r.sort_ms, reverse=True)
     total = len(rows)
@@ -537,7 +522,7 @@ def fetch_deploy_card_rows(
         if not isinstance(fields, dict):
             continue
         row = _deploy_card_row_from_record(fields, cfg, cutoff_ms=cutoff_ms, end_ms=end_ms)
-        if row and _deploy_row_meaningful(row):
+        if row:
             rows.append(row)
     rows.sort(key=lambda r: (r.sort_ms or 0), reverse=True)
     total = len(rows)
@@ -547,22 +532,74 @@ def fetch_deploy_card_rows(
     return rows, "", window_label, total
 
 
-def _post_cards_to_chat(tenant_token: str, group_chat_id: str, cards: List[Dict[str, Any]]) -> bool:
-    ok_any = False
-    for card in cards:
-        st, body, _mid = _lark.post_card_to_chat(group_chat_id, tenant_token, card)
-        ok, code, msg = _lark.lark_im_message_create_ok(body)
-        if st == 200 and ok:
-            ok_any = True
-        else:
+def _post_cards_group_then_thread(
+    tenant_token: str,
+    group_chat_id: str,
+    cards: List[Dict[str, Any]],
+    *,
+    thread_followups: bool = True,
+    log_label: str = "",
+) -> Tuple[bool, str]:
+    """
+    Post the first card to the main group feed; remaining cards reply in that message's thread only.
+    """
+    if not cards:
+        return False, ""
+    label = (log_label or "cards").strip()
+    dest_tail = group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id
+
+    st, body, root_mid = _lark.post_card_to_chat(group_chat_id, tenant_token, cards[0])
+    ok, code, msg = _lark.lark_im_message_create_ok(body)
+    if st != 200 or not ok:
+        log.warning(
+            "adjustment_bitable: first %s card post failed dest_tail=%s HTTP=%s code=%s msg=%r",
+            label,
+            dest_tail,
+            st,
+            code,
+            msg,
+        )
+        return False, ""
+
+    ok_any = True
+    if not thread_followups or len(cards) <= 1 or not root_mid:
+        if len(cards) > 1 and not root_mid:
             log.warning(
-                "adjustment_bitable: card post failed dest_tail=%s HTTP=%s code=%s msg=%r",
-                group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
-                st,
-                code,
-                msg,
+                "adjustment_bitable: %s follow-ups skipped — empty root message_id dest_tail=%s",
+                label,
+                dest_tail,
             )
-    return ok_any
+        return ok_any, root_mid
+
+    for idx, card in enumerate(cards[1:], start=2):
+        st_t, body_t = _lark.post_card_reply_to_message(
+            root_mid,
+            tenant_token,
+            card,
+            reply_in_thread=True,
+        )
+        ok_t, code_t, msg_t = _lark.lark_im_message_create_ok(body_t)
+        if st_t == 200 and ok_t:
+            log.info(
+                "adjustment_bitable: thread follow-up %s/%s label=%s root_tail=%s",
+                idx,
+                len(cards),
+                label,
+                root_mid[-12:] if len(root_mid) > 12 else root_mid,
+            )
+        else:
+            ok_any = False
+            log.warning(
+                "adjustment_bitable: thread follow-up %s/%s failed label=%s HTTP=%s code=%s msg=%r root_tail=%s",
+                idx,
+                len(cards),
+                label,
+                st_t,
+                code_t,
+                msg_t,
+                root_mid[-12:] if len(root_mid) > 12 else root_mid,
+            )
+    return ok_any, root_mid
 
 
 def _post_boss_style_notices(
@@ -584,8 +621,9 @@ def _post_boss_style_notices(
         return False, [], diag
     app_token = _config.get_p0_adjustment_bitable_app_token()
     dm_lines: List[str] = []
-    posted_any = False
     window_label = ""
+    all_cards: List[Dict[str, Any]] = []
+    thread_followups = _config.p0_adjustment_bitable_thread_followups()
 
     ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
     if ops_tbl:
@@ -601,29 +639,15 @@ def _post_boss_style_notices(
         elif ops_rows:
             diag["ops_rows"] = len(ops_rows)
             w_start, w_end = _window_start_end_labels(window_label)
-            ops_card = build_ops_summary_card(
-                ops_rows,
-                window_start=w_start,
-                window_end=w_end,
-                total_in_window=ops_total,
+            all_cards.append(
+                build_ops_summary_card(
+                    ops_rows,
+                    window_start=w_start,
+                    window_end=w_end,
+                    total_in_window=ops_total,
+                )
             )
-            cards = [ops_card]
-            if _post_cards_to_chat(tenant_token, group_chat_id, cards):
-                posted_any = True
-                dm_lines.append(f"🔴 **线上操作汇总**: {len(ops_rows)} row(s) ({window_label})")
-                log.info(
-                    "adjustment_bitable: posted ops card trigger=%s rows=%s dest_tail=%s",
-                    trigger,
-                    len(ops_rows),
-                    group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
-                )
-            else:
-                diag["card_post_failed"] = True
-                log.warning(
-                    "adjustment_bitable: ops card build ok but Lark post failed trigger=%s rows=%s",
-                    trigger,
-                    len(ops_rows),
-                )
+            dm_lines.append(f"🔴 **线上操作汇总**: {len(ops_rows)} row(s) ({window_label})")
         else:
             log.warning(
                 "adjustment_bitable: ops 0 rows in window trigger=%s window=%s",
@@ -654,26 +678,11 @@ def _post_boss_style_notices(
                 page_size=page_size,
                 total_in_window=dep_total,
             )
-            if _post_cards_to_chat(tenant_token, group_chat_id, dep_cards):
-                posted_any = True
-                pages = len(dep_cards)
-                dm_lines.append(
-                    f"📦 **Deployment**: {len(dep_rows)} row(s), {pages} card(s) ({window_label})"
-                )
-                log.info(
-                    "adjustment_bitable: posted deploy cards trigger=%s rows=%s pages=%s dest_tail=%s",
-                    trigger,
-                    len(dep_rows),
-                    pages,
-                    group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
-                )
-            else:
-                diag["card_post_failed"] = True
-                log.warning(
-                    "adjustment_bitable: deploy cards build ok but Lark post failed trigger=%s rows=%s",
-                    trigger,
-                    len(dep_rows),
-                )
+            all_cards.extend(dep_cards)
+            pages = len(dep_cards)
+            dm_lines.append(
+                f"📦 **部署流水**: {len(dep_rows)} row(s), {pages} card(s) ({window_label})"
+            )
         else:
             log.warning(
                 "adjustment_bitable: deploy 0 rows in window trigger=%s window=%s",
@@ -681,8 +690,44 @@ def _post_boss_style_notices(
                 window_label or "(unknown)",
             )
 
+    posted_any = False
+    if all_cards:
+        ok, root_mid = _post_cards_group_then_thread(
+            tenant_token,
+            group_chat_id,
+            all_cards,
+            thread_followups=thread_followups,
+            log_label=trigger,
+        )
+        if ok:
+            posted_any = True
+            dest_tail = group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id
+            if len(all_cards) > 1 and thread_followups:
+                log.info(
+                    "adjustment_bitable: posted %s card(s) trigger=%s first=group followups=thread(%s) dest_tail=%s root_tail=%s",
+                    len(all_cards),
+                    trigger,
+                    len(all_cards) - 1,
+                    dest_tail,
+                    root_mid[-12:] if len(root_mid) > 12 else root_mid,
+                )
+            else:
+                log.info(
+                    "adjustment_bitable: posted %s card(s) trigger=%s dest_tail=%s (flat group)",
+                    len(all_cards),
+                    trigger,
+                    dest_tail,
+                )
+        else:
+            diag["card_post_failed"] = True
+            log.warning(
+                "adjustment_bitable: %s card(s) built but Lark post failed trigger=%s",
+                len(all_cards),
+                trigger,
+            )
+
     diag["window_label"] = window_label
-    _ = overview_message_id  # boss cards post to group feed; thread reply optional later
+    _ = overview_message_id  # boss cards anchor on first card in group, not overview thread
     return posted_any, dm_lines, diag
 
 
