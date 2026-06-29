@@ -191,7 +191,7 @@ pipeline {
 
             # Start from prod's current branch, then MERGE the tested dev commit into it.
             # Prod keeps its own commits; dev's changes are merged on top. Nothing is discarded.
-            git checkout -B _promote "prod/${PROD_BRANCH}"
+            git checkout -B _promote FETCH_HEAD
 
             if [ "${ON_CONFLICT}" = "prefer-dev" ]; then
               echo "Merging dev ${SHA} into prod/${PROD_BRANCH} (conflicts auto-resolved in favor of DEV)..."
