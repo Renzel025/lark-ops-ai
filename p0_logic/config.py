@@ -1386,6 +1386,13 @@ def get_anthropic_api_key() -> str:
     return _anthropic_api_key()
 
 
+def anthropic_claude_configured() -> bool:
+    """True when Claude is reachable via API key, OAuth file, or ``ANTHROPIC_AUTH_TOKEN``."""
+    from . import anthropic_client as _anthropic
+
+    return _anthropic.has_anthropic_auth()
+
+
 def _gemini_api_key() -> str:
     reload_env_runtime()
     return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
@@ -1405,7 +1412,7 @@ def priority_keyword_ai_provider_chain() -> list:
     """
     reload_env_runtime()
     raw = (os.getenv("P0_KEYWORD_AI_PROVIDER") or "auto").strip().lower()
-    has_claude = bool(_anthropic_api_key())
+    has_claude = anthropic_claude_configured()
     has_gemini = bool(_gemini_api_key())
     has_groq = bool(GROQ_API_KEY)
     avail = {"claude": has_claude, "gemini": has_gemini, "groq": has_groq}
@@ -2354,6 +2361,21 @@ def get_p0_issue_watch_min_reports() -> int:
     return max(2, min(n, 20))
 
 
+def get_p0_issue_watch_min_affected_players() -> int:
+    """
+    Minimum **affected player count** (from prose or Account IDs) before Issue Watch alerts
+    on player impact alone. Default **3** — 1–2 affected players do not trigger via count
+    (high-confidence solo path still applies when no player count is mentioned).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS") or "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 3
+    return max(1, min(n, 50))
+
+
 def get_p0_issue_watch_min_solo_reporters() -> int:
     """
     Without widespread (``MIN_REPORTS``) impact, require this many unique reporters
@@ -2378,7 +2400,7 @@ def get_p0_issue_watch_cooldown_min() -> int:
         n = int(raw)
     except ValueError:
         n = 20
-    return max(5, min(n, 180))
+    return max(1, min(n, 180))
 
 
 def get_p0_issue_watch_id_wait_sec() -> int:

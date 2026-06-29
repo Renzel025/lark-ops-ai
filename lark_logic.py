@@ -25,6 +25,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_use_groq,
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
+    get_p0_issue_watch_enabled,
     HELP_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
@@ -214,6 +215,29 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     """
     t = (text or "").strip().lower()
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
+
+
+# Lark mobile/desktop composer may append ``Message <chat display name>`` to im.message text.
+# e.g. deposit paste + ``Message p0 detection dev`` falsely matches ``\\bp0\\b`` keyword trigger.
+# Footer may be on its own line OR same line as the last account id (no leading newline).
+_LARK_COMPOSER_MESSAGE_FOOTER_RE = re.compile(r"(?is)\s*Message\s+.+?\s*$")
+
+
+def _strip_lark_composer_message_footer(text: str, *, chat_label: str = "") -> str:
+    """Remove trailing ``Message <group name>`` Lark UI suffix before keyword / triage."""
+    t = (text or "").strip()
+    label = (chat_label or "").strip()
+    if label:
+        labeled = re.compile(rf"(?is)\s*Message\s+{re.escape(label)}\s*$")
+        t = labeled.sub("", t).rstrip()
+    m = _LARK_COMPOSER_MESSAGE_FOOTER_RE.search(t)
+    if m:
+        t = t[: m.start()].rstrip()
+    return t
+
+
+def _text_for_priority_keyword_trigger(text: str, *, chat_label: str = "") -> str:
+    return _strip_lark_composer_message_footer(text, chat_label=chat_label)
 
 
 _OVERVIEW_TEMPLATE_MARKERS = (
@@ -599,7 +623,12 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
     # "we tag … as p0" — modal + we + tag stays with Groq / thread-confirm ("can we tag…").
     if not re.search(r"(?is)\b(?:can|could|should|may|would|shall)\s+we\s+(?:tag|treat|consider|declare)", t):
         if re.search(
-            rf"(?is)\b(?:i|we)\s+consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            rf"(?is)\b(?:i|we)\s+(?:will\s+)?consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
+        if re.search(
+            rf"(?is)\b(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
             t,
         ):
             return True
@@ -993,6 +1022,15 @@ def _try_handle_p0_thread_confirm(
                 get_p0_thread_confirm_toplevel_grace_sec(),
             )
         if thread_ok or toplevel_ok or mirror_situation:
+            # Declarations ("this issue is p0", "we will consider…") are not thread yes-replies —
+            # clear armed question and fall through to keyword / Issue Watch paths.
+            if _is_explicit_direct_p0_declaration(text_raw) and not _is_p0_thread_confirm_question(text_raw):
+                _p0_thread_clear_pending_dict(pend)
+                log.info(
+                    "Incident group: explicit P0 declare bypasses thread confirm (cleared pending) chat_id=%s",
+                    chat_id,
+                )
+                return False
             responders = get_p0_thread_confirm_responder_open_ids()
             if oid == asker and not get_p0_thread_confirm_allow_asker_self_yes():
                 log.info(
@@ -1336,8 +1374,29 @@ def process_message(
             return
 
         if is_detection:
+            kw_text = _text_for_priority_keyword_trigger(text_raw, chat_label=source_chat_name)
+            if P0_KEYWORD_RE.search(text_raw or "") and not P0_KEYWORD_RE.search(kw_text or ""):
+                log.info(
+                    "Incident group: P0 keyword ignored (Lark composer footer only) chat_id=%s footer_tail=%r",
+                    chat_id,
+                    (text_raw or "")[-60:],
+                )
             # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
-            if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
+            # When Issue Watch is on, only *explicit* P0 declarations start a meeting — player
+            # reports (incl. Lark footer ``Message p0 detection dev``) go to Issue Watch DM first.
+            _p0_kw_hit = (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text)
+            _p0_skip_for_issue_watch = (
+                _p0_kw_hit
+                and get_p0_issue_watch_enabled()
+                and not _is_explicit_direct_p0_declaration(kw_text)
+            )
+            if _p0_skip_for_issue_watch:
+                log.info(
+                    "Incident group: P0 keyword deferred to Issue Watch (not explicit declare) chat_id=%s text_tail=%r",
+                    chat_id,
+                    (text_raw or "")[-80:],
+                )
+            if _p0_kw_hit and not _p0_skip_for_issue_watch:
                 if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(
                         "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
@@ -1363,25 +1422,25 @@ def process_message(
                     log.info("Incident group: session already active chat_id=%s", chat_id)
                     return
 
-                ai = _priority_keyword_ai_triage(text_raw, groq_key)
+                ai = _priority_keyword_ai_triage(kw_text, groq_key)
                 if ai is not None:
                     if ai.get("intent") != "declare_p0":
                         log.info(
                             "Incident group: P0 AI triage — no meeting (intent=%s) text_head=%r",
                             ai.get("intent"),
-                            text_raw[:200],
+                            kw_text[:200],
                         )
                         return
-                elif _legacy_p0_keyword_blocked(text_raw):
+                elif _legacy_p0_keyword_blocked(kw_text):
                     return
                 elif get_p0_keyword_groq_gate():
-                    if _is_explicit_direct_p0_declaration(text_raw):
+                    if _is_explicit_direct_p0_declaration(kw_text):
                         log.info(
                             "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
-                            text_raw[:200],
+                            kw_text[:200],
                         )
                     else:
-                        gv = groq_p0_keyword_declares_new_bridge(text_raw)
+                        gv = groq_p0_keyword_declares_new_bridge(kw_text)
                         if gv is False:
                             log.info(
                                 "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
@@ -1417,7 +1476,7 @@ def process_message(
                 return
 
             # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
-            if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
+            if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(kw_text):
                 if _is_explicit_p0_negation(text_raw):
                     log.info(
                         "Incident group: P1 trigger ignored (explicit negation) text_head=%r",
@@ -1468,7 +1527,7 @@ def process_message(
                 return
 
             if try_handle_issue_watch(
-                text_raw,
+                _strip_lark_composer_message_footer(text_raw, chat_label=source_chat_name),
                 chat_id,
                 user_id,
                 tenant_token or token,

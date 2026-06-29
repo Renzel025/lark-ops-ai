@@ -113,6 +113,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_ISSUE_WATCH_AI_PROVIDER` | claude | groq |
 | `P0_ISSUE_WATCH_MIN_CONFIDENCE` | 0.75 | 0.88 |
 | `P0_ISSUE_WATCH_MIN_REPORTS` | 4 | 2 |
+| `P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS` | 3 | **3** |
 
 ---
 

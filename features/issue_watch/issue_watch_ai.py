@@ -49,7 +49,7 @@ _ISSUE_WATCH_SYSTEM = (
     "9 website_downtime — official site cannot be accessed, infinite loading, site down\n"
     "10 registration_failures — new users cannot register\n"
     "11 backend_downtime — FPMS or PMS backend unreachable or unusable\n"
-    "12 widespread_impact — ONLY if this single message itself mentions 4+ distinct players/users "
+    "12 widespread_impact — ONLY if this single message itself mentions 3+ distinct players/users "
     "reporting the same issue (rare; bot also counts across messages separately)\n\n"
     "Rules:\n"
     "- is_incident_signal=TRUE when staff/OM report real symptoms in the **Major issue scope** above.\n"
@@ -244,9 +244,10 @@ _ALLOWED_CATEGORIES = frozenset(
 )
 
 
-def _anthropic_key() -> str:
-    _config.reload_env_runtime()
-    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+def _anthropic_configured() -> bool:
+    from p0_logic.anthropic_client import has_anthropic_auth
+
+    return has_anthropic_auth()
 
 
 def _groq_key() -> str:
@@ -265,7 +266,7 @@ def _issue_watch_ai_providers_to_try() -> List[str]:
     """
     _config.reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_AI_PROVIDER") or "auto").strip().lower()
-    has_claude = bool(_anthropic_key())
+    has_claude = _anthropic_configured()
     has_groq = bool(_groq_key())
     if raw == "groq":
         order: List[str] = []
@@ -462,7 +463,8 @@ def _keyword_classify(message_text: str) -> Optional[dict]:
         players = _extract_player_mentions(t)
         player_ids = extract_player_ids(t)
         cats = list(categories)
-        if players >= 4 and "widespread_impact" not in cats:
+        min_affected = _config.get_p0_issue_watch_min_affected_players()
+        if players >= min_affected and "widespread_impact" not in cats:
             cats.append("widespread_impact")
         summ = _summary_with_players(summary, cats, players, t)
         out = {
@@ -525,7 +527,7 @@ def classify_issue_watch_message(message_text: str) -> Optional[dict]:
         }
     providers = _issue_watch_ai_providers_to_try()
     if not providers:
-        log.warning("issue_watch_ai: no ANTHROPIC/GROQ key — keyword rules only (more false positives)")
+        log.warning("issue_watch_ai: no Claude/GROQ auth — keyword rules only (more false positives)")
     for i, provider in enumerate(providers):
         ai = _classify_via_provider(provider, t)
         if ai is not None:

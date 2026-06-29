@@ -74,12 +74,14 @@ log.info(
 )
 
 from p0_logic.config import get_p0_issue_watch_enabled, get_dm_instruction_open_ids
+from p0_logic.anthropic_client import anthropic_auth_mode, has_anthropic_auth
 
 if get_p0_issue_watch_enabled():
     _iw_dm = get_dm_instruction_open_ids()
     log.info(
-        "issue_watch: ENABLED — DM recipients=%s (P0_DM_INSTRUCTION_OPEN_IDS); needs ANTHROPIC_API_KEY",
+        "issue_watch: ENABLED — DM recipients=%s claude_auth=%s",
         len(_iw_dm),
+        anthropic_auth_mode() or ("none" if not has_anthropic_auth() else "ok"),
     )
 else:
     log.info("issue_watch: disabled (set P0_ISSUE_WATCH_ENABLED=1)")

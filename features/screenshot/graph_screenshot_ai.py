@@ -31,24 +31,25 @@ _ALLOWED_RANGES = frozenset({"30m", "1h", "2h", "3h", "6h"})
 def resolve_graph_screenshot_ai_provider() -> str:
     """
     ``P0_GRAPH_SCREENSHOT_AI_PROVIDER``: ``claude`` | ``groq`` | ``auto`` (default).
-    ``auto`` prefers Claude when ``ANTHROPIC_API_KEY`` is set, else Groq.
+    ``auto`` prefers Claude when OAuth/API key is configured, else Groq.
     """
     _config.reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_AI_PROVIDER") or "auto").strip().lower()
     if raw == "claude":
-        return "claude" if _anthropic_key() else ""
+        return "claude" if _anthropic_configured() else ""
     if raw == "groq":
         return "groq" if _groq_key() else ""
-    if _anthropic_key():
+    if _anthropic_configured():
         return "claude"
     if _groq_key():
         return "groq"
     return ""
 
 
-def _anthropic_key() -> str:
-    _config.reload_env_runtime()
-    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+def _anthropic_configured() -> bool:
+    from p0_logic.anthropic_client import has_anthropic_auth
+
+    return has_anthropic_auth()
 
 
 def _groq_key() -> str:
