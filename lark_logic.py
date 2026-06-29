@@ -216,6 +216,24 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
 
 
+# Lark mobile/desktop composer may append ``\\nMessage <chat display name>`` to im.message text.
+# e.g. deposit paste + ``Message p0 detection dev`` falsely matches ``\\bp0\\b`` keyword trigger.
+_LARK_COMPOSER_MESSAGE_FOOTER_RE = re.compile(r"(?is)\n+Message\s+.+?\s*$")
+
+
+def _strip_lark_composer_message_footer(text: str) -> str:
+    """Remove trailing ``Message <group name>`` Lark UI suffix before keyword / triage."""
+    t = text or ""
+    m = _LARK_COMPOSER_MESSAGE_FOOTER_RE.search(t)
+    if m:
+        return t[: m.start()].rstrip()
+    return t
+
+
+def _text_for_priority_keyword_trigger(text: str) -> str:
+    return _strip_lark_composer_message_footer(text)
+
+
 _OVERVIEW_TEMPLATE_MARKERS = (
     "incident overview",
     "事故概览",
@@ -1336,8 +1354,9 @@ def process_message(
             return
 
         if is_detection:
+            kw_text = _text_for_priority_keyword_trigger(text_raw)
             # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
-            if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(text_raw):
+            if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text):
                 if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(
                         "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
@@ -1363,25 +1382,25 @@ def process_message(
                     log.info("Incident group: session already active chat_id=%s", chat_id)
                     return
 
-                ai = _priority_keyword_ai_triage(text_raw, groq_key)
+                ai = _priority_keyword_ai_triage(kw_text, groq_key)
                 if ai is not None:
                     if ai.get("intent") != "declare_p0":
                         log.info(
                             "Incident group: P0 AI triage — no meeting (intent=%s) text_head=%r",
                             ai.get("intent"),
-                            text_raw[:200],
+                            kw_text[:200],
                         )
                         return
-                elif _legacy_p0_keyword_blocked(text_raw):
+                elif _legacy_p0_keyword_blocked(kw_text):
                     return
                 elif get_p0_keyword_groq_gate():
-                    if _is_explicit_direct_p0_declaration(text_raw):
+                    if _is_explicit_direct_p0_declaration(kw_text):
                         log.info(
                             "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
-                            text_raw[:200],
+                            kw_text[:200],
                         )
                     else:
-                        gv = groq_p0_keyword_declares_new_bridge(text_raw)
+                        gv = groq_p0_keyword_declares_new_bridge(kw_text)
                         if gv is False:
                             log.info(
                                 "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
@@ -1417,7 +1436,7 @@ def process_message(
                 return
 
             # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
-            if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(text_raw):
+            if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(kw_text):
                 if _is_explicit_p0_negation(text_raw):
                     log.info(
                         "Incident group: P1 trigger ignored (explicit negation) text_head=%r",
@@ -1468,7 +1487,7 @@ def process_message(
                 return
 
             if try_handle_issue_watch(
-                text_raw,
+                _strip_lark_composer_message_footer(text_raw),
                 chat_id,
                 user_id,
                 tenant_token or token,
