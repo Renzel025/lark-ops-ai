@@ -49,7 +49,7 @@ _ISSUE_WATCH_SYSTEM = (
     "9 website_downtime — official site cannot be accessed, infinite loading, site down\n"
     "10 registration_failures — new users cannot register\n"
     "11 backend_downtime — FPMS or PMS backend unreachable or unusable\n"
-    "12 widespread_impact — ONLY if this single message itself mentions 4+ distinct players/users "
+    "12 widespread_impact — ONLY if this single message itself mentions 3+ distinct players/users "
     "reporting the same issue (rare; bot also counts across messages separately)\n\n"
     "Rules:\n"
     "- is_incident_signal=TRUE when staff/OM report real symptoms in the **Major issue scope** above.\n"
@@ -463,7 +463,8 @@ def _keyword_classify(message_text: str) -> Optional[dict]:
         players = _extract_player_mentions(t)
         player_ids = extract_player_ids(t)
         cats = list(categories)
-        if players >= 4 and "widespread_impact" not in cats:
+        min_affected = _config.get_p0_issue_watch_min_affected_players()
+        if players >= min_affected and "widespread_impact" not in cats:
             cats.append("widespread_impact")
         summ = _summary_with_players(summary, cats, players, t)
         out = {

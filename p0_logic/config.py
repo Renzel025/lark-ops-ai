@@ -2361,6 +2361,21 @@ def get_p0_issue_watch_min_reports() -> int:
     return max(2, min(n, 20))
 
 
+def get_p0_issue_watch_min_affected_players() -> int:
+    """
+    Minimum **affected player count** (from prose or Account IDs) before Issue Watch alerts
+    on player impact alone. Default **3** — 1–2 affected players do not trigger via count
+    (high-confidence solo path still applies when no player count is mentioned).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS") or "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 3
+    return max(1, min(n, 50))
+
+
 def get_p0_issue_watch_min_solo_reporters() -> int:
     """
     Without widespread (``MIN_REPORTS``) impact, require this many unique reporters

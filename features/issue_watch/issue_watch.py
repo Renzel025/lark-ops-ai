@@ -29,7 +29,7 @@ _CATEGORY_LABELS: Dict[str, Tuple[str, int]] = {
     "company_loss": ("Company / Financial Loss", 9),
     "registration_failures": ("Registration Failures", 10),
     "backend_downtime": ("Backend Downtime (FPMS/PMS)", 11),
-    "widespread_impact": ("Widespread Impact (4+ players)", 12),
+    "widespread_impact": ("Widespread Impact (multi-player)", 12),
 }
 
 _STORE_LOCK = threading.Lock()
@@ -315,6 +315,15 @@ def _try_player_id_followup(
         return True
 
     player_count = len(ids)
+    min_affected = _config.get_p0_issue_watch_min_affected_players()
+    if player_count < min_affected:
+        log.info(
+            "issue_watch: player ID follow-up below min affected players chat_id=%s count=%s min=%s",
+            chat_id,
+            player_count,
+            min_affected,
+        )
+        return True
     categories = list(recent.get("categories") or [])
     summary = str(recent.get("summary") or "").strip()
     concern = str(recent.get("concern_text") or recent.get("summary") or "").strip()
@@ -461,9 +470,47 @@ def _format_categories(keys: List[str], *, players_affected: int = 0) -> str:
         label, _num = _CATEGORY_LABELS.get(key, (key.replace("_", " ").title(), 0))
         lines.append(label)
     n = int(players_affected or 0)
-    if n >= _config.get_p0_issue_watch_min_reports():
+    if n >= _config.get_p0_issue_watch_min_affected_players():
         lines.append(f"{n} players are affected")
     return "\n".join(f"• {x}" for x in lines) if lines else "• (unspecified)"
+
+
+def _issue_watch_meets_alert_threshold(
+    *,
+    players_mentioned: int,
+    reporter_count: int,
+    confidence: float,
+) -> Tuple[bool, bool, bool]:
+    """
+    Returns ``(threshold_ok, players_widespread, reporters_widespread)``.
+
+    Player-count alerts require ``players_mentioned >= MIN_AFFECTED_PLAYERS`` (default 3).
+    When 1–2 players are explicitly mentioned, do not alert on high confidence alone.
+    """
+    min_reports = _config.get_p0_issue_watch_min_reports()
+    min_affected = _config.get_p0_issue_watch_min_affected_players()
+    min_conf = _config.get_p0_issue_watch_min_confidence()
+    min_solo_reporters = _config.get_p0_issue_watch_min_solo_reporters()
+
+    players_widespread = players_mentioned >= min_affected
+    reporters_widespread = reporter_count >= min_reports
+    widespread = players_widespread or reporters_widespread
+    high_conf = confidence >= min_conf
+
+    player_count_blocks_solo = (
+        players_mentioned >= 1
+        and players_mentioned < min_affected
+        and not reporters_widespread
+    )
+    if player_count_blocks_solo:
+        return False, players_widespread, reporters_widespread
+    if min_solo_reporters <= 1:
+        return high_conf or widespread, players_widespread, reporters_widespread
+    return (
+        widespread or (high_conf and reporter_count >= min_solo_reporters),
+        players_widespread,
+        reporters_widespread,
+    )
 
 
 def _quote_excerpt(text: str, limit: int = 320) -> str:
@@ -609,6 +656,7 @@ def try_handle_issue_watch(
     fingerprint = str(result.get("issue_fingerprint") or "unknown_issue")
     window_min = _config.get_p0_issue_watch_window_min()
     window_sec = float(window_min * 60)
+    min_affected = _config.get_p0_issue_watch_min_affected_players()
     min_reports = _config.get_p0_issue_watch_min_reports()
     min_conf = _config.get_p0_issue_watch_min_confidence()
     cooldown_min = _config.get_p0_issue_watch_cooldown_min()
@@ -643,24 +691,25 @@ def try_handle_issue_watch(
         players_in_msg = 0
     id_count = len(player_ids)
     players_mentioned = max(players_in_msg, id_count)
-    if players_mentioned >= min_reports and "widespread_impact" not in categories:
+    threshold_ok, players_widespread, reporters_widespread = _issue_watch_meets_alert_threshold(
+        players_mentioned=players_mentioned,
+        reporter_count=reporter_count,
+        confidence=confidence,
+    )
+    if players_widespread and "widespread_impact" not in categories:
         categories.append("widespread_impact")
-    widespread = reporter_count >= min_reports or players_mentioned >= min_reports
-    high_conf = confidence >= min_conf
+    widespread = players_widespread or reporters_widespread
     min_solo_reporters = _config.get_p0_issue_watch_min_solo_reporters()
-    if min_solo_reporters <= 1:
-        threshold_ok = high_conf or widespread
-    else:
-        threshold_ok = widespread or (high_conf and reporter_count >= min_solo_reporters)
 
     if not threshold_ok:
         log.info(
             "issue_watch: signal below threshold chat_id=%s conf=%.2f reporters=%s "
-            "players=%s widespread=%s min_solo_reporters=%s fp=%s",
+            "players=%s min_affected=%s widespread=%s min_solo_reporters=%s fp=%s",
             cid,
             confidence,
             reporter_count,
             players_mentioned,
+            min_affected,
             widespread,
             min_solo_reporters,
             fingerprint,

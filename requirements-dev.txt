@@ -1,0 +1,4 @@
+# Dev / CI tooling — installed by the Jenkins pipeline on top of p0_logic/requirements.txt
+# Pinned loosely; bump as needed.
+ruff>=0.4.0
+pyright>=1.1.350
