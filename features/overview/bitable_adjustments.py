@@ -17,7 +17,14 @@ from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
 
-from .deployment_card_builder import DeployCardRow, OpsCardRow, build_deploy_page_cards, build_ops_page_cards
+from .deployment_card_builder import (
+    DeployCardRow,
+    OpsCardRow,
+    build_deploy_empty_card,
+    build_deploy_page_cards,
+    build_ops_empty_card,
+    build_ops_page_cards,
+)
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -760,26 +767,35 @@ def _post_bitable_empty_notice(
     window_label: str,
     log_label: str,
 ) -> bool:
-    text = _format_bitable_empty_notice(kind=kind, window_label=window_label)
-    st, body = _lark.post_text_to_chat(group_chat_id, tenant_token, text)
+    w_start, w_end = _window_start_end_labels(window_label)
+    if kind == "deploy":
+        card = build_deploy_empty_card(window_start=w_start, window_end=w_end)
+    elif kind == "online_ops":
+        card = build_ops_empty_card(window_start=w_start, window_end=w_end)
+    else:
+        return False
+    st, body, _ = _lark.post_card_to_chat(group_chat_id, tenant_token, card)
     ok, code, msg = _lark.lark_im_message_create_ok(body)
     if st == 200 and ok:
         log.info(
-            "adjustment_bitable: empty-window notice posted kind=%s label=%s dest_tail=%s",
+            "adjustment_bitable: empty-window card posted kind=%s label=%s dest_tail=%s",
             kind,
             log_label,
             group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
         )
         return True
     log.warning(
-        "adjustment_bitable: empty-window notice failed kind=%s label=%s HTTP=%s code=%s msg=%r",
+        "adjustment_bitable: empty-window card failed kind=%s label=%s HTTP=%s code=%s msg=%r",
         kind,
         log_label,
         st,
         code,
         (msg or body or "")[:200],
     )
-    return False
+    text = _format_bitable_empty_notice(kind=kind, window_label=window_label)
+    st_f, body_f = _lark.post_text_to_chat(group_chat_id, tenant_token, text)
+    ok_f, _, _ = _lark.lark_im_message_create_ok(body_f)
+    return st_f == 200 and ok_f
 
 
 def _format_p0_declare_bitable_miss_text(diag: Dict[str, Any]) -> str:

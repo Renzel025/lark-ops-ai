@@ -350,6 +350,67 @@ def build_ops_page_cards(
     return cards
 
 
+def build_ops_empty_card(*, window_start: str, window_end: str) -> Dict[str, Any]:
+    """Ops card shell when 0 rows in the 48h window (same header as populated cards)."""
+    header: Dict[str, Any] = {
+        "template": "red",
+        "title": {"tag": "plain_text", "content": "🔴 线上操作汇总"},
+        "subtitle": {"tag": "plain_text", "content": f"{window_start} — {window_end} MYT"},
+        "text_tag_list": [
+            {
+                "tag": "text_tag",
+                "text": {"tag": "plain_text", "content": "0 条"},
+                "color": "neutral",
+            }
+        ],
+    }
+    elements: List[Dict[str, Any]] = [
+        {"tag": "markdown", "content": "**操作记录**（按执行时间倒序）"},
+        {"tag": "hr"},
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": "No records gathered from Base within 48 hrs.",
+            },
+        },
+        _card_footer_note("OSE 系统自动生成"),
+    ]
+    return _wrap_schema_v2(header, elements)
+
+
+def build_deploy_empty_card(*, window_start: str, window_end: str) -> Dict[str, Any]:
+    """Deploy card shell when 0 rows in the 48h window (same header as populated cards)."""
+    header: Dict[str, Any] = {
+        "template": "blue",
+        "title": {"tag": "plain_text", "content": "📦 部署流水"},
+        "subtitle": {"tag": "plain_text", "content": f"{window_start} — {window_end} MYT"},
+        "text_tag_list": [
+            {
+                "tag": "text_tag",
+                "text": {"tag": "plain_text", "content": "0 条"},
+                "color": "neutral",
+            }
+        ],
+    }
+    elements: List[Dict[str, Any]] = [
+        {
+            "tag": "markdown",
+            "content": "<font color='grey'>部署记录 · Full Release 时间倒序</font>",
+        },
+        {"tag": "hr"},
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": "No records gathered from Base within 48 hrs.",
+            },
+        },
+        _card_footer_note("OSE 系统自动生成"),
+    ]
+    return _wrap_schema_v2(header, elements)
+
+
 def build_deploy_page_cards(
     rows: List[DeployCardRow],
     *,
