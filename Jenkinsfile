@@ -75,8 +75,8 @@ pipeline {
       steps {
         sh '''
           set -eu
-          python3.8 --version
-          python3.8 -m venv "$VENV"
+          python3.9 --version
+          python3.9 -m venv "$VENV"
           . "$VENV/bin/activate"
           python -m pip install --upgrade pip wheel
           pip install -r p0_logic/requirements.txt
