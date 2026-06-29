@@ -25,6 +25,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_use_groq,
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
+    get_p0_issue_watch_enabled,
     HELP_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
@@ -216,22 +217,27 @@ def _is_pasted_meeting_invite_footer(text: str) -> bool:
     return t.startswith("p0 declared - created a meeting") or t.startswith("p1 declared - created a meeting")
 
 
-# Lark mobile/desktop composer may append ``\\nMessage <chat display name>`` to im.message text.
+# Lark mobile/desktop composer may append ``Message <chat display name>`` to im.message text.
 # e.g. deposit paste + ``Message p0 detection dev`` falsely matches ``\\bp0\\b`` keyword trigger.
-_LARK_COMPOSER_MESSAGE_FOOTER_RE = re.compile(r"(?is)\n+Message\s+.+?\s*$")
+# Footer may be on its own line OR same line as the last account id (no leading newline).
+_LARK_COMPOSER_MESSAGE_FOOTER_RE = re.compile(r"(?is)\s*Message\s+.+?\s*$")
 
 
-def _strip_lark_composer_message_footer(text: str) -> str:
+def _strip_lark_composer_message_footer(text: str, *, chat_label: str = "") -> str:
     """Remove trailing ``Message <group name>`` Lark UI suffix before keyword / triage."""
-    t = text or ""
+    t = (text or "").strip()
+    label = (chat_label or "").strip()
+    if label:
+        labeled = re.compile(rf"(?is)\s*Message\s+{re.escape(label)}\s*$")
+        t = labeled.sub("", t).rstrip()
     m = _LARK_COMPOSER_MESSAGE_FOOTER_RE.search(t)
     if m:
-        return t[: m.start()].rstrip()
+        t = t[: m.start()].rstrip()
     return t
 
 
-def _text_for_priority_keyword_trigger(text: str) -> str:
-    return _strip_lark_composer_message_footer(text)
+def _text_for_priority_keyword_trigger(text: str, *, chat_label: str = "") -> str:
+    return _strip_lark_composer_message_footer(text, chat_label=chat_label)
 
 
 _OVERVIEW_TEMPLATE_MARKERS = (
@@ -1354,9 +1360,29 @@ def process_message(
             return
 
         if is_detection:
-            kw_text = _text_for_priority_keyword_trigger(text_raw)
+            kw_text = _text_for_priority_keyword_trigger(text_raw, chat_label=source_chat_name)
+            if P0_KEYWORD_RE.search(text_raw or "") and not P0_KEYWORD_RE.search(kw_text or ""):
+                log.info(
+                    "Incident group: P0 keyword ignored (Lark composer footer only) chat_id=%s footer_tail=%r",
+                    chat_id,
+                    (text_raw or "")[-60:],
+                )
             # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
-            if (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text):
+            # When Issue Watch is on, only *explicit* P0 declarations start a meeting — player
+            # reports (incl. Lark footer ``Message p0 detection dev``) go to Issue Watch DM first.
+            _p0_kw_hit = (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text)
+            _p0_skip_for_issue_watch = (
+                _p0_kw_hit
+                and get_p0_issue_watch_enabled()
+                and not _is_explicit_direct_p0_declaration(kw_text)
+            )
+            if _p0_skip_for_issue_watch:
+                log.info(
+                    "Incident group: P0 keyword deferred to Issue Watch (not explicit declare) chat_id=%s text_tail=%r",
+                    chat_id,
+                    (text_raw or "")[-80:],
+                )
+            if _p0_kw_hit and not _p0_skip_for_issue_watch:
                 if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(
                         "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
@@ -1487,7 +1513,7 @@ def process_message(
                 return
 
             if try_handle_issue_watch(
-                _strip_lark_composer_message_footer(text_raw),
+                _strip_lark_composer_message_footer(text_raw, chat_label=source_chat_name),
                 chat_id,
                 user_id,
                 tenant_token or token,
