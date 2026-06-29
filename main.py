@@ -97,7 +97,7 @@ if p0_adjustment_bitable_enabled():
     _adj_ops = get_p0_adjustment_bitable_ops_table_id()
     log.info(
         "adjustment_bitable: ENABLED — app_token_tail=%s deploy_table_tail=%s ops_table_tail=%s "
-        "(yesterday 00:00 – end of today MYT; posts after Send overview)",
+        "(yesterday 00:00 – end of today MYT; posts on P0 declare + after Send overview)",
         _adj_app[-8:] if len(_adj_app) > 8 else (_adj_app or "(empty)"),
         _adj_tbl[-8:] if len(_adj_tbl) > 8 else (_adj_tbl or "(empty)"),
         _adj_ops[-8:] if len(_adj_ops) > 8 else (_adj_ops or "(none)"),
@@ -110,6 +110,11 @@ else:
 
 from p0_logic.config import get_p0_vc_ring_enabled, get_p0_vc_oauth_redirect_uri, p0_single_incident_group_mode
 
+if p0_single_incident_group_mode():
+    log.info(
+        "routing: P0_SINGLE_INCIDENT_GROUP=1 — one group for declare, meeting cards, overview, end/cancel"
+    )
+
 if get_p0_vc_ring_enabled():
     log.info(
         "vc_ring: ENABLED — rings @mentions + P0_MAJOR_CHECK_PERSON_IDS when duty joins VC "
@@ -119,39 +124,31 @@ if get_p0_vc_ring_enabled():
 else:
     log.info("vc_ring: disabled (set P0_VC_RING_ENABLED=1)")
 
-if p0_single_incident_group_mode():
+from p0_logic.config import (
+    get_p0_monitoring_chat_ids,
+    p0_monitoring_duty_warnings_enabled,
+    p0_monitoring_log_alerts_enabled,
+)
+
+from p0_logic import monitoring_notify as _monitoring_notify
+
+if get_p0_monitoring_chat_ids():
+    _monitoring_notify.install_log_handler()
     log.info(
-        "routing: P0_SINGLE_INCIDENT_GROUP=1 — one group for declare, meeting cards, overview, end/cancel"
+        "monitoring: ENABLED — chat_count=%s duty_warnings=%s log_alerts=%s",
+        len(get_p0_monitoring_chat_ids()),
+        p0_monitoring_duty_warnings_enabled(),
+        p0_monitoring_log_alerts_enabled(),
     )
+else:
+    log.info("monitoring: disabled (set P0_MONITORING_CHAT_IDS=oc_...)")
 
 app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()
 LARK_APP_SECRET = os.getenv("LARK_APP_SECRET", "").strip()
-# Optional second app: severity / minor follow-up DMs (must match config.get_lark_severity_app_credentials).
-LARK_SEVERITY_APP_ID = (
-    os.getenv("LARK_SEVERITY_APP_ID")
-    or os.getenv("LARK_APP_ID_SEVERITY")
-    or os.getenv("LARK_APP_ID_2")
-    or ""
-).strip()
-LARK_SEVERITY_APP_SECRET = (
-    os.getenv("LARK_SEVERITY_APP_SECRET")
-    or os.getenv("LARK_APP_SECRET_SEVERITY")
-    or os.getenv("LARK_APP_SECRET_2")
-    or ""
-).strip()
 LARK_ENCRYPT_KEY = os.getenv("LARK_ENCRYPT_KEY", "").strip()
 
-log.info(
-    "Lark severity DM bot: %s",
-    (
-        f"second app (app_id tail …{LARK_SEVERITY_APP_ID[-8:]})"
-        if LARK_SEVERITY_APP_ID
-        else "NOT configured — severity cards use PRIMARY app (same as overview). "
-        "Set LARK_SEVERITY_APP_ID + LARK_SEVERITY_APP_SECRET (or LARK_APP_ID_2 + LARK_APP_SECRET_2)."
-    ),
-)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 lark_client = (
@@ -564,7 +561,7 @@ def _extract_vc_meeting_ref(evt: Dict[str, Any]) -> str:
 @app.get("/lark/oauth/start")
 async def lark_oauth_start(open_id: str = ""):
     """Redirect duty to Lark OAuth (VC ring / recording fan-out user token)."""
-    from p0_logic.vc_user_oauth import build_lark_authorize_redirect_url
+    from features.recording.vc_user_oauth import build_lark_authorize_redirect_url
 
     url = build_lark_authorize_redirect_url(open_id)
     if not url:
@@ -588,8 +585,8 @@ async def lark_oauth_callback(
         msg = (error_description or error or "unknown").strip()
         log.warning("vc oauth callback error=%s desc=%s", error, (error_description or "")[:200])
         return HTMLResponse(f"VC OAuth failed: {msg}", status_code=400)
-    from p0_logic.vc_user_oauth import exchange_code_for_tokens
-    from p0_logic.vc_ring import maybe_retry_pending_vc_ring_for_declarer
+    from features.recording.vc_user_oauth import exchange_code_for_tokens
+    from features.recording.vc_ring import maybe_retry_pending_vc_ring_for_declarer
 
     ok, oid, detail = exchange_code_for_tokens(code, open_id_hint=state)
     if not ok or not oid:
@@ -707,10 +704,14 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             if oid:
                 strip_seeded_host_placeholder_for_open_id(oid)
 
+            if participant_name:
+                add_meeting_participant(participant_name)
+            else:
+                log.warning("vc join event received but participant name is empty after fallback lookup")
             joiner_uid = (refs.get("user_id") or "").strip()
             if meeting_ref and (oid or joiner_uid):
                 try:
-                    from p0_logic.vc_ring import maybe_ring_on_vc_join
+                    from features.recording.vc_ring import maybe_ring_on_vc_join
 
                     maybe_ring_on_vc_join(
                         meeting_ref,
@@ -721,7 +722,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 except Exception as e_ring:
                     log.warning("vc_ring on join failed: %s", e_ring)
             try:
-                from p0_logic.issue_watch_declare import maybe_prompt_major_check_person_joined
+                from features.issue_watch.issue_watch_declare import maybe_prompt_major_check_person_joined
 
                 maybe_prompt_major_check_person_joined(
                     meeting_ref=meeting_ref or "",
@@ -732,11 +733,6 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 )
             except Exception as e_cp:
                 log.warning("major check-person join prompt hook failed: %s", e_cp)
-
-            if participant_name:
-                add_meeting_participant(participant_name)
-            else:
-                log.warning("vc join event received but participant name is empty after fallback lookup")
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":
@@ -772,13 +768,13 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             end_p0_session_by_meeting_ref(
                 meeting_ref, tenant_token, meeting_no_fallback=meeting_no_fb
             )
-            from p0_logic.vc_recording_fanout import schedule_recording_fanout_poll_after_meeting_end
+            from features.recording.vc_recording_fanout import schedule_recording_fanout_poll_after_meeting_end
 
             schedule_recording_fanout_poll_after_meeting_end(tenant_token, evt)
             return
 
         if event_type == "vc.meeting.recording_ready_v1":
-            from p0_logic.vc_recording_fanout import handle_vc_recording_ready_fanout
+            from features.recording.vc_recording_fanout import handle_vc_recording_ready_fanout
 
             handle_vc_recording_ready_fanout(evt, tenant_token)
             return

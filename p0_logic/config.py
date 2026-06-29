@@ -191,6 +191,57 @@ def get_p0_notification_hub_chat_ids() -> List[str]:
     return _parse_oc_chat_id_csv(raw)
 
 
+def get_p0_monitoring_chat_ids() -> List[str]:
+    """
+    ``P0_MONITORING_CHAT_IDS`` — ops monitoring group(s) for duty-warning mirrors and log alerts.
+    Comma-separated ``oc_...``. Bot must be in each group. Empty = monitoring off.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_CHAT_IDS") or "").strip()
+    return _parse_oc_chat_id_csv(raw)
+
+
+def p0_monitoring_duty_warnings_enabled() -> bool:
+    """Mirror duty DM warnings (e.g. overview send blocked) to monitoring GC. Default on when chat IDs set."""
+    reload_env_runtime()
+    if not get_p0_monitoring_chat_ids():
+        return False
+    v = (os.getenv("P0_MONITORING_DUTY_WARNINGS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def p0_monitoring_log_alerts_enabled() -> bool:
+    """Post ERROR+ log lines to monitoring GC. Default on when chat IDs set."""
+    reload_env_runtime()
+    if not get_p0_monitoring_chat_ids():
+        return False
+    v = (os.getenv("P0_MONITORING_LOG_ALERTS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_monitoring_log_min_level() -> int:
+    """``P0_MONITORING_LOG_MIN_LEVEL`` — ERROR (default), WARNING, or CRITICAL."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_LOG_MIN_LEVEL") or "ERROR").strip().upper()
+    return {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+    }.get(raw, logging.ERROR)
+
+
+def get_p0_monitoring_alert_cooldown_sec() -> int:
+    """Dedupe identical monitoring alerts (default 120s). ``0`` = no dedupe."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_ALERT_COOLDOWN_SEC") or "120").strip()
+    try:
+        n = int(raw)
+        return max(0, min(n, 3600))
+    except ValueError:
+        return 120
+
+
 def get_incident_overview_target_map() -> Dict[str, str]:
     """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> mirror ``oc_`` for meeting cards when split)."""
     reload_env_runtime()
@@ -519,10 +570,10 @@ def get_vc_recording_fanout_drive_perm() -> str:
 def get_vc_recording_fanout_plain_meta_enabled() -> bool:
     """
     After the recording **card**, also post a compact ``RECORDING_READY`` text line for downstream
-    Minutes bots. Set ``VC_RECORDING_FANOUT_PLAIN_META=0`` to send the card only.
+    Minutes bots. Default **off** (card only). Set ``VC_RECORDING_FANOUT_PLAIN_META=1`` to enable.
     """
-    v = (os.getenv("VC_RECORDING_FANOUT_PLAIN_META") or "1").strip().lower()
-    return v not in ("0", "false", "no", "off")
+    v = (os.getenv("VC_RECORDING_FANOUT_PLAIN_META") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_lark_overview_post_chat_id_for_send(source_incident_chat_id: str, session_target_chat: str) -> str:
@@ -1604,7 +1655,7 @@ def get_p0_graph_screenshot_ai_enabled() -> bool:
 
 def get_p0_graph_screenshot_ai_provider() -> str:
     """``claude`` | ``groq`` | ``auto`` — see ``graph_screenshot_ai.resolve_graph_screenshot_ai_provider``."""
-    from .graph_screenshot_ai import resolve_graph_screenshot_ai_provider
+    from features.screenshot.graph_screenshot_ai import resolve_graph_screenshot_ai_provider
 
     return resolve_graph_screenshot_ai_provider()
 
@@ -2271,11 +2322,11 @@ def get_p0_issue_watch_enabled() -> bool:
 
 def get_p0_issue_watch_min_confidence() -> float:
     reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.75").strip()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.88").strip()
     try:
         c = float(raw)
     except ValueError:
-        c = 0.75
+        c = 0.88
     if c > 1.0:
         c = c / 100.0
     return max(0.5, min(c, 0.99))
@@ -2301,6 +2352,22 @@ def get_p0_issue_watch_min_reports() -> int:
     except ValueError:
         n = 4
     return max(2, min(n, 20))
+
+
+def get_p0_issue_watch_min_solo_reporters() -> int:
+    """
+    Without widespread (``MIN_REPORTS``) impact, require this many unique reporters
+    on the same ``issue_fingerprint`` before a high-confidence solo message triggers
+    a Major alert. Default **2** (single OM/player report never pages alone).
+    Set **1** to restore legacy behaviour (one high-confidence message can alert).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_SOLO_REPORTERS") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(1, min(n, 10))
 
 
 def get_p0_issue_watch_cooldown_min() -> int:
@@ -2590,6 +2657,37 @@ def get_p0_adjustment_bitable_table_id() -> str:
     return (os.getenv("P0_ADJUSTMENT_BITABLE_TABLE_ID") or "").strip()
 
 
+def get_p0_adjustment_bitable_post_chat_id() -> str:
+    """``P0_ADJUSTMENT_BITABLE_POST_CHAT_ID`` — fixed ``oc_...`` for 📦/🔴 cards; blank = follow session/overview routing."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_POST_CHAT_ID") or "").strip()
+    return raw if raw.startswith("oc_") else ""
+
+
+def resolve_p0_adjustment_bitable_post_chat_id(
+    *,
+    fallback_chat_id: str,
+    source_incident_chat_id: str = "",
+) -> str:
+    """
+    Destination for Bitable boss cards.
+
+    1. ``P0_ADJUSTMENT_BITABLE_POST_CHAT_ID`` when set (fixed hub group).
+    2. Else ``fallback_chat_id`` (meeting-card chat on P0 declare, overview dest on Send).
+    3. Else ``source_incident_chat_id``.
+    """
+    fixed = get_p0_adjustment_bitable_post_chat_id()
+    if fixed:
+        return fixed
+    fb = (fallback_chat_id or "").strip()
+    if fb.startswith("oc_"):
+        return fb
+    sid = (source_incident_chat_id or "").strip()
+    if sid.startswith("oc_"):
+        return sid
+    return ""
+
+
 def get_p0_adjustment_bitable_hours() -> int:
     reload_env_runtime()
     raw = (os.getenv("P0_ADJUSTMENT_BITABLE_HOURS") or "48").strip()
@@ -2602,7 +2700,9 @@ def get_p0_adjustment_bitable_hours() -> int:
 
 def get_p0_adjustment_bitable_max_rows() -> int:
     """
-    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — cap rows on the card. ``0`` = no limit (show all in window).
+    ``P0_ADJUSTMENT_BITABLE_MAX_ROWS`` — legacy cap for **both** tables when > 0.
+    Prefer ``P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS`` / ``DEPLOY_MAX_ROWS`` (defaults apply).
+    ``0`` = use per-table defaults only.
     """
     reload_env_runtime()
     raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_ROWS") or "0").strip()
@@ -2611,6 +2711,34 @@ def get_p0_adjustment_bitable_max_rows() -> int:
         return max(0, n)
     except ValueError:
         return 0
+
+
+def get_p0_adjustment_bitable_ops_max_rows() -> int:
+    """Cap ops rows on card. Default **8**. ``0`` = no limit."""
+    reload_env_runtime()
+    legacy = get_p0_adjustment_bitable_max_rows()
+    if legacy > 0:
+        return legacy
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS") or "8").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        return 8
+
+
+def get_p0_adjustment_bitable_deploy_max_rows() -> int:
+    """Cap deployment rows (before pagination). Default **16** (~2 pages). ``0`` = no limit."""
+    reload_env_runtime()
+    legacy = get_p0_adjustment_bitable_max_rows()
+    if legacy > 0:
+        return legacy
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS") or "16").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        return 16
 
 
 def get_p0_adjustment_bitable_timezone_name() -> str:
@@ -2661,13 +2789,52 @@ def p0_adjustment_bitable_reply_in_thread() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-def p0_adjustment_bitable_also_send_to_group() -> bool:
+def p0_adjustment_bitable_thread_followups() -> bool:
     """
-    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — after thread reply on the overview,
-    also post the same deployment card to the main group feed. Default ``1``.
+    ``P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS`` — first ops/deploy card in main group feed;
+    remaining pages reply in that message's thread only (default ``1``).
     """
     reload_env_runtime()
-    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "1").strip().lower()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def p0_adjustment_bitable_on_p0_declare() -> bool:
+    """Post ops + deployment cards when P0 is declared (default on when bitable enabled)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_adjustment_bitable_deploy_page_size() -> int:
+    """Rows per deployment card page (max 8). Default 8."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_PAGE_SIZE") or "8").strip()
+    try:
+        n = int(raw)
+        return max(1, min(n, 8))
+    except ValueError:
+        return 8
+
+
+def get_p0_adjustment_bitable_ops_page_size() -> int:
+    """Rows per ops card page (max 8). Default 8."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_PAGE_SIZE") or "8").strip()
+    try:
+        n = int(raw)
+        return max(1, min(n, 8))
+    except ValueError:
+        return 8
+
+
+def p0_adjustment_bitable_also_send_to_group() -> bool:
+    """
+    ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — legacy path only: after thread reply on
+    the overview card, also duplicate the notice in the main group feed. Default ``0``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
@@ -2707,6 +2874,22 @@ def get_p0_adjustment_bitable_field_names() -> Dict[str, Tuple[str, ...]]:
         "project": _split_field_aliases(
             os.getenv("P0_ADJUSTMENT_BITABLE_PROJECT_FIELD") or "",
             "Project|项目",
+        ),
+        "version": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_VERSION_FIELD") or "",
+            "Version|版本|Image Tag|镜像标签",
+        ),
+        "pm": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_PM_FIELD") or "",
+            "PM|产品经理|Product Manager",
+        ),
+        "email": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_EMAIL_FIELD") or "",
+            "Email|Release Title|邮件标题|Release",
+        ),
+        "changelog": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_CHANGELOG_FIELD") or "",
+            "Changelog|更新内容|Change log|Notes",
         ),
     }
 
@@ -2752,6 +2935,14 @@ def get_p0_adjustment_bitable_ops_field_names() -> Dict[str, Tuple[str, ...]]:
         "reason": _split_field_aliases(
             os.getenv("P0_ADJUSTMENT_BITABLE_OPS_REASON_FIELD") or "",
             "执行原因",
+        ),
+        "operator": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_OPERATOR_FIELD") or "",
+            "操作人员|Operator",
+        ),
+        "status": _split_field_aliases(
+            os.getenv("P0_ADJUSTMENT_BITABLE_OPS_STATUS_FIELD") or "",
+            "执行状况阶段|Status",
         ),
     }
 

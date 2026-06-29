@@ -6,13 +6,13 @@ Use this package from your app (e.g. webhook server) by importing the public API
 
 from . import config
 from . import cards
-from . import drafts
+from features.overview import drafts
 from . import groq_client
 from . import handlers
-from . import issues
+from features.overview import issues
 from . import lark_client
-from . import participants
-from . import session
+from features.session import participants
+from features.session import session
 from . import support
 from . import text_processing
 

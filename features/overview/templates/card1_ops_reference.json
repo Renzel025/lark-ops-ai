@@ -1,0 +1,35 @@
+{
+  "_comment": "Boss reference (card1). Body built dynamically in deployment_card_builder.py. Footer note tag replaced with grey markdown for Schema 2.0.",
+  "config": {
+    "wide_screen_mode": true
+  },
+  "header": {
+    "template": "red",
+    "title": {
+      "tag": "plain_text",
+      "content": "🔴 线上操作汇总"
+    },
+    "subtitle": {
+      "tag": "plain_text",
+      "content": "{{window_start}} — {{window_end}} MYT"
+    },
+    "text_tag_list": [
+      {
+        "tag": "text_tag",
+        "text": {
+          "tag": "plain_text",
+          "content": "P0"
+        },
+        "color": "red"
+      },
+      {
+        "tag": "text_tag",
+        "text": {
+          "tag": "plain_text",
+          "content": "{{total_count}} 条"
+        },
+        "color": "neutral"
+      }
+    ]
+  }
+}

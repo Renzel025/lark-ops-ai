@@ -1,0 +1,27 @@
+{
+  "config": {
+    "wide_screen_mode": true
+  },
+  "header": {
+    "template": "blue",
+    "title": {
+      "tag": "plain_text",
+      "content": "📦 Deployment"
+    },
+    "subtitle": {
+      "tag": "plain_text",
+      "content": "{{window_start}} — {{window_end}} MYT"
+    },
+    "text_tag_list": [
+      {
+        "tag": "text_tag",
+        "text": {
+          "tag": "plain_text",
+          "content": "第 {{page_current}} 页 / 共 {{page_total}} 页"
+        },
+        "color": "neutral"
+      }
+    ]
+  },
+  "elements": []
+}

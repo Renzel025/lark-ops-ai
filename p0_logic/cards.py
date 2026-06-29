@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from . import config as _config
 from . import groq_client as _groq
-from . import session as _session
+from features.session import session as _session
 from . import text_processing as _text
 
 PHT = _config.PHT
@@ -150,16 +150,14 @@ def build_meeting_link_notice_card(
     patchable: bool = False,
 ) -> Dict[str, Any]:
     """
-    Minimal link-style card: topic in header, meeting created + join label + URL in body.
-    Prefer ``build_meeting_link_unfurl_text`` for native Lark VC preview (raw URL unfurl).
+    Minimal card: **topic in header**, plain-text body (no ``**`` markdown).
+    Post the VC ``link`` as a **separate** plain-text message right after so Lark unfurls
+    the native meeting preview (participants, timer, Joined/Ended).
     """
+    _ = link
     prio = (priority or "P0").strip().upper()
     topic = (emergency_topic or "").strip() or MEETING_TOPIC
     title = topic[:100] if len(topic) > 100 else topic
-    url = (link or "").strip()
-    lines = [f"🚨 **{prio} meeting created.**", "", f"**{MEETING_JOIN_LINK_LABEL}**"]
-    if url:
-        lines.append(f"[{url}]({url})")
     cfg: Dict[str, Any] = {"enable_forward": True}
     if patchable:
         cfg["update_multi"] = True
@@ -169,7 +167,14 @@ def build_meeting_link_notice_card(
         "header": {"template": "blue", "title": {"tag": "plain_text", "content": title}},
         "body": {
             "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {
+                    "tag": "div",
+                    "text": {"tag": "plain_text", "content": f"🚨 {prio} meeting created."},
+                },
+                {
+                    "tag": "div",
+                    "text": {"tag": "plain_text", "content": MEETING_JOIN_LINK_LABEL},
+                },
             ],
         },
     }
@@ -195,25 +200,26 @@ def build_meeting_link_ended_card(
     update_multi: bool = False,
 ) -> Dict[str, Any]:
     """In-place update of the link notice card when the meeting ends."""
-    _ = emergency_topic
     prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    title = topic[:100] if len(topic) > 100 else topic
     dur = (duration_text or "Not available").strip() or "Not available"
-    lines = [f"✅ **{prio} meeting ended.**"]
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"✅ {prio} meeting ended."}},
+    ]
     if meeting_no:
-        lines.append(f"Meeting ID: {meeting_no}")
-    lines.append(f"Duration: {dur}")
+        elements.append(
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Meeting ID: {meeting_no}"}}
+        )
+    elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Duration: {dur}"}})
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"{prio} meeting ended"}},
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-            ],
-        },
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": elements},
     }
 
 
@@ -227,26 +233,32 @@ def build_meeting_link_cancelled_card(
     update_multi: bool = False,
 ) -> Dict[str, Any]:
     """In-place update of the link notice card when the meeting is cancelled."""
-    _ = emergency_topic
     prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    title = topic[:100] if len(topic) > 100 else topic
     dur = (duration_text or "Not available").strip() or "Not available"
     cancel_reason = (reason or "Unspecified").strip() or "Unspecified"
-    lines = [f"🛑 **{prio} meeting cancelled.**"]
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"🛑 {prio} meeting cancelled."}},
+    ]
     if meeting_no:
-        lines.append(f"Meeting ID: {meeting_no}")
-    lines.extend([f"Duration: {dur}", f"Reason: {cancel_reason}"])
+        elements.append(
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Meeting ID: {meeting_no}"}}
+        )
+    elements.extend(
+        [
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Duration: {dur}"}},
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"Reason: {cancel_reason}"}},
+        ]
+    )
     cfg: Dict[str, Any] = {"enable_forward": True}
     if update_multi:
         cfg["update_multi"] = True
     return {
         "schema": "2.0",
         "config": cfg,
-        "header": {"template": "grey", "title": {"tag": "plain_text", "content": f"{prio} meeting cancelled"}},
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-            ],
-        },
+        "header": {"template": "grey", "title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": elements},
     }
 
 
@@ -921,6 +933,21 @@ def build_help_commands_card() -> Dict[str, Any]:
     }
 
 
+def dm_escalation_reminder_plain() -> str:
+    """P0 SOP escalation reminder (plain text for DM lines)."""
+    return (
+        "Escalation category:\n\n"
+        "Major Issues:\n"
+        "Login, games/events entering, withdrawal, deposit problems.\n"
+        "• Need to send the P0 overview to the WhatsApp group as well\n\n"
+        "Minor Issues:\n"
+        "All other issues, including cases where it's unclear whether the problem is on our side "
+        "or limited to a specific provider (especially if only one provider is affected).\n"
+        "• No need to send the P0 overview to the WhatsApp group\n\n"
+        "Note: Every time you call, please provide them with a brief update on what is happening"
+    )
+
+
 def _dm_escalation_reminder_md() -> str:
     return (
         "**Escalation category:**\n\n"
@@ -932,6 +959,24 @@ def _dm_escalation_reminder_md() -> str:
         "or limited to a specific provider (especially if only one provider is affected).\n"
         "• No need to send the P0 overview to the WhatsApp group\n\n"
         "**Note:** Every time you call, please provide them with a brief update on what is happening."
+    )
+
+
+def build_issue_watch_declare_overview_hint_text() -> str:
+    """DM hint above the suggested overview preview card after Issue Watch declare."""
+    return (
+        "P0 has been declared - A suggested overview is being generated\n\n"
+        "Select Send to group - to post it to the incident group.\n\n"
+        "Select Cancel - to skip this auto-generated overview and proceed with the standard "
+        "Build overview flow using your own text and screenshots."
+    )
+
+
+def build_issue_watch_declare_followup_text() -> str:
+    """DM after declare: SOP reminder (meeting card is in the detection group)."""
+    return (
+        "P0 has been declared. Please follow the guidelines and SOP for handling a P0 incident.\n\n"
+        + dm_escalation_reminder_plain()
     )
 
 
@@ -1612,12 +1657,12 @@ def build_issue_watch_alert_card(
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": source_line}})
     if msg_link:
         elements.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "Open source message"},
-                "type": "primary",
-                "multi_url": {"url": msg_link, "pc_url": msg_link},
-            }
+            _button_open_url(
+                content="Open source message",
+                url=msg_link,
+                button_type="primary",
+                element_id="open_src_msg",
+            )
         )
     elements.append({"tag": "hr"})
     if declare_p0_buttons and (source_incident_chat_id or "").strip():
@@ -1740,4 +1785,59 @@ def build_issue_watch_declare_manual_card(
                 },
             ]
         },
+    }
+
+
+def build_monitoring_duty_card(
+    text: str,
+    *,
+    duty_open_id: str = "",
+    label: str = "duty warning",
+) -> Dict[str, Any]:
+    """Orange card when a duty DM warning is mirrored to the monitoring group."""
+    kind = (label or "duty warning").strip()
+    title = f"🔔 Ops monitor · {kind}"
+    oid = (duty_open_id or "").strip()
+    who = f"To: {oid[-12:]}" if oid else "To: duty DM"
+    body = (text or "").strip()
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": who[:500]}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "plain_text", "content": body[:12000] or "(empty)"}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": title[:100]},
+        },
+        "body": {"elements": elements},
+    }
+
+
+def build_monitoring_log_card(
+    message: str,
+    *,
+    level: str = "ERROR",
+    logger_name: str = "",
+) -> Dict[str, Any]:
+    """Red card when ERROR+ logs are forwarded to the monitoring group."""
+    lvl = (level or "ERROR").upper()
+    name = (logger_name or "logger").strip()
+    title = f"🔴 Ops monitor · log {lvl}"
+    body = (message or "").strip()
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": name[:500]}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "plain_text", "content": body[:12000] or "(empty)"}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "red",
+            "title": {"tag": "plain_text", "content": title[:100]},
+        },
+        "body": {"elements": elements},
     }

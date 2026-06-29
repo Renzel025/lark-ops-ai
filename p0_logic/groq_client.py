@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -29,13 +30,24 @@ def _timeout_kw():
     return _config.timeout_kw()
 
 
+def _groq_runtime() -> Tuple[str, str, str]:
+    """Fresh key/models after ``reload_env_runtime`` (module-level GROQ_* is import-time only)."""
+    _config.reload_env_runtime()
+    key = (os.getenv("GROQ_API_KEY") or "").strip()
+    model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "llama-3.1-8b-instant").strip()
+    vision = (os.getenv("GROQ_VISION_MODEL") or GROQ_VISION_MODEL or "llama-3.2-11b-vision-preview").strip()
+    return key, model, vision
+
+
 def groq_chat_once(system_prompt: str, user_content: str, max_tokens: int, model: Optional[str] = None) -> str:
-    if not GROQ_API_KEY:
+    api_key, default_model, _vision = _groq_runtime()
+    if not api_key:
         return ""
+    use_model = (model or default_model).strip()
     url = f"{GROQ_BASE}/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
-        "model": (model or GROQ_MODEL),
+        "model": use_model,
         "temperature": 0.2,
         "top_p": 0.9,
         "max_tokens": max_tokens,
@@ -60,16 +72,17 @@ def groq_chat_once(system_prompt: str, user_content: str, max_tokens: int, model
         except Exception:
             return ""
     finally:
-        perf_log(f"groq_chat_once model={model or GROQ_MODEL}", t0)
+        perf_log(f"groq_chat_once model={use_model}", t0)
 
 
 def groq_vision_ocr(image_bytes: bytes) -> str:
-    if not GROQ_API_KEY or not image_bytes:
+    api_key, _default_model, vision_model = _groq_runtime()
+    if not api_key or not image_bytes:
         return ""
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:image/jpeg;base64,{b64}"
     url = f"{GROQ_BASE}/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     system_prompt = (
         "You extract ONLY visible text from screenshots.\n"
         "Rules:\n"
@@ -82,7 +95,7 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
         "- If a part is unreadable, skip that part instead of inventing."
     )
     payload = {
-        "model": GROQ_VISION_MODEL,
+        "model": vision_model,
         "temperature": 0.0,
         "max_tokens": 2200,
         "messages": [
@@ -113,7 +126,7 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
             log.error("Groq vision parse error: %s", e)
             return ""
     finally:
-        perf_log(f"groq_vision_ocr model={GROQ_VISION_MODEL}", t0)
+        perf_log(f"groq_vision_ocr model={vision_model}", t0)
 
 
 def translate_to_zh(text: str) -> str:
@@ -319,18 +332,58 @@ def _parse_priority_keyword_classification(raw: str, provider: str) -> Optional[
 
 def classify_priority_keyword(message_text: str, provider: Optional[str] = None) -> Optional[dict]:
     """
-    One Groq call: declaration vs mention/handoff/question for ``p0`` / ``p1`` keyword hits.
-    Requires ``GROQ_API_KEY``. ``provider`` is ignored (Groq-only).
+    One LLM call: declaration vs mention/handoff/question for ``p0`` / ``p1`` keyword hits.
+    Failover chain (``auto``): **claude → gemini → groq**. Pass ``provider`` to force one.
     """
+    from . import config as _cfg
+
     t = (message_text or "").strip()
     if not t:
         return None
-    if not GROQ_API_KEY:
-        return None
     t = t[:4500]
     user_prompt = f"MESSAGE:\n{t}"
-    raw = groq_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
-    return _parse_priority_keyword_classification(raw, "groq")
+
+    def _via_claude() -> Optional[dict]:
+        from .anthropic_client import anthropic_chat_once
+
+        if not _cfg.get_anthropic_api_key():
+            return None
+        raw = anthropic_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=180)
+        return _parse_priority_keyword_classification(raw, "claude")
+
+    def _via_gemini() -> Optional[dict]:
+        from .gemini_client import gemini_chat_once
+
+        if not _cfg.get_gemini_api_key():
+            return None
+        raw = gemini_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
+        return _parse_priority_keyword_classification(raw, "gemini")
+
+    def _via_groq() -> Optional[dict]:
+        if not GROQ_API_KEY:
+            return None
+        raw = groq_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=160)
+        return _parse_priority_keyword_classification(raw, "groq")
+
+    _dispatch = {"claude": _via_claude, "gemini": _via_gemini, "groq": _via_groq}
+
+    names = (
+        [(provider or "").strip().lower()]
+        if provider
+        else _cfg.priority_keyword_ai_provider_chain()
+    )
+    for name in names:
+        fn = _dispatch.get(name)
+        if not fn:
+            continue
+        result = fn()
+        if result:
+            if len(names) > 1 or (provider is None and len(_cfg.priority_keyword_ai_provider_chain()) > 1):
+                if name != names[0]:
+                    log.info("classify_priority_keyword: failover succeeded via %s", name)
+            return result
+        log.info("classify_priority_keyword: %s returned no result — trying next provider", name)
+    return None
 
 
 def groq_classify_priority_keyword(message_text: str) -> Optional[dict]:
@@ -340,7 +393,7 @@ def groq_classify_priority_keyword(message_text: str) -> Optional[dict]:
 
 def classify_graph_screenshot_request(message_text: str) -> Optional[dict]:
     """Natural-language Grafana screenshot triage (Claude preferred, Groq fallback)."""
-    from .graph_screenshot_ai import classify_graph_screenshot_request as _classify
+    from features.screenshot.graph_screenshot_ai import classify_graph_screenshot_request as _classify
 
     return _classify(message_text)
 
