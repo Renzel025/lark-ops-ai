@@ -2385,7 +2385,7 @@ def get_p0_issue_watch_cooldown_min() -> int:
         n = int(raw)
     except ValueError:
         n = 20
-    return max(5, min(n, 180))
+    return max(1, min(n, 180))
 
 
 def get_p0_issue_watch_id_wait_sec() -> int:

@@ -623,7 +623,12 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
     # "we tag … as p0" — modal + we + tag stays with Groq / thread-confirm ("can we tag…").
     if not re.search(r"(?is)\b(?:can|could|should|may|would|shall)\s+we\s+(?:tag|treat|consider|declare)", t):
         if re.search(
-            rf"(?is)\b(?:i|we)\s+consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            rf"(?is)\b(?:i|we)\s+(?:will\s+)?consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
+        if re.search(
+            rf"(?is)\b(?:confirm|confirmed)\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
             t,
         ):
             return True
