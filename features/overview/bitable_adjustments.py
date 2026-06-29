@@ -671,6 +671,17 @@ def _post_boss_style_notices(
                 )
             else:
                 diag["card_post_failed"] = True
+        else:
+            diag["deploy_rows"] = 0
+            if _post_bitable_empty_notice(
+                tenant_token,
+                group_chat_id,
+                kind="deploy",
+                window_label=window_label,
+                log_label=f"{trigger}:deploy",
+            ):
+                posted_any = True
+                dm_lines.append(_format_bitable_empty_notice(kind="deploy", window_label=window_label))
 
     ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
     if ops_tbl:
@@ -709,41 +720,86 @@ def _post_boss_style_notices(
             else:
                 diag["card_post_failed"] = True
         else:
-            log.warning(
+            diag["ops_rows"] = 0
+            log.info(
                 "adjustment_bitable: ops 0 meaningful rows in window trigger=%s window=%s",
                 trigger,
                 window_label or "(unknown)",
             )
+            if _post_bitable_empty_notice(
+                tenant_token,
+                group_chat_id,
+                kind="online_ops",
+                window_label=window_label,
+                log_label=f"{trigger}:ops",
+            ):
+                posted_any = True
+                dm_lines.append(_format_bitable_empty_notice(kind="online_ops", window_label=window_label))
 
     diag["window_label"] = window_label
     _ = overview_message_id
     return posted_any, dm_lines, diag
 
 
+def _format_bitable_empty_notice(*, kind: str, window_label: str = "") -> str:
+    """Plain-text notice when Bitable fetch succeeded but 0 rows in the 48h window."""
+    win = (window_label or "").strip()
+    win_part = f" ({win})" if win else ""
+    if kind == "deploy":
+        return f"📦 No records gathered from Base within 48 hrs{win_part}."
+    if kind == "online_ops":
+        return f"🔴 线上操作汇总: No records gathered from Base within 48 hrs{win_part}."
+    return f"No records gathered from Base within 48 hrs{win_part}."
+
+
+def _post_bitable_empty_notice(
+    tenant_token: str,
+    group_chat_id: str,
+    *,
+    kind: str,
+    window_label: str,
+    log_label: str,
+) -> bool:
+    text = _format_bitable_empty_notice(kind=kind, window_label=window_label)
+    st, body = _lark.post_text_to_chat(group_chat_id, tenant_token, text)
+    ok, code, msg = _lark.lark_im_message_create_ok(body)
+    if st == 200 and ok:
+        log.info(
+            "adjustment_bitable: empty-window notice posted kind=%s label=%s dest_tail=%s",
+            kind,
+            log_label,
+            group_chat_id[-12:] if len(group_chat_id) > 12 else group_chat_id,
+        )
+        return True
+    log.warning(
+        "adjustment_bitable: empty-window notice failed kind=%s label=%s HTTP=%s code=%s msg=%r",
+        kind,
+        log_label,
+        st,
+        code,
+        (msg or body or "")[:200],
+    )
+    return False
+
+
 def _format_p0_declare_bitable_miss_text(diag: Dict[str, Any]) -> str:
-    """One-line hint in group when P0 declare expected cards but none posted."""
+    """Fallback hint when P0 declare expected Bitable output but nothing could be posted."""
     ops_err = (diag.get("ops_err") or "").strip()
     dep_err = (diag.get("deploy_err") or "").strip()
     ops_n = int(diag.get("ops_rows") or 0)
     dep_n = int(diag.get("deploy_rows") or 0)
-    win = (diag.get("window_label") or "").strip()
     if ops_err or dep_err:
         hint = ops_err or dep_err
         return (
-            "⚠️ **Bitable (P0 declare):** fetch failed — check DEV bot has "
-            "`bitable:app:readonly` scope + access to the Base.\n"
-            f"Detail: `{hint[:180]}`"
+            "⚠️ Bitable (P0 declare): fetch failed — check bot has bitable:app:readonly "
+            f"scope and Base access.\nDetail: {hint[:180]}"
         )
     if diag.get("card_post_failed") and (ops_n or dep_n):
         return (
-            f"⚠️ **Bitable (P0 declare):** found {ops_n} ops + {dep_n} deploy row(s) "
-            "but interactive card post failed — see server log `adjustment_bitable`."
+            f"⚠️ Bitable (P0 declare): found {ops_n} ops + {dep_n} deploy row(s) "
+            "but interactive card post failed — see server log adjustment_bitable."
         )
-    win_part = f" ({win})" if win else ""
-    return (
-        f"ℹ️ **Bitable (P0 declare):** no ops/deploy rows in 48h window{win_part}. "
-        "Cards only show when Base has matching times."
-    )
+    return ""
 
 
 def _mark_session_bitable_posted(source_chat_id: str) -> None:
@@ -820,7 +876,8 @@ def maybe_post_adjustment_notice_on_p0_declare(
             )
             try:
                 hint = _format_p0_declare_bitable_miss_text(diag)
-                _lark.post_text_to_chat(dest, tenant_token, hint)
+                if hint:
+                    _lark.post_text_to_chat(dest, tenant_token, hint)
             except Exception as hint_err:
                 log.warning("adjustment_bitable: p0_declare hint post failed: %s", hint_err)
     except Exception as e:
