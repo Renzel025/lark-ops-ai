@@ -1,14 +1,20 @@
 """
 Anthropic Claude API — chat for natural-language ops triage (screenshot requests, etc.).
+
+Auth (first match wins for Bearer paths; API key is separate fallback):
+  1. ``ANTHROPIC_AUTH_TOKEN`` / ``CLAUDE_CODE_OAUTH_TOKEN`` (``claude setup-token``)
+  2. Claude Code OAuth file ``~/.claude/.credentials.json`` (subscription Pro/Max)
+  3. ``ANTHROPIC_API_KEY`` (pay-as-you-go console key)
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Optional, Tuple
 
 import requests
 
+from . import claude_oauth as _oauth
 from . import config as _config
 
 log = logging.getLogger("lark-ops-ai")
@@ -27,6 +33,56 @@ def _model() -> str:
     return (os.getenv("ANTHROPIC_MODEL") or "claude-3-5-haiku-20241022").strip()
 
 
+def anthropic_auth_mode() -> str:
+    """``api_key`` | ``auth_token`` | ``oauth_file`` | empty."""
+    if _api_key():
+        # API key always available as fallback; report subscription auth when present.
+        bearer, mode = _oauth.resolve_anthropic_bearer_token()
+        if bearer and mode:
+            return mode
+        return "api_key"
+    bearer, mode = _oauth.resolve_anthropic_bearer_token()
+    return mode
+
+
+def has_anthropic_auth() -> bool:
+    """True when any Claude auth path is configured (OAuth, auth token, or API key)."""
+    if _api_key():
+        return True
+    bearer, _ = _oauth.resolve_anthropic_bearer_token()
+    return bool(bearer)
+
+
+def _request_headers() -> Tuple[dict, str]:
+    """
+    Build Messages API headers. Subscription OAuth / auth token preferred over API key
+    when ``P0_ANTHROPIC_PREFER_OAUTH=1`` (default) or when no API key is set.
+    """
+    _config.reload_env_runtime()
+    prefer_oauth = (os.getenv("P0_ANTHROPIC_PREFER_OAUTH") or "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    bearer, mode = _oauth.resolve_anthropic_bearer_token()
+    key = _api_key()
+    headers = {
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+    }
+    if bearer and (prefer_oauth or not key):
+        headers["authorization"] = f"Bearer {bearer}"
+        return headers, mode or "bearer"
+    if key:
+        headers["x-api-key"] = key
+        return headers, "api_key"
+    if bearer:
+        headers["authorization"] = f"Bearer {bearer}"
+        return headers, mode or "bearer"
+    return headers, ""
+
+
 def anthropic_chat_once(
     system_prompt: str,
     user_content: str,
@@ -34,8 +90,8 @@ def anthropic_chat_once(
     model: Optional[str] = None,
 ) -> str:
     """Single Claude Messages API round trip. Returns assistant text or empty string on failure."""
-    key = _api_key()
-    if not key:
+    headers, auth_mode = _request_headers()
+    if auth_mode not in ("api_key", "auth_token", "oauth_file", "bearer"):
         return ""
     payload = {
         "model": (model or _model()).strip(),
@@ -48,21 +104,33 @@ def anthropic_chat_once(
     try:
         resp = requests.post(
             ANTHROPIC_MESSAGES_URL,
-            headers={
-                "x-api-key": key,
-                "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            },
+            headers=headers,
             json=payload,
             timeout=_config.REQ_TIMEOUT,
         )
     except requests.RequestException as e:
-        log.warning("anthropic_chat_once: request failed: %s", e)
+        log.warning("anthropic_chat_once: request failed auth=%s: %s", auth_mode, e)
         return ""
+    if resp.status_code == 401 and auth_mode == "oauth_file":
+        # Retry once after forced refresh.
+        fresh = _oauth.get_oauth_access_token(allow_refresh=True)
+        if fresh:
+            headers["authorization"] = f"Bearer {fresh}"
+            try:
+                resp = requests.post(
+                    ANTHROPIC_MESSAGES_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=_config.REQ_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                log.warning("anthropic_chat_once: retry failed: %s", e)
+                return ""
     if resp.status_code != 200:
         log.warning(
-            "anthropic_chat_once: HTTP=%s body=%s",
+            "anthropic_chat_once: HTTP=%s auth=%s body=%s",
             resp.status_code,
+            auth_mode,
             (resp.text or "")[:400],
         )
         return ""

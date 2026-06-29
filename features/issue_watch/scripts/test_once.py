@@ -12,6 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from p0_logic import config
+from p0_logic.anthropic_client import anthropic_auth_mode, has_anthropic_auth
 from features.issue_watch.issue_watch_ai import classify_issue_watch_message
 
 
@@ -27,6 +28,8 @@ def main() -> int:
     print("ENV_PATH:", config.ENV_PATH)
     print("P0_ISSUE_WATCH_ENABLED:", config.get_p0_issue_watch_enabled())
     print("DM recipients:", config.get_dm_instruction_open_ids())
+    print("claude auth:", anthropic_auth_mode() or "(none)")
+    print("has_anthropic_auth:", has_anthropic_auth())
     print("ANTHROPIC_API_KEY set:", bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()))
     print("---")
     print("MESSAGE:", msg)

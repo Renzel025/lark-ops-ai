@@ -346,7 +346,7 @@ def classify_priority_keyword(message_text: str, provider: Optional[str] = None)
     def _via_claude() -> Optional[dict]:
         from .anthropic_client import anthropic_chat_once
 
-        if not _cfg.get_anthropic_api_key():
+        if not _cfg.anthropic_claude_configured():
             return None
         raw = anthropic_chat_once(_PRIORITY_KEYWORD_CLASSIFY_SYSTEM, user_prompt, max_tokens=180)
         return _parse_priority_keyword_classification(raw, "claude")

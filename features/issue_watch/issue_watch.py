@@ -595,7 +595,7 @@ def try_handle_issue_watch(
 
     result = classify_issue_watch_message(raw)
     if not result:
-        log.warning("issue_watch: no classification (check ANTHROPIC_API_KEY) chat_id=%s", cid)
+        log.warning("issue_watch: no classification (check Claude OAuth or ANTHROPIC_API_KEY) chat_id=%s", cid)
         return True
 
     if not result.get("is_incident_signal"):

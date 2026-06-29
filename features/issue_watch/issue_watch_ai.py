@@ -244,9 +244,10 @@ _ALLOWED_CATEGORIES = frozenset(
 )
 
 
-def _anthropic_key() -> str:
-    _config.reload_env_runtime()
-    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+def _anthropic_configured() -> bool:
+    from p0_logic.anthropic_client import has_anthropic_auth
+
+    return has_anthropic_auth()
 
 
 def _groq_key() -> str:
@@ -265,7 +266,7 @@ def _issue_watch_ai_providers_to_try() -> List[str]:
     """
     _config.reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_AI_PROVIDER") or "auto").strip().lower()
-    has_claude = bool(_anthropic_key())
+    has_claude = _anthropic_configured()
     has_groq = bool(_groq_key())
     if raw == "groq":
         order: List[str] = []
@@ -525,7 +526,7 @@ def classify_issue_watch_message(message_text: str) -> Optional[dict]:
         }
     providers = _issue_watch_ai_providers_to_try()
     if not providers:
-        log.warning("issue_watch_ai: no ANTHROPIC/GROQ key — keyword rules only (more false positives)")
+        log.warning("issue_watch_ai: no Claude/GROQ auth — keyword rules only (more false positives)")
     for i, provider in enumerate(providers):
         ai = _classify_via_provider(provider, t)
         if ai is not None:
