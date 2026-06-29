@@ -554,7 +554,14 @@ def _recall_send_block_warning_dm(sender_open_id: str, tenant_token: str) -> Non
 
 def _post_send_block_warning_dm(sender_open_id: str, tenant_token: str, text: str) -> None:
     _recall_send_block_warning_dm(sender_open_id, tenant_token)
-    st, body = _lark.post_text_to_open_id(sender_open_id, tenant_token, text)
+    from p0_logic import monitoring_notify as _monitor
+
+    st, body = _monitor.post_duty_dm(
+        sender_open_id,
+        tenant_token,
+        text,
+        monitor_label="overview send blocked",
+    )
     if st != 200:
         log.warning(
             "send-block warning POST failed HTTP=%s open_id=%s body=%s",

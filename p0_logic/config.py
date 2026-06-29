@@ -191,6 +191,57 @@ def get_p0_notification_hub_chat_ids() -> List[str]:
     return _parse_oc_chat_id_csv(raw)
 
 
+def get_p0_monitoring_chat_ids() -> List[str]:
+    """
+    ``P0_MONITORING_CHAT_IDS`` — ops monitoring group(s) for duty-warning mirrors and log alerts.
+    Comma-separated ``oc_...``. Bot must be in each group. Empty = monitoring off.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_CHAT_IDS") or "").strip()
+    return _parse_oc_chat_id_csv(raw)
+
+
+def p0_monitoring_duty_warnings_enabled() -> bool:
+    """Mirror duty DM warnings (e.g. overview send blocked) to monitoring GC. Default on when chat IDs set."""
+    reload_env_runtime()
+    if not get_p0_monitoring_chat_ids():
+        return False
+    v = (os.getenv("P0_MONITORING_DUTY_WARNINGS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def p0_monitoring_log_alerts_enabled() -> bool:
+    """Post ERROR+ log lines to monitoring GC. Default on when chat IDs set."""
+    reload_env_runtime()
+    if not get_p0_monitoring_chat_ids():
+        return False
+    v = (os.getenv("P0_MONITORING_LOG_ALERTS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_monitoring_log_min_level() -> int:
+    """``P0_MONITORING_LOG_MIN_LEVEL`` — ERROR (default), WARNING, or CRITICAL."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_LOG_MIN_LEVEL") or "ERROR").strip().upper()
+    return {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+    }.get(raw, logging.ERROR)
+
+
+def get_p0_monitoring_alert_cooldown_sec() -> int:
+    """Dedupe identical monitoring alerts (default 120s). ``0`` = no dedupe."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MONITORING_ALERT_COOLDOWN_SEC") or "120").strip()
+    try:
+        n = int(raw)
+        return max(0, min(n, 3600))
+    except ValueError:
+        return 120
+
+
 def get_incident_overview_target_map() -> Dict[str, str]:
     """Parsed ``INCIDENT_OVERVIEW_TARGET_MAP`` env (detection ``oc_`` -> mirror ``oc_`` for meeting cards when split)."""
     reload_env_runtime()

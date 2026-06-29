@@ -10,6 +10,9 @@ Each folder = **one product area**. Logic + manual scripts live together.
 | **`features/issue_watch/`** | Major P0 detection in groups | `python3 features/issue_watch/scripts/test_once.py "message"` |
 | **`features/session/`** | P0/P1 session, meeting, participants | `bash features/session/scripts/diagnose_p0_incident_logs.sh` |
 
+Full command list: **[docs/MANUAL_TEST_COMMANDS.md](../docs/MANUAL_TEST_COMMANDS.md)**  
+Env ON/OFF guide: **[docs/ENV_FEATURES_TOGGLES.md](../docs/ENV_FEATURES_TOGGLES.md)**
+
 ## Layout per feature
 
 ```

@@ -32,6 +32,8 @@ ENV_PROFILE=dev bash scripts/run_dev.sh
 | Doc | Purpose |
 |-----|---------|
 | [docs/P0_P1_OPERATOR_GUIDE.md](docs/P0_P1_OPERATOR_GUIDE.md) | How to use the bot (operators) |
+| [docs/ENV_FEATURES_TOGGLES.md](docs/ENV_FEATURES_TOGGLES.md) | Env ON/OFF per feature + prod vs dev |
+| [docs/MANUAL_TEST_COMMANDS.md](docs/MANUAL_TEST_COMMANDS.md) | Python/shell commands to test each feature |
 | [docs/IT_LARK_DEV_APP_CHECKLIST.md](docs/IT_LARK_DEV_APP_CHECKLIST.md) | Lark app scopes & events |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Server deploy & restart |
 | [features/README.md](features/README.md) | Feature folders + test scripts |
@@ -39,10 +41,14 @@ ENV_PROFILE=dev bash scripts/run_dev.sh
 
 ## Manual test scripts
 
+See **[docs/MANUAL_TEST_COMMANDS.md](docs/MANUAL_TEST_COMMANDS.md)** for the full list. Quick examples:
+
 ```bash
+python3 features/overview/scripts/test_bitable_once.py --post --chat-id=oc_YOUR_GROUP
 python3 features/recording/scripts/post_card_once.py
 python3 features/screenshot/scripts/grafana_screenshot_run_once.py --post-lark
 python3 features/issue_watch/scripts/test_once.py "website loading"
+bash features/session/scripts/diagnose_p0_incident_logs.sh
 ```
 
 ## Env (minimum)

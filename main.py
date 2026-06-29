@@ -124,6 +124,25 @@ if get_p0_vc_ring_enabled():
 else:
     log.info("vc_ring: disabled (set P0_VC_RING_ENABLED=1)")
 
+from p0_logic.config import (
+    get_p0_monitoring_chat_ids,
+    p0_monitoring_duty_warnings_enabled,
+    p0_monitoring_log_alerts_enabled,
+)
+
+from p0_logic import monitoring_notify as _monitoring_notify
+
+if get_p0_monitoring_chat_ids():
+    _monitoring_notify.install_log_handler()
+    log.info(
+        "monitoring: ENABLED — chat_count=%s duty_warnings=%s log_alerts=%s",
+        len(get_p0_monitoring_chat_ids()),
+        p0_monitoring_duty_warnings_enabled(),
+        p0_monitoring_log_alerts_enabled(),
+    )
+else:
+    log.info("monitoring: disabled (set P0_MONITORING_CHAT_IDS=oc_...)")
+
 app = FastAPI()
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "").strip()

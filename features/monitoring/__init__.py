@@ -1,0 +1,6 @@
+# Monitoring group — duty warning mirrors + log ERROR alerts
+# P0_MONITORING_CHAT_IDS=oc_your_ops_monitoring_group
+# P0_MONITORING_DUTY_WARNINGS=1
+# P0_MONITORING_LOG_ALERTS=1
+# P0_MONITORING_LOG_MIN_LEVEL=ERROR
+# P0_MONITORING_ALERT_COOLDOWN_SEC=120
