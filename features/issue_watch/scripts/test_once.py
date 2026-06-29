@@ -30,6 +30,8 @@ def main() -> int:
     print("DM recipients:", config.get_dm_instruction_open_ids())
     print("claude auth:", anthropic_auth_mode() or "(none)")
     print("has_anthropic_auth:", has_anthropic_auth())
+    print("ANTHROPIC_MODEL:", (os.getenv("ANTHROPIC_MODEL") or "").strip() or "(default)")
+    print("ANTHROPIC_OAUTH_MODEL:", (os.getenv("ANTHROPIC_OAUTH_MODEL") or "").strip() or "(auto)")
     print("ANTHROPIC_API_KEY set:", bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()))
     print("---")
     print("MESSAGE:", msg)

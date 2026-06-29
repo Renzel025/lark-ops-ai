@@ -21,6 +21,11 @@ log = logging.getLogger("lark-ops-ai")
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
+# Subscription OAuth (setup-token / credentials file) requires Claude Code headers + identity.
+_CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+_OAUTH_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+_LEGACY_API_KEY_HAIKU = "claude-3-5-haiku-20241022"
+_OAUTH_AUTH_MODES = frozenset({"auth_token", "oauth_file", "bearer"})
 
 
 def _api_key() -> str:
@@ -30,7 +35,51 @@ def _api_key() -> str:
 
 def _model() -> str:
     _config.reload_env_runtime()
-    return (os.getenv("ANTHROPIC_MODEL") or "claude-3-5-haiku-20241022").strip()
+    return (os.getenv("ANTHROPIC_MODEL") or _LEGACY_API_KEY_HAIKU).strip()
+
+
+def _oauth_model() -> str:
+    """OAuth subscription model — never reuse legacy API-key Haiku ids (they 404)."""
+    _config.reload_env_runtime()
+    explicit = (os.getenv("ANTHROPIC_OAUTH_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    shared = (os.getenv("ANTHROPIC_MODEL") or "").strip()
+    if shared and shared != _LEGACY_API_KEY_HAIKU:
+        return shared
+    return _OAUTH_DEFAULT_MODEL
+
+
+def _effective_model(auth_mode: str, model: Optional[str]) -> str:
+    """API-key Haiku ids often 404 on subscription OAuth — use OAuth-era model ids."""
+    raw = (model or _model()).strip()
+    if auth_mode not in _OAUTH_AUTH_MODES:
+        return raw or _LEGACY_API_KEY_HAIKU
+    oauth_model = _oauth_model()
+    if not raw or raw == _LEGACY_API_KEY_HAIKU:
+        return oauth_model
+    return raw
+
+
+def _apply_oauth_headers(headers: dict) -> dict:
+    out = dict(headers)
+    out["anthropic-beta"] = "oauth-2025-04-20,claude-code-20250219"
+    out["user-agent"] = "claude-cli/2.1.85 (external, lark-ops-ai)"
+    out["x-app"] = "cli"
+    return out
+
+
+def _build_system(auth_mode: str, system_prompt: str):
+    """OAuth Sonnet/Opus require Claude Code identity as the first system block."""
+    text = (system_prompt or "").strip()
+    if auth_mode not in _OAUTH_AUTH_MODES:
+        return text
+    if text.startswith(_CLAUDE_CODE_IDENTITY):
+        return text
+    blocks = [{"type": "text", "text": _CLAUDE_CODE_IDENTITY}]
+    if text:
+        blocks.append({"type": "text", "text": text})
+    return blocks
 
 
 def anthropic_auth_mode() -> str:
@@ -93,14 +142,19 @@ def anthropic_chat_once(
     headers, auth_mode = _request_headers()
     if auth_mode not in ("api_key", "auth_token", "oauth_file", "bearer"):
         return ""
-    payload = {
-        "model": (model or _model()).strip(),
-        "max_tokens": max(64, min(int(max_tokens), 1024)),
-        "system": (system_prompt or "").strip(),
-        "messages": [{"role": "user", "content": (user_content or "").strip()}],
-    }
-    if not payload["system"] or not payload["messages"][0]["content"]:
+    system = _build_system(auth_mode, system_prompt)
+    user_text = (user_content or "").strip()
+    if not system or not user_text:
         return ""
+    if auth_mode in _OAUTH_AUTH_MODES:
+        headers = _apply_oauth_headers(headers)
+    payload = {
+        "model": _effective_model(auth_mode, model),
+        "max_tokens": max(64, min(int(max_tokens), 1024)),
+        "system": system,
+        "messages": [{"role": "user", "content": user_text}],
+    }
+    log.info("anthropic_chat_once: model=%s auth=%s", payload["model"], auth_mode)
     try:
         resp = requests.post(
             ANTHROPIC_MESSAGES_URL,
