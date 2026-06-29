@@ -33,6 +33,7 @@ def main() -> int:
     print("app_token_tail:", app[-8:] if len(app) > 8 else (app or "(empty)"))
     print("deploy_table:", dep_tbl or "(empty)")
     print("ops_table:", ops_tbl or "(empty)")
+    print("post_chat_id:", config.get_p0_adjustment_bitable_post_chat_id() or "(follow session/overview routing)")
 
     token = lark.get_tenant_token_primary()
     if not token:
@@ -73,13 +74,17 @@ def main() -> int:
     if not args.post:
         print("---")
         print("Dry-run only. Add --post --chat-id=oc_... to send cards.")
+        print("(Or set P0_ADJUSTMENT_BITABLE_POST_CHAT_ID and use --post without --chat-id.)")
         return 0
 
     oc = (args.chat_id or "").strip()
     if not oc.startswith("oc_"):
-        print("ERROR: --post requires --chat-id=oc_...", file=sys.stderr)
+        oc = config.get_p0_adjustment_bitable_post_chat_id()
+    if not oc.startswith("oc_"):
+        print("ERROR: --post requires --chat-id=oc_... or P0_ADJUSTMENT_BITABLE_POST_CHAT_ID", file=sys.stderr)
         return 3
 
+    print("post dest:", oc)
     posted, lines, diag = adj._post_boss_style_notices(  # noqa: SLF001
         token, group_chat_id=oc, trigger="manual_test"
     )

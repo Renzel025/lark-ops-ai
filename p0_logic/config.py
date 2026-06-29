@@ -2657,6 +2657,37 @@ def get_p0_adjustment_bitable_table_id() -> str:
     return (os.getenv("P0_ADJUSTMENT_BITABLE_TABLE_ID") or "").strip()
 
 
+def get_p0_adjustment_bitable_post_chat_id() -> str:
+    """``P0_ADJUSTMENT_BITABLE_POST_CHAT_ID`` — fixed ``oc_...`` for 📦/🔴 cards; blank = follow session/overview routing."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_POST_CHAT_ID") or "").strip()
+    return raw if raw.startswith("oc_") else ""
+
+
+def resolve_p0_adjustment_bitable_post_chat_id(
+    *,
+    fallback_chat_id: str,
+    source_incident_chat_id: str = "",
+) -> str:
+    """
+    Destination for Bitable boss cards.
+
+    1. ``P0_ADJUSTMENT_BITABLE_POST_CHAT_ID`` when set (fixed hub group).
+    2. Else ``fallback_chat_id`` (meeting-card chat on P0 declare, overview dest on Send).
+    3. Else ``source_incident_chat_id``.
+    """
+    fixed = get_p0_adjustment_bitable_post_chat_id()
+    if fixed:
+        return fixed
+    fb = (fallback_chat_id or "").strip()
+    if fb.startswith("oc_"):
+        return fb
+    sid = (source_incident_chat_id or "").strip()
+    if sid.startswith("oc_"):
+        return sid
+    return ""
+
+
 def get_p0_adjustment_bitable_hours() -> int:
     reload_env_runtime()
     raw = (os.getenv("P0_ADJUSTMENT_BITABLE_HOURS") or "48").strip()

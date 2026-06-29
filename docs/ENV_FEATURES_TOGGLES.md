@@ -55,6 +55,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_ADJUSTMENT_BITABLE_ENABLED` | on | off | on if `APP_TOKEN` set | Master switch for Bitable cards |
 | `P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE` | on | off | **on** (dev code) | Post 📦/🔴 on P0 declare — **dev only until merge** |
 | `P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS` | on | off | **on** (dev code) | Page 1 in group; page 2+ in thread — **dev only until merge** |
+| `P0_ADJUSTMENT_BITABLE_POST_CHAT_ID` | `oc_...` set | blank = off | off | Fixed group for 📦/🔴; blank = follow meeting/overview routing |
 | `P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP` | on | off | off (dev) / on (prod legacy) | **Legacy orange cards only** — does **not** affect new 📦/🔴 cards |
 | `P0_ADJUSTMENT_BITABLE_REPLY_IN_THREAD` | on | off | **on** | Legacy path: reply under overview |
 | `LARK_OVERVIEW_FORWARDER_ENABLED` | on | off | off | Broadcast overview via forwarder |
@@ -220,6 +221,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | Bitable cards | `P0_ADJUSTMENT_BITABLE_ENABLED=on` + token + table IDs |
 | Bitable on P0 declare (dev / post-merge) | `P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE=on` |
 | Bitable thread pages (dev / post-merge) | `P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS=on` |
+| Bitable fixed post group | `P0_ADJUSTMENT_BITABLE_POST_CHAT_ID=oc_...` |
 | Issue Watch | `P0_ISSUE_WATCH_ENABLED=on` |
 | Grafana screenshot | `P0_GRAPH_SCREENSHOT_ENABLED=on` |
 | Recording card | `VC_RECORDING_FANOUT_CHAT_IDS=oc_...` |
@@ -259,6 +261,7 @@ Add to prod `.env` when ready:
 ```bash
 P0_ADJUSTMENT_BITABLE_THREAD_FOLLOWUPS=on
 P0_ADJUSTMENT_BITABLE_ON_P0_DECLARE=on   # or off until tested
+P0_ADJUSTMENT_BITABLE_POST_CHAT_ID=oc_...   # optional fixed hub for 📦/🔴
 ```
 
 `P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP` — **optional**; does not control new 📦/🔴 cards.

@@ -843,6 +843,25 @@ def _session_bitable_already_posted(source_chat_id: str) -> bool:
     return bool(sess.get("adjustment_bitable_posted"))
 
 
+def _resolve_bitable_post_chat_id(*, fallback: str, source_incident_chat_id: str = "") -> str:
+    fb = (fallback or "").strip()
+    sid = (source_incident_chat_id or "").strip()
+    fixed = _config.get_p0_adjustment_bitable_post_chat_id()
+    dest = _config.resolve_p0_adjustment_bitable_post_chat_id(
+        fallback_chat_id=fb,
+        source_incident_chat_id=sid,
+    )
+    if fixed and dest == fixed and fb != fixed:
+        log.info(
+            "adjustment_bitable: P0_ADJUSTMENT_BITABLE_POST_CHAT_ID override dest_tail=%s "
+            "(would have been fallback_tail=%s source_tail=%s)",
+            dest[-12:] if len(dest) > 12 else dest,
+            fb[-12:] if len(fb) > 12 else fb or "(empty)",
+            sid[-12:] if len(sid) > 12 else sid or "(empty)",
+        )
+    return dest
+
+
 def maybe_post_adjustment_notice_on_p0_declare(
     tenant_token: str,
     *,
@@ -865,9 +884,13 @@ def maybe_post_adjustment_notice_on_p0_declare(
         return
     if _session_bitable_already_posted(cid):
         return
-    dest = _config.get_session_meeting_card_post_chat_id(cid)
+    fallback = _config.get_session_meeting_card_post_chat_id(cid)
+    if not fallback.startswith("oc_"):
+        fallback = cid
+    dest = _resolve_bitable_post_chat_id(fallback=fallback, source_incident_chat_id=cid)
     if not dest.startswith("oc_"):
-        dest = cid
+        log.warning("adjustment_bitable: skipped on P0 declare — no valid post chat_id")
+        return
     log.info(
         "adjustment_bitable: P0 declare trigger source_tail=%s dest_tail=%s",
         cid[-12:] if len(cid) > 12 else cid,
@@ -1111,10 +1134,15 @@ def maybe_post_adjustment_notice_after_overview(
         ",".join(s[0] for s in sources),
     )
 
+    dest = _resolve_bitable_post_chat_id(fallback=group_chat_id, source_incident_chat_id=src)
+    if not dest.startswith("oc_"):
+        log.info("adjustment_bitable: skipped after overview — no valid post chat_id")
+        return False, ""
+
     try:
         posted_any, dm_lines, _diag = _post_boss_style_notices(
             tenant_token,
-            group_chat_id=group_chat_id,
+            group_chat_id=dest,
             overview_message_id=overview_message_id,
             trigger="overview",
         )

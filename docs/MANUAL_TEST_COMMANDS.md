@@ -18,6 +18,7 @@ Related: [ENV_FEATURES_TOGGLES.md](./ENV_FEATURES_TOGGLES.md) — which features
 |---------|---------|
 | **Bitable** 📦/🔴 | `python3 features/overview/scripts/test_bitable_once.py` |
 | | `python3 features/overview/scripts/test_bitable_once.py --post --chat-id=oc_REAL_ID` |
+| | Or `--post` only if `P0_ADJUSTMENT_BITABLE_POST_CHAT_ID=oc_...` is set |
 | **Issue Watch** (AI only) | `python3 features/issue_watch/scripts/test_once.py "CP site loading"` |
 | **Grafana screenshot** | `python3 features/screenshot/scripts/grafana_screenshot_run_once.py` |
 | | `python3 features/screenshot/scripts/grafana_screenshot_run_once.py --post-lark` |
