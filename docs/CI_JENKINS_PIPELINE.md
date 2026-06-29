@@ -54,9 +54,13 @@ Clean the code up, then set `STRICT_TYPECHECK=true` / `STRICT_LINT=true` to enfo
 - Click **Build**. When tests pass it pauses at **Approve promotion** → click **Promote to prod**.
 
 ## Notes & gotchas
-- **Promotion is a fast-forward push** of the *exact* tested commit (`SHA:refs/heads/<prod branch>`).
-  If prod has commits dev doesn't, the push is rejected (by design — no surprise overwrite).
-  If that happens, reconcile the repos first (merge/rebase) or tell me and I'll add a merge strategy.
+- **Promotion is a MERGE** of the tested dev commit into prod's branch — prod keeps its own
+  commits and gains dev's. Nothing is discarded. (dev=`lark-ops-ai-dev`, prod=`lark-ops-ai`.)
+- **Conflict policy** is the `ON_CONFLICT` parameter:
+  - `fail` (default) — stop and print the conflicting files; nothing is pushed. Resolve locally, or
+  - `prefer-dev` — auto-resolve conflicting hunks in favor of the dev change, then push.
+- As of setup, dev was 67 commits ahead and prod had 22 commits dev didn't — so expect the **first**
+  merge to possibly hit conflicts. Either resolve once by hand, or run with `ON_CONFLICT=prefer-dev`.
 - The smoke tests run **without `--post`**, so they validate config + API auth + classification
   logic without sending any message to a Lark group.
 - Python 3.8 is assumed (matches `pyrightconfig.json`). Ensure the agent has `python3` 3.8+.

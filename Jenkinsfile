@@ -44,6 +44,8 @@ pipeline {
            description: 'Make Pyright a HARD gate (fails build on any type error). Leave off until code is clean.')
     booleanParam(name: 'STRICT_LINT', defaultValue: false,
            description: 'Make the FULL ruff lint a HARD gate. Leave off until code is clean.')
+    choice(name: 'ON_CONFLICT', choices: ['fail', 'prefer-dev'],
+           description: 'Merge conflict policy when promoting. "fail" = stop and let a human resolve (safe). "prefer-dev" = auto-resolve conflicts in favor of the dev change.')
   }
 
   options {
@@ -181,13 +183,38 @@ pipeline {
             set -eu
             git config user.email "jenkins@ci.local"
             git config user.name  "Jenkins CI"
-            # Point a 'prod' remote at the prod repo and push the tested commit.
+
+            SHA="$(cat .git_sha)"
             git remote remove prod 2>/dev/null || true
             git remote add prod "${PROD_REPO_URL}"
-            SHA="$(cat .git_sha)"
-            echo "Pushing tested commit ${SHA} to prod/${PROD_BRANCH}"
-            # Fast-forward push of the exact tested commit onto prod's branch.
-            git push prod "${SHA}:refs/heads/${PROD_BRANCH}"
+            git fetch prod "${PROD_BRANCH}" --no-tags
+
+            # Start from prod's current branch, then MERGE the tested dev commit into it.
+            # Prod keeps its own commits; dev's changes are merged on top. Nothing is discarded.
+            git checkout -B _promote "prod/${PROD_BRANCH}"
+
+            if [ "${ON_CONFLICT}" = "prefer-dev" ]; then
+              echo "Merging dev ${SHA} into prod/${PROD_BRANCH} (conflicts auto-resolved in favor of DEV)..."
+              # '-X theirs': on a conflicting hunk, take the side being merged in (= dev).
+              git merge --no-ff -X theirs "${SHA}" \
+                -m "Promote dev -> prod (auto-resolve conflicts to dev): ${SHA}"
+            else
+              echo "Merging dev ${SHA} into prod/${PROD_BRANCH} (will FAIL on conflict for manual resolution)..."
+              if ! git merge --no-ff "${SHA}" -m "Promote dev -> prod: ${SHA}"; then
+                echo "----------------------------------------------------------------"
+                echo "MERGE CONFLICT — nothing pushed to prod."
+                echo "Files in conflict:"
+                git diff --name-only --diff-filter=U || true
+                echo "Resolve locally (merge dev into prod, commit, push), or re-run this"
+                echo "job with ON_CONFLICT=prefer-dev to auto-resolve conflicts to dev."
+                echo "----------------------------------------------------------------"
+                git merge --abort || true
+                exit 1
+              fi
+            fi
+
+            echo "Pushing merged result to prod/${PROD_BRANCH}"
+            git push prod "_promote:refs/heads/${PROD_BRANCH}"
           '''
         }
       }
