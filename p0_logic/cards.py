@@ -1786,3 +1786,58 @@ def build_issue_watch_declare_manual_card(
             ]
         },
     }
+
+
+def build_monitoring_duty_card(
+    text: str,
+    *,
+    duty_open_id: str = "",
+    label: str = "duty warning",
+) -> Dict[str, Any]:
+    """Orange card when a duty DM warning is mirrored to the monitoring group."""
+    kind = (label or "duty warning").strip()
+    title = f"🔔 Ops monitor · {kind}"
+    oid = (duty_open_id or "").strip()
+    who = f"To: {oid[-12:]}" if oid else "To: duty DM"
+    body = (text or "").strip()
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": who[:500]}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "plain_text", "content": body[:12000] or "(empty)"}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": title[:100]},
+        },
+        "body": {"elements": elements},
+    }
+
+
+def build_monitoring_log_card(
+    message: str,
+    *,
+    level: str = "ERROR",
+    logger_name: str = "",
+) -> Dict[str, Any]:
+    """Red card when ERROR+ logs are forwarded to the monitoring group."""
+    lvl = (level or "ERROR").upper()
+    name = (logger_name or "logger").strip()
+    title = f"🔴 Ops monitor · log {lvl}"
+    body = (message or "").strip()
+    elements: List[Dict[str, Any]] = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": name[:500]}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "plain_text", "content": body[:12000] or "(empty)"}},
+    ]
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "red",
+            "title": {"tag": "plain_text", "content": title[:100]},
+        },
+        "body": {"elements": elements},
+    }

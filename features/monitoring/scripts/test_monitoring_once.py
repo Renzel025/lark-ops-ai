@@ -35,8 +35,13 @@ def main() -> int:
         return 2
 
     if args.kind == "log":
-        text = "🔴 **Ops monitor · log ERROR**\n`test`\n\n---\n\nManual test — monitoring log alert"
-        n = mon.post_to_monitoring_chats(token, text, dedupe_key="manual_test_log")
+        n = mon.post_log_alert(
+            token,
+            "Manual test — monitoring log alert",
+            level="ERROR",
+            logger_name="test",
+            dedupe_key="manual_test_log",
+        )
     else:
         n = mon.mirror_duty_text(
             token,

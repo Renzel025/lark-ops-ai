@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from . import cards as _cards
 from . import config as _config
 from . import lark_client as _lark
 
@@ -46,43 +48,26 @@ def _should_send_dedupe(key: str) -> bool:
         return True
 
 
-def _format_duty_body(text: str, *, duty_open_id: str = "", label: str = "") -> str:
-    body = (text or "").strip()
-    if not body:
-        return ""
-    oid = (duty_open_id or "").strip()
-    who = f"To: `{oid[-12:]}`" if oid else "To: duty DM"
-    kind = (label or "duty warning").strip()
-    return f"🔔 **Ops monitor · {kind}**\n{who}\n\n---\n\n{body}"
-
-
-def _format_log_body(record: logging.LogRecord) -> str:
-    msg = (record.getMessage() or "").strip()
-    if not msg:
-        return ""
-    level = (record.levelname or "LOG").upper()
-    name = (record.name or "logger").strip()
-    return f"🔴 **Ops monitor · log {level}**\n`{name}`\n\n---\n\n{msg}"
-
-
-def post_to_monitoring_chats(
+def post_card_to_monitoring_chats(
     tenant_token: str,
-    text: str,
+    card: Dict[str, Any],
     *,
     dedupe_key: str = "",
 ) -> int:
-    """Post plain text to each ``P0_MONITORING_CHAT_IDS`` group. Returns success count."""
+    """Post an interactive card to each ``P0_MONITORING_CHAT_IDS`` group. Returns success count."""
     tok = (tenant_token or "").strip()
-    body = (text or "").strip()
-    if not tok or not body or not _enabled():
+    if not tok or not card or not _enabled():
         return 0
-    key = (dedupe_key or hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()[:24])
-    if not _should_send_dedupe(key):
-        log.debug("monitoring: skipped duplicate alert key=%s", key[:12])
+    if not dedupe_key:
+        dedupe_key = hashlib.sha256(
+            json.dumps(card, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="replace")
+        ).hexdigest()[:24]
+    if not _should_send_dedupe(dedupe_key):
+        log.debug("monitoring: skipped duplicate alert key=%s", dedupe_key[:12])
         return 0
     ok_n = 0
     for cid in _config.get_p0_monitoring_chat_ids():
-        st, resp = _lark.post_text_to_chat(cid, tok, body)
+        st, resp, _ = _lark.post_card_to_chat(cid, tok, card)
         ok, code, msg = _lark.lark_im_message_create_ok(resp)
         if st == 200 and ok:
             ok_n += 1
@@ -109,11 +94,31 @@ def mirror_duty_text(
     """Mirror the same text sent to a duty DM into the monitoring group."""
     if not _duty_mirror_enabled():
         return 0
-    body = _format_duty_body(text, duty_open_id=duty_open_id, label=label)
+    body = (text or "").strip()
     if not body:
         return 0
-    dedupe = f"duty:{duty_open_id}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
-    return post_to_monitoring_chats(tenant_token, body, dedupe_key=dedupe)
+    card = _cards.build_monitoring_duty_card(body, duty_open_id=duty_open_id, label=label)
+    dedupe = f"duty:{duty_open_id}:{hashlib.sha256(body.encode()).hexdigest()[:16]}"
+    return post_card_to_monitoring_chats(tenant_token, card, dedupe_key=dedupe)
+
+
+def post_log_alert(
+    tenant_token: str,
+    message: str,
+    *,
+    level: str = "ERROR",
+    logger_name: str = "",
+    dedupe_key: str = "",
+) -> int:
+    """Post a log-level alert card to the monitoring group."""
+    if not _log_alerts_enabled():
+        return 0
+    body = (message or "").strip()
+    if not body:
+        return 0
+    card = _cards.build_monitoring_log_card(body, level=level, logger_name=logger_name)
+    key = dedupe_key or f"log:{logger_name}:{level}:{hashlib.sha256(body.encode()).hexdigest()[:16]}"
+    return post_card_to_monitoring_chats(tenant_token, card, dedupe_key=key)
 
 
 def post_duty_dm(
@@ -149,14 +154,16 @@ class LarkMonitoringLogHandler(logging.Handler):
             # Skip our own monitoring posts to avoid loops.
             if (record.name or "").startswith("lark-ops-ai") and "monitoring:" in (record.getMessage() or ""):
                 return
-            body = _format_log_body(record)
-            if not body:
+            msg = (record.getMessage() or "").strip()
+            if not msg:
                 return
             tok = _lark.get_tenant_token_primary()
             if not tok:
                 return
-            dedupe = f"log:{record.name}:{record.levelname}:{hashlib.sha256(body.encode()).hexdigest()[:16]}"
-            post_to_monitoring_chats(tok, body, dedupe_key=dedupe)
+            level = (record.levelname or "LOG").upper()
+            name = (record.name or "logger").strip()
+            dedupe = f"log:{name}:{level}:{hashlib.sha256(msg.encode()).hexdigest()[:16]}"
+            post_log_alert(tok, msg, level=level, logger_name=name, dedupe_key=dedupe)
         except Exception:
             self.handleError(record)
 
