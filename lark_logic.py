@@ -1022,6 +1022,15 @@ def _try_handle_p0_thread_confirm(
                 get_p0_thread_confirm_toplevel_grace_sec(),
             )
         if thread_ok or toplevel_ok or mirror_situation:
+            # Declarations ("this issue is p0", "we will consider…") are not thread yes-replies —
+            # clear armed question and fall through to keyword / Issue Watch paths.
+            if _is_explicit_direct_p0_declaration(text_raw) and not _is_p0_thread_confirm_question(text_raw):
+                _p0_thread_clear_pending_dict(pend)
+                log.info(
+                    "Incident group: explicit P0 declare bypasses thread confirm (cleared pending) chat_id=%s",
+                    chat_id,
+                )
+                return False
             responders = get_p0_thread_confirm_responder_open_ids()
             if oid == asker and not get_p0_thread_confirm_allow_asker_self_yes():
                 log.info(
