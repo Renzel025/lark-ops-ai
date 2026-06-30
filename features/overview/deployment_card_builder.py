@@ -65,101 +65,26 @@ class DeployCardRow:
 
 
 def _ops_entry_elements(row: OpsCardRow) -> List[Dict[str, Any]]:
-    """Boss card1_ops_builder OP_BLOCK_TEMPLATE (timeline grid, blue/red done time)."""
+    """
+    Compact ops block — one ``markdown`` + ``hr`` per row.
+
+    The old 3× ``column_set`` layout hit Lark card schema limit 11310 (~200 elements)
+    at 8 rows/page; deploy cards use fewer nested elements and still paginate fine.
+    """
     exec_t = _dash(row.exec_time)
     done_raw = (row.done_time or "").strip()
     done_t = _dash(row.done_time)
     done_color = "blue" if done_raw and done_raw != _EM else "red"
+    content = (
+        f"**{_dash(row.action)}**\n"
+        f"<font color='grey'>执行时间</font> <font color='blue'>{exec_t}</font>"
+        f" · <font color='grey'>完毕时间</font> <font color='{done_color}'>{done_t}</font>\n"
+        f"<font color='grey'>项目</font> {_dash(row.project)}"
+        f" · <font color='grey'>操作人员</font> <font color='purple'>{_dash(row.operator)}</font>\n"
+        f"<font color='grey'>原因</font> {_dash(row.reason)}"
+    )
     return [
-        {"tag": "markdown", "content": f"**{_dash(row.action)}**"},
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [{"tag": "markdown", "content": "<font color='grey'>执行时间</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 2,
-                    "elements": [{"tag": "markdown", "content": f"<font color='blue'>{exec_t}</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [{"tag": "markdown", "content": "<font color='grey'>完毕时间</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 2,
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": f"<font color='{done_color}'>{done_t}</font>",
-                        }
-                    ],
-                },
-            ],
-        },
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [{"tag": "markdown", "content": "<font color='grey'>项目</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 2,
-                    "elements": [{"tag": "markdown", "content": _dash(row.project)}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [{"tag": "markdown", "content": "<font color='grey'>操作人员</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 2,
-                    "elements": [
-                        {"tag": "markdown", "content": f"<font color='purple'>{_dash(row.operator)}</font>"}
-                    ],
-                },
-            ],
-        },
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [{"tag": "markdown", "content": "<font color='grey'>原因</font>"}],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 5,
-                    "elements": [{"tag": "markdown", "content": _dash(row.reason)}],
-                },
-            ],
-        },
+        {"tag": "markdown", "content": content},
         {"tag": "hr"},
     ]
 

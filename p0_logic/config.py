@@ -201,13 +201,25 @@ def get_p0_monitoring_chat_ids() -> List[str]:
     return _parse_oc_chat_id_csv(raw)
 
 
+def _env_scalar(raw: str) -> str:
+    """Strip whitespace and inline ``#`` comments (safe when ``os.getenv`` bypasses dotenv)."""
+    s = (raw or "").strip()
+    if "#" in s:
+        s = s.split("#", 1)[0].strip()
+    return s
+
+
+def _env_flag_on(name: str, default: str = "0") -> bool:
+    v = _env_scalar(os.getenv(name) or default).lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def p0_monitoring_duty_warnings_enabled() -> bool:
     """Mirror duty DM warnings (e.g. overview send blocked) to monitoring GC. Default on when chat IDs set."""
     reload_env_runtime()
     if not get_p0_monitoring_chat_ids():
         return False
-    v = (os.getenv("P0_MONITORING_DUTY_WARNINGS") or "1").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    return _env_flag_on("P0_MONITORING_DUTY_WARNINGS", "1")
 
 
 def p0_monitoring_log_alerts_enabled() -> bool:
@@ -215,14 +227,13 @@ def p0_monitoring_log_alerts_enabled() -> bool:
     reload_env_runtime()
     if not get_p0_monitoring_chat_ids():
         return False
-    v = (os.getenv("P0_MONITORING_LOG_ALERTS") or "1").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    return _env_flag_on("P0_MONITORING_LOG_ALERTS", "1")
 
 
 def get_p0_monitoring_log_min_level() -> int:
     """``P0_MONITORING_LOG_MIN_LEVEL`` — ERROR (default), WARNING, or CRITICAL."""
     reload_env_runtime()
-    raw = (os.getenv("P0_MONITORING_LOG_MIN_LEVEL") or "ERROR").strip().upper()
+    raw = _env_scalar(os.getenv("P0_MONITORING_LOG_MIN_LEVEL") or "ERROR").upper()
     return {
         "CRITICAL": logging.CRITICAL,
         "ERROR": logging.ERROR,
