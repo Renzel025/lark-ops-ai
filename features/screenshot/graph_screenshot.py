@@ -3001,8 +3001,8 @@ def _capture_and_post_ranges_thread_body(
         _capture_ctx_clear()
         with _capture_busy_lock:
             _capture_busy = False
-        if on_demand:
-            _drain_on_demand_pending()
+        # Drain queued on-demand jobs after any capture (auto/interval or on-demand).
+        _drain_on_demand_pending()
 
 
 def _wait_for_grafana_panels_if_configured(page) -> None:

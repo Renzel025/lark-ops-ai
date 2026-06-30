@@ -281,11 +281,6 @@ def try_handle_graph_screenshot_request(
         return False
 
     if not _chat_allows_on_demand(cid):
-        log.info(
-            "graph screenshot on-demand: ignored (not screenshot hub) chat_id_tail=%s text_head=%r",
-            cid[-12:] if len(cid) > 12 else cid,
-            raw[:80],
-        )
         return False
 
     range_key = resolve_graph_screenshot_range_key(
