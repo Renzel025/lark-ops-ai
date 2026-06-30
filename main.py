@@ -136,11 +136,15 @@ from p0_logic import monitoring_notify as _monitoring_notify
 
 if get_p0_monitoring_chat_ids():
     _monitoring_notify.install_log_handler()
+    _mon_chats = get_p0_monitoring_chat_ids()
+    _mon_tails = ",".join((c[-12:] if len(c) > 12 else c) for c in _mon_chats[:3])
     log.info(
-        "monitoring: ENABLED — chat_count=%s duty_warnings=%s log_alerts=%s",
-        len(get_p0_monitoring_chat_ids()),
+        "monitoring: ENABLED — chat_count=%s chat_tails=%s duty_warnings=%s log_alerts=%s min_level=%s",
+        len(_mon_chats),
+        _mon_tails,
         p0_monitoring_duty_warnings_enabled(),
         p0_monitoring_log_alerts_enabled(),
+        os.getenv("P0_MONITORING_LOG_MIN_LEVEL") or "ERROR",
     )
 else:
     log.info("monitoring: disabled (set P0_MONITORING_CHAT_IDS=oc_...)")

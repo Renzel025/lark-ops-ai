@@ -568,7 +568,7 @@ def _post_cards_group_then_thread(
     st, body, root_mid = _lark.post_card_to_chat(group_chat_id, tenant_token, cards[0])
     ok, code, msg = _lark.lark_im_message_create_ok(body)
     if st != 200 or not ok:
-        log.warning(
+        log.error(
             "adjustment_bitable: first %s card post failed dest_tail=%s HTTP=%s code=%s msg=%r",
             label,
             dest_tail,
@@ -576,6 +576,19 @@ def _post_cards_group_then_thread(
             code,
             msg,
         )
+        try:
+            from p0_logic import monitoring_notify as _monitoring
+
+            _monitoring.post_bitable_card_failure_alert(
+                tenant_token,
+                label=label,
+                http_status=st,
+                lark_code=code,
+                lark_msg=str(msg or ""),
+                dest_chat_id=group_chat_id,
+            )
+        except Exception as mon_err:
+            log.warning("adjustment_bitable: monitoring alert failed: %s", mon_err)
         return False, ""
 
     ok_any = True
@@ -606,7 +619,7 @@ def _post_cards_group_then_thread(
             )
         else:
             ok_any = False
-            log.warning(
+            log.error(
                 "adjustment_bitable: thread follow-up %s/%s failed label=%s HTTP=%s code=%s msg=%r root_tail=%s",
                 idx,
                 len(cards),
@@ -616,6 +629,19 @@ def _post_cards_group_then_thread(
                 msg_t,
                 root_mid[-12:] if len(root_mid) > 12 else root_mid,
             )
+            try:
+                from p0_logic import monitoring_notify as _monitoring
+
+                _monitoring.post_bitable_card_failure_alert(
+                    tenant_token,
+                    label=f"{label}:page{idx}",
+                    http_status=st_t,
+                    lark_code=code_t,
+                    lark_msg=str(msg_t or ""),
+                    dest_chat_id=group_chat_id,
+                )
+            except Exception as mon_err:
+                log.warning("adjustment_bitable: monitoring alert failed: %s", mon_err)
     return ok_any, root_mid
 
 
@@ -633,6 +659,8 @@ def _post_boss_style_notices(
         "ops_err": "",
         "deploy_err": "",
         "card_post_failed": False,
+        "deploy_post_ok": False,
+        "ops_post_ok": False,
     }
     if not group_chat_id:
         return False, [], diag
@@ -673,6 +701,7 @@ def _post_boss_style_notices(
             )
             if ok:
                 posted_any = True
+                diag["deploy_post_ok"] = True
                 dm_lines.append(
                     f"📦 **部署流水**: {len(dep_rows)} row(s), {len(dep_cards)} card(s) ({window_label})"
                 )
@@ -688,6 +717,7 @@ def _post_boss_style_notices(
                 log_label=f"{trigger}:deploy",
             ):
                 posted_any = True
+                diag["deploy_post_ok"] = True
                 dm_lines.append(_format_bitable_empty_notice(kind="deploy", window_label=window_label))
 
     ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
@@ -721,6 +751,7 @@ def _post_boss_style_notices(
             )
             if ok:
                 posted_any = True
+                diag["ops_post_ok"] = True
                 dm_lines.append(
                     f"🔴 **线上操作汇总**: {len(ops_rows)} row(s), {len(ops_cards)} card(s) ({window_label})"
                 )
@@ -741,6 +772,7 @@ def _post_boss_style_notices(
                 log_label=f"{trigger}:ops",
             ):
                 posted_any = True
+                diag["ops_post_ok"] = True
                 dm_lines.append(_format_bitable_empty_notice(kind="online_ops", window_label=window_label))
 
     diag["window_label"] = window_label
@@ -902,8 +934,22 @@ def maybe_post_adjustment_notice_on_p0_declare(
             group_chat_id=dest,
             trigger="p0_declare",
         )
-        if posted:
+        deploy_tbl = _config.get_p0_adjustment_bitable_table_id()
+        ops_tbl = _config.get_p0_adjustment_bitable_ops_table_id()
+        deploy_needed = bool(deploy_tbl)
+        ops_needed = bool(ops_tbl)
+        deploy_ok = (not deploy_needed) or bool(diag.get("deploy_post_ok"))
+        ops_ok = (not ops_needed) or bool(diag.get("ops_post_ok"))
+        if posted and deploy_ok and ops_ok:
             _mark_session_bitable_posted(cid)
+        elif posted and not (deploy_ok and ops_ok):
+            log.warning(
+                "adjustment_bitable: P0 declare partial post — session not marked complete "
+                "(retry via Send overview). deploy_ok=%s ops_ok=%s diag=%s",
+                deploy_ok,
+                ops_ok,
+                {k: diag.get(k) for k in ("deploy_rows", "ops_rows", "deploy_post_ok", "ops_post_ok", "card_post_failed")},
+            )
         else:
             log.warning(
                 "adjustment_bitable: P0 declare — enabled but no cards posted "

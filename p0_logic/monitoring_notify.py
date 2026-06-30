@@ -121,6 +121,45 @@ def post_log_alert(
     return post_card_to_monitoring_chats(tenant_token, card, dedupe_key=key)
 
 
+def post_bitable_card_failure_alert(
+    tenant_token: str,
+    *,
+    label: str,
+    http_status: int,
+    lark_code: Any,
+    lark_msg: str,
+    dest_chat_id: str = "",
+) -> int:
+    """
+    Alert monitoring GC when 📦/🔴 Bitable interactive card post fails (e.g. Lark 11310 element limit).
+
+    Uses ``post_log_alert`` (not the log handler) so it fires even when failures are logged as WARNING.
+    """
+    lbl = (label or "bitable").strip()
+    msg_s = (lark_msg or "").strip()
+    dest_tail = (dest_chat_id or "")[-12:] if dest_chat_id else ""
+    body_lines = [
+        f"**Bitable card post failed** — `{lbl}`",
+        f"HTTP={http_status} · Lark code={lark_code}",
+        msg_s[:500] if msg_s else "(no Lark msg)",
+    ]
+    if dest_tail:
+        body_lines.append(f"Incident dest: …{dest_tail}")
+    if "11310" in msg_s or "element exceeds" in msg_s.lower():
+        body_lines.append(
+            "Hint: card too large (Lark element limit) — reduce rows/page or use compact card layout."
+        )
+    body = "\n".join(body_lines)
+    dedupe = f"bitable_fail:{lbl}:{http_status}:{lark_code}:{hashlib.sha256(body.encode()).hexdigest()[:12]}"
+    return post_log_alert(
+        tenant_token,
+        body,
+        level="ERROR",
+        logger_name="adjustment_bitable",
+        dedupe_key=dedupe,
+    )
+
+
 def post_duty_dm(
     duty_open_id: str,
     tenant_token: str,
@@ -144,18 +183,26 @@ def post_duty_dm(
 class LarkMonitoringLogHandler(logging.Handler):
     """Post ERROR+ (configurable) log records to ``P0_MONITORING_CHAT_IDS``."""
 
+    _SKIP_LOGGER_NAMES = frozenset({"uvicorn.access"})
+
     def emit(self, record: logging.LogRecord) -> None:
         if not _log_alerts_enabled():
             return
         try:
+            logger_name = (record.name or "").strip()
+            if logger_name in self._SKIP_LOGGER_NAMES:
+                return
             min_level = _config.get_p0_monitoring_log_min_level()
             if record.levelno < min_level:
                 return
             # Skip our own monitoring posts to avoid loops.
-            if (record.name or "").startswith("lark-ops-ai") and "monitoring:" in (record.getMessage() or ""):
+            if logger_name.startswith("lark-ops-ai") and "monitoring:" in (record.getMessage() or ""):
                 return
             msg = (record.getMessage() or "").strip()
             if not msg:
+                return
+            # Bitable card failures use post_bitable_card_failure_alert (formatted GC card).
+            if "adjustment_bitable:" in msg and "card post failed" in msg:
                 return
             tok = _lark.get_tenant_token_primary()
             if not tok:
@@ -168,20 +215,29 @@ class LarkMonitoringLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def install_log_handler(*, logger_name: str = "lark-ops-ai") -> None:
-    """Attach monitoring log handler once (idempotent)."""
+def install_log_handler(*, use_root_logger: bool = True) -> None:
+    """
+    Attach monitoring log handler once (idempotent).
+
+    Default: root logger so ERROR/WARNING from any module (uvicorn, handlers, …)
+    reaches ``P0_MONITORING_CHAT_IDS``. ``uvicorn.access`` is skipped (too noisy).
+    """
     if not _log_alerts_enabled():
         return
-    root = logging.getLogger(logger_name)
-    for h in root.handlers:
+    target = logging.getLogger() if use_root_logger else logging.getLogger("lark-ops-ai")
+    for h in target.handlers:
         if isinstance(h, LarkMonitoringLogHandler):
             return
     handler = LarkMonitoringLogHandler()
     handler.setLevel(_config.get_p0_monitoring_log_min_level())
-    root.addHandler(handler)
+    target.addHandler(handler)
+    chat_ids = _config.get_p0_monitoring_chat_ids()
+    tails = ",".join((c[-12:] if len(c) > 12 else c) for c in chat_ids[:3])
     log.info(
-        "monitoring: log alerts ON — min_level=%s chats=%s cooldown=%ss",
+        "monitoring: log alerts ON — min_level=%s chats=%s chat_tails=%s cooldown=%ss root=%s",
         logging.getLevelName(_config.get_p0_monitoring_log_min_level()),
-        len(_config.get_p0_monitoring_chat_ids()),
+        len(chat_ids),
+        tails or "(none)",
         _config.get_p0_monitoring_alert_cooldown_sec(),
+        use_root_logger,
     )
