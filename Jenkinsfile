@@ -154,7 +154,7 @@ pipeline {
       steps {
         sshagent(credentials: ['prod-server-ssh']) {
           sh """
-            ssh -o StrictHostKeyChecking=no root@${DEV_SERVER_IP} '
+            ssh -o StrictHostKeyChecking=no ose@${DEV_SERVER_IP} '
               cd ${DEV_SERVER_PATH}
               git pull
               sudo systemctl restart ${DEV_SERVICE}
