@@ -7,7 +7,7 @@
 //    3. Tests (syntax + ruff real errors only)
 //    4. Merge dev -> prod GitHub repo
 //    5. Deploy to dev server (git pull + restart)
-//    6. Approve prod deploy
+//    6. Approve prod deploy (24hr window)
 //    7. Deploy to prod server (git pull + restart)
 // ============================================================================
 
@@ -29,7 +29,7 @@ pipeline {
 
   options {
     timestamps()
-    timeout(time: 30, unit: 'MINUTES')
+    timeout(time: 25, unit: 'HOURS')
     disableConcurrentBuilds()
   }
 
@@ -167,6 +167,9 @@ pipeline {
     }
 
     stage('Approve prod deploy') {
+      options {
+        timeout(time: 24, unit: 'HOURS')
+      }
       steps {
         input message: "Dev server deployed. Deploy to PROD?",
               ok: "Deploy to prod"
