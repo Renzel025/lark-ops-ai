@@ -39,7 +39,7 @@ pipeline {
     PYTHONDONTWRITEBYTECODE  = "1"
     DEV_SERVER_IP            = "47.84.198.163"
     DEV_SERVER_PATH          = "/root/lark-ops-ai-dev"
-    DEV_SERVICE              = "lark-ops-ai-dev"
+    DEV_SERVICE              = "lark-ops-ai"
     PROD_SERVER_IP           = "8.219.139.155"
     PROD_SERVER_PATH         = "/root/lark-ops-ai"
     PROD_SERVICE             = "lark-ops-ai"
@@ -155,9 +155,10 @@ pipeline {
         sshagent(credentials: ['prod-server-ssh']) {
           sh """
             ssh -o StrictHostKeyChecking=no ose@${DEV_SERVER_IP} '
-              cd ${DEV_SERVER_PATH}
+              git config --global --add safe.directory /root/lark-ops-ai-dev
+              cd /root/lark-ops-ai-dev
               git pull
-              sudo systemctl restart ${DEV_SERVICE}
+              sudo systemctl restart lark-ops-ai
               echo "Dev server deployed successfully"
             '
           """
@@ -177,9 +178,10 @@ pipeline {
         sshagent(credentials: ['prod-server-ssh']) {
           sh """
             ssh -o StrictHostKeyChecking=no ose@${PROD_SERVER_IP} '
-              cd ${PROD_SERVER_PATH}
+              git config --global --add safe.directory /root/lark-ops-ai
+              cd /root/lark-ops-ai
               git pull
-              sudo systemctl restart ${PROD_SERVICE}
+              sudo systemctl restart lark-ops-ai
               echo "Prod server deployed successfully"
             '
           """
