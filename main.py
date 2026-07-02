@@ -165,29 +165,6 @@ lark_client = (
     .build()
 )
 
-# --- Jenkins ChatOps: forward /jenkins /promote etc. to the local bridge service ---
-# The bridge (separate repo/service) triggers the Jenkins pipeline and replies to the group.
-JENKINS_BRIDGE_URL = os.getenv("JENKINS_BRIDGE_URL", "http://127.0.0.1:8020/command")
-JENKINS_CMD_PREFIXES = ("/jenkins", "/promote", "/build", "/deploy")
-
-
-def _maybe_forward_jenkins_cmd(text: str, chat_id: str, open_id: str) -> bool:
-    """If the message is a Jenkins command, forward it to the bridge and return True
-    (so normal routing is skipped). Mention placeholders like @_user_1 are dropped."""
-    toks = [t for t in (text or "").split() if not t.startswith("@")]
-    joined = " ".join(toks)
-    if not any(joined.startswith(p) for p in JENKINS_CMD_PREFIXES):
-        return False
-    try:
-        requests.post(
-            JENKINS_BRIDGE_URL,
-            json={"text": joined, "chat_id": chat_id, "open_id": open_id},
-            timeout=3,
-        )
-    except Exception as e:
-        log.error("jenkins bridge forward failed: %s", e)
-    return True
-
 
 def decrypt_lark_event(encrypted_b64: str, encrypt_key: str) -> Dict[str, Any]:
     key = hashlib.sha256((encrypt_key or "").encode("utf-8")).digest()
@@ -875,10 +852,6 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             return
         if msg_type not in ("text", "post"):
             log.info("Skipping non-text/post message for group routing msg_type=%s chat_id=%s", msg_type, chat_id)
-            return
-
-        # Jenkins ChatOps: /promote, /jenkins, etc. → hand off to the bridge, skip normal routing.
-        if _maybe_forward_jenkins_cmd(text, chat_id, sender_open_id):
             return
 
         process_message(
