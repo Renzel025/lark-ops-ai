@@ -2631,13 +2631,15 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
     range_hint = range_labels[0] if len(range_labels) == 1 else ", ".join(range_labels)
     from p0_logic import lark_client as _lark
 
-    _lark.post_text_to_chat(
-        chat_id,
-        tok,
-        f"📊 Capturing Grafana dashboard (last {range_hint})…",
-    )
-
     def _run() -> None:
+        # Post the "Capturing…" notice from INSIDE the daemon thread so that nothing
+        # Grafana-related — not even this status POST — runs synchronously on the caller
+        # (start_p0) thread. A slow/hung Lark POST here can no longer delay the Bitable step.
+        _lark.post_text_to_chat(
+            chat_id,
+            tok,
+            f"📊 Capturing Grafana dashboard (last {range_hint})…",
+        )
         _capture_and_post_ranges_thread_body(tok, chat_id, label)
 
     threading.Thread(target=_run, name="p0-graph-screenshot", daemon=True).start()
