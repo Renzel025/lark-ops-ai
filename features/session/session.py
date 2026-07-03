@@ -1860,6 +1860,20 @@ def start_p0(
         [x for x in dm_targets if (x or "").strip()],
     )
     dm_targets_list = [x for x in dm_targets if (x or "").strip()]
+    # Run the Bitable adjustment notice FIRST, before scheduling the Grafana screenshot,
+    # so a slow/hung Grafana path can never delay the Bitable ops/deploy cards.
+    if priority == "P0":
+        try:
+            from features.overview import bitable_adjustments as _bitable_adj
+
+            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
+            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
+                token,
+                source_chat_id=chat_id,
+                priority=priority,
+            )
+        except Exception as e:
+            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
     try:
         from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
 
@@ -1903,18 +1917,6 @@ def start_p0(
             schedule_p0_ongoing_dm_buzz(chat_id, trigger_open_id)
         except Exception as e:
             log.warning("start_p0: schedule p0 ongoing DM buzz failed: %s", e)
-    if priority == "P0":
-        try:
-            from features.overview import bitable_adjustments as _bitable_adj
-
-            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
-            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
-                token,
-                source_chat_id=chat_id,
-                priority=priority,
-            )
-        except Exception as e:
-            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
 
 
 def _dm_instruction_item_from_session(chat_id: str, sess: Dict[str, Any]) -> Dict[str, Any]:
