@@ -227,6 +227,13 @@ def handle_ring_command(
         tenant_token=tok,
         operator_open_id=operator_open_id,
     )
+    log.info(
+        "ring cmd handled cmd=%s targets=%s status=%s session_tail=%s",
+        c,
+        len(targets),
+        status,
+        session_source[-8:] if session_source else "",
+    )
     if not token:
         return
     if status == "disabled":
