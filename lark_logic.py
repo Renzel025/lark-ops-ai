@@ -1257,18 +1257,28 @@ def process_message(
         # letters like "m"/"e" in normal chat can't trigger a page. Checked before the
         # screenshot handler so these short commands aren't swallowed.
         _ring_cmd = _strip_leading_mentions(text_raw, mention_names).strip().lower()
-        if _mentions_our_bot(mention_names) and RING_CMD_RE.match(_ring_cmd):
-            from features.recording.vc_ring import handle_ring_command
-
-            handle_ring_command(
+        if RING_CMD_RE.match(_ring_cmd):
+            _bot_mentioned = _mentions_our_bot(mention_names)
+            log.info(
+                "ring cmd detected cmd=%r bot_mentioned=%s mentions=%s chat_tail=%s session_source_tail=%s",
                 _ring_cmd,
-                session_source,
-                notify_chat,
-                token,
-                operator_open_id=user_id,
-                tenant_token=tenant_token or token,
+                _bot_mentioned,
+                mention_names,
+                chat_id[-8:] if chat_id else "",
+                session_source[-8:] if session_source else "",
             )
-            return
+            if _bot_mentioned:
+                from features.recording.vc_ring import handle_ring_command
+
+                handle_ring_command(
+                    _ring_cmd,
+                    session_source,
+                    notify_chat,
+                    token,
+                    operator_open_id=user_id,
+                    tenant_token=tenant_token or token,
+                )
+                return
 
         if try_handle_graph_screenshot_request(
             text_raw,
