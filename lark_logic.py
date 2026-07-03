@@ -26,7 +26,6 @@ from p0_logic.config import (
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
     get_p0_issue_watch_enabled,
-    get_p0_keyword_autodeclare_enabled,
     HELP_RE,
     RING_CMD_RE,
 )
@@ -1498,14 +1497,6 @@ def process_message(
                     )
                     return
 
-                if not get_p0_keyword_autodeclare_enabled():
-                    log.info(
-                        "Incident group: P0 keyword auto-declare disabled "
-                        "(P0_KEYWORD_AUTODECLARE_ENABLED=0) — not declaring chat_id=%s. "
-                        "Declare via the alert buttons, @bot commands, or the P0 thread confirm.",
-                        chat_id,
-                    )
-                    return
                 log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
                 start_p0(
                     chat_id,

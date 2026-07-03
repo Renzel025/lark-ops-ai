@@ -2665,15 +2665,6 @@ def get_p0_vc_ring_escalation_open_ids() -> List[str]:
     return _parse_ou_id_csv(os.getenv("P0_VC_RING_ESCALATION_OPEN_IDS") or "")
 
 
-def get_p0_keyword_autodeclare_enabled() -> bool:
-    """``P0_KEYWORD_AUTODECLARE_ENABLED`` — when OFF (default), an explicit ``p0`` keyword no longer
-    auto-creates a meeting. Declares then happen only via alert buttons, @bot commands, or the
-    "is this P0? → yes" thread confirm."""
-    reload_env_runtime()
-    v = (os.getenv("P0_KEYWORD_AUTODECLARE_ENABLED") or "").strip().lower()
-    return v in ("1", "true", "yes", "on")
-
-
 def get_p0_vc_oauth_public_base_url() -> str:
     reload_env_runtime()
     return (os.getenv("P0_VC_OAUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/")
