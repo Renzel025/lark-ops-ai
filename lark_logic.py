@@ -26,13 +26,19 @@ from p0_logic.config import (
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
     get_p0_issue_watch_enabled,
+    get_p0_keyword_autodeclare_enabled,
     HELP_RE,
+    RING_CMD_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card
 from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
-from features.screenshot.graph_screenshot_request import try_handle_graph_screenshot_request
+from features.screenshot.graph_screenshot_request import (
+    try_handle_graph_screenshot_request,
+    _strip_leading_mentions,
+    _mentions_our_bot,
+)
 from features.issue_watch.issue_watch import try_handle_issue_watch
 from p0_logic import (
     start_p0,
@@ -1246,6 +1252,34 @@ def process_message(
                     log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
+        # @bot ring commands (m / e / scpms / sfpms / sfe): page duty/escalation into the
+        # already-active meeting. Require the bot to actually be @mentioned so bare single
+        # letters like "m"/"e" in normal chat can't trigger a page. Checked before the
+        # screenshot handler so these short commands aren't swallowed.
+        _ring_cmd = _strip_leading_mentions(text_raw, mention_names).strip().lower()
+        if RING_CMD_RE.match(_ring_cmd):
+            _bot_mentioned = _mentions_our_bot(mention_names)
+            log.info(
+                "ring cmd detected cmd=%r bot_mentioned=%s mentions=%s chat_tail=%s session_source_tail=%s",
+                _ring_cmd,
+                _bot_mentioned,
+                mention_names,
+                chat_id[-8:] if chat_id else "",
+                session_source[-8:] if session_source else "",
+            )
+            if _bot_mentioned:
+                from features.recording.vc_ring import handle_ring_command
+
+                handle_ring_command(
+                    _ring_cmd,
+                    session_source,
+                    notify_chat,
+                    token,
+                    operator_open_id=user_id,
+                    tenant_token=tenant_token or token,
+                )
+                return
+
         if try_handle_graph_screenshot_request(
             text_raw,
             chat_id,
@@ -1464,6 +1498,14 @@ def process_message(
                     )
                     return
 
+                if not get_p0_keyword_autodeclare_enabled():
+                    log.info(
+                        "Incident group: P0 keyword auto-declare disabled "
+                        "(P0_KEYWORD_AUTODECLARE_ENABLED=0) — not declaring chat_id=%s. "
+                        "Declare via the alert buttons, @bot commands, or the P0 thread confirm.",
+                        chat_id,
+                    )
+                    return
                 log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
                 start_p0(
                     chat_id,

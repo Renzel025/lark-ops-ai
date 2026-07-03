@@ -896,6 +896,10 @@ CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel|cl)\s*$", re.IGNORECASE)
 STANDALONE_OVERVIEW_ABORT_RE = re.compile(r"^\s*c\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check|st)\s*$", re.IGNORECASE)
 HELP_RE = re.compile(r"^\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
+# @bot ring commands — page duty/escalation into the ALREADY-active meeting:
+#   m = major responders, e = escalation (senior), scpms/sfpms/sfe = duty SRE per team.
+# Matched against the text AFTER the leading @bot mention is stripped.
+RING_CMD_RE = re.compile(r"^(m|e|scpms|sfpms|sfe)$", re.IGNORECASE)
 
 # DM whole line: ``create overview emergency|game`` or shortcuts ``coe`` / ``cog``.
 _STANDALONE_OVERVIEW_LONG_RE = re.compile(
@@ -2641,6 +2645,33 @@ def get_p0_vc_ring_fallback_open_ids() -> List[str]:
             seen.add(oid)
             out.append(oid)
     return out
+
+
+def _parse_ou_id_csv(raw: str) -> List[str]:
+    """Parse a comma/space-separated list of ``ou_...`` open_ids (deduped, order-preserving)."""
+    out: List[str] = []
+    seen: set = set()
+    for part in re.split(r"[,\s]+", (raw or "").strip()):
+        oid = (part or "").strip()
+        if oid.startswith("ou_") and oid not in seen:
+            seen.add(oid)
+            out.append(oid)
+    return out
+
+
+def get_p0_vc_ring_escalation_open_ids() -> List[str]:
+    """``P0_VC_RING_ESCALATION_OPEN_IDS`` — escalation open_ids (e.g. Wei Song, Adrian) rung by ``@bot e``."""
+    reload_env_runtime()
+    return _parse_ou_id_csv(os.getenv("P0_VC_RING_ESCALATION_OPEN_IDS") or "")
+
+
+def get_p0_keyword_autodeclare_enabled() -> bool:
+    """``P0_KEYWORD_AUTODECLARE_ENABLED`` — when OFF (default), an explicit ``p0`` keyword no longer
+    auto-creates a meeting. Declares then happen only via alert buttons, @bot commands, or the
+    "is this P0? → yes" thread confirm."""
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_AUTODECLARE_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_p0_vc_oauth_public_base_url() -> str:
