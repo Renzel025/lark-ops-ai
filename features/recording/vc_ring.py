@@ -129,6 +129,122 @@ def pop_duty_mentions_for_chat(chat_id: str) -> List[str]:
     return list(row.get("ids") or [])
 
 
+def invite_open_ids_into_active_meeting(
+    chat_id: str,
+    target_open_ids: List[str],
+    *,
+    tenant_token: str = "",
+    operator_open_id: str = "",
+) -> str:
+    """Ring/invite ``target_open_ids`` into the chat's ALREADY-active P0 meeting.
+
+    Used by the ``@bot`` ring commands (m / e / scpms / sfpms / sfe). Reuses the VC-ring
+    merge path so each invitee's Lark app rings via ``invite_users_to_vc_meeting`` (which
+    needs the declarer's OAuth token). Does NOT create a meeting.
+
+    Returns a status string for the caller to render:
+      ``disabled``     — P0_VC_RING_ENABLED is off
+      ``no_session``   — no active P0 session / meeting for this chat
+      ``no_targets``   — nothing valid to ring (empty or all filtered out)
+      ``ringing``      — targets merged and the declarer is authorized → ring attempted now
+      ``queued_oauth`` — targets merged but the declarer must finish OAuth first (DM sent)
+    """
+    if not _config.get_p0_vc_ring_enabled():
+        return "disabled"
+    cid = (chat_id or "").strip()
+    if not cid:
+        return "no_session"
+    sess = _session.P0_SESSIONS.get(cid)
+    if not isinstance(sess, dict):
+        return "no_session"
+    if not str(sess.get("meeting_id") or "").strip():
+        return "no_session"
+    raw = [str(x).strip() for x in (target_open_ids or []) if str(x).strip()]
+    if not raw:
+        return "no_targets"
+    trigger = str(sess.get("trigger_open_id") or operator_open_id or "").strip()
+    if not _filter_ring_targets(raw, operator_open_id=trigger):
+        return "no_targets"
+    _merge_duty_mentions_into_active_session(
+        cid, raw, operator_open_id=operator_open_id, tenant_token=tenant_token
+    )
+    # The actual ring uses the declarer's OAuth; report whether it can fire now or is queued.
+    if trigger and _oauth.get_user_access_token(trigger):
+        return "ringing"
+    return "queued_oauth"
+
+
+def handle_ring_command(
+    cmd: str,
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    operator_open_id: str = "",
+    tenant_token: str = "",
+) -> None:
+    """Handle an ``@bot`` ring command (m / e / scpms / sfpms / sfe).
+
+    Pages the resolved people into the already-active meeting for ``session_source`` and
+    posts a status reply to ``notify_chat``. Anyone in the group may run these.
+    """
+    from features.recording import duty_roster as _duty
+
+    c = (cmd or "").strip().lower()
+    tok = (tenant_token or token or "").strip()
+
+    if c == "m":
+        # Reuse the existing major-P0 check-person list (P0_MAJOR_CHECK_PERSON_IDS),
+        # resolved to open_ids (also handles user_id entries).
+        targets = _major_check_person_ring_open_ids(tok)
+        label = "major-P0 check persons"
+        unset_hint = "P0_MAJOR_CHECK_PERSON_IDS"
+    elif c == "e":
+        targets = _config.get_p0_vc_ring_escalation_open_ids()
+        label = "escalation contacts"
+        unset_hint = "P0_VC_RING_ESCALATION_OPEN_IDS"
+    elif c in _duty.COMMAND_TEAM:
+        team = _duty.COMMAND_TEAM[c]
+        oid = _duty.get_duty_open_id(team)
+        targets = [oid] if oid else []
+        label = f"duty SRE {team}"
+        unset_hint = f"the duty roster for {team}"
+    else:
+        return
+
+    if not targets:
+        if token:
+            _lark.post_text_to_chat(
+                notify_chat,
+                token,
+                f"⚠️ No {label} configured yet ({unset_hint}). Ask an admin to set it.",
+            )
+        return
+
+    status = invite_open_ids_into_active_meeting(
+        session_source,
+        targets,
+        tenant_token=tok,
+        operator_open_id=operator_open_id,
+    )
+    if not token:
+        return
+    if status == "disabled":
+        msg = "⚠️ VC ring is disabled (set P0_VC_RING_ENABLED=1)."
+    elif status == "no_session":
+        msg = "⚠️ No active meeting here yet — start a meeting first, then run this command."
+    elif status == "no_targets":
+        msg = f"⚠️ No valid {label} to call."
+    elif status == "queued_oauth":
+        msg = (
+            f"📞 Queued a call to {label} — it will ring once the meeting host finishes the "
+            "one-time Lark authorization (the host just got a DM)."
+        )
+    else:  # ringing
+        msg = f"📞 Calling {label} into the meeting now…"
+    _lark.post_text_to_chat(notify_chat, token, msg)
+
+
 def _filter_ring_targets(
     raw_ids: List[str],
     *,
