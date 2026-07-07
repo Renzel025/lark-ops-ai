@@ -523,6 +523,37 @@ def get_vc_recording_fanout_user_open_ids() -> List[str]:
     return out
 
 
+def get_vc_recording_fanout_manage_open_ids() -> List[str]:
+    """
+    Users (``ou_...``) who get **manage** (``full_access`` / 可管理) on the cloud-recording Minutes doc,
+    instead of the default ``VC_RECORDING_FANOUT_DRIVE_PERM`` level (view/edit).
+
+    Comma-separated ``VC_RECORDING_FANOUT_MANAGE_OPEN_IDS`` (alias ``P0_VC_RECORDING_FANOUT_MANAGE_OPEN_IDS``).
+
+    Manage is granted only via the **Drive API** path (``grant_minutes_drive_collaborators``) — VC
+    ``set_permission`` is view-only. So it takes effect only when Drive grants run (i.e. a usable
+    recording URL exists). These ids are always granted even if not in
+    ``VC_RECORDING_FANOUT_USER_OPEN_IDS``. The duty user token must itself own/manage the doc.
+    """
+    reload_env_runtime()
+    raw = (
+        os.getenv("VC_RECORDING_FANOUT_MANAGE_OPEN_IDS")
+        or os.getenv("P0_VC_RECORDING_FANOUT_MANAGE_OPEN_IDS")
+        or ""
+    ).strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        p = part.strip()
+        if not is_open_id(p) or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
 def get_vc_recording_fanout_topic_substring_filter() -> str:
     """
     If non-empty, only forward **recording_ready** when the meeting topic contains this substring

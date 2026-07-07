@@ -909,7 +909,9 @@ def _drive_minutes_member_perm(
     mid = (member_id or "").strip()
     mtype = (member_type or "").strip()
     prole = (perm or "edit").strip().lower()
-    if prole not in ("view", "edit"):
+    if prole == "manage":
+        prole = "full_access"
+    if prole not in ("view", "edit", "full_access"):
         prole = "edit"
     if not tok or not mtok or not mid or not mtype:
         return False, "missing token, minutes_token, member_type, or member_id"
@@ -983,26 +985,32 @@ def grant_minutes_drive_collaborators(
     if users_src is None:
         users_src = _config.get_vc_recording_fanout_user_open_ids()
     prole = (perm or "edit").strip().lower()
-    if prole not in ("view", "edit"):
+    if prole == "manage":
+        prole = "full_access"
+    if prole not in ("view", "edit", "full_access"):
         prole = "edit"
+    # Specific users promoted to **manage** (full_access) regardless of the default perm above.
+    manage_ids = set(_config.get_vc_recording_fanout_manage_open_ids())
     ok_any = False
     errors: List[str] = []
-    # VC set_permission adds collaborators as **view** first; for **edit**, try PUT upgrade before POST create.
-    edit_first = prole == "edit"
 
     def _grant_member(
         *,
         member_type: str,
         member_id: str,
         label_prefix: str,
+        member_perm: str,
     ) -> Tuple[bool, str]:
-        if edit_first:
+        # VC set_permission adds collaborators as **view** first; for edit/full_access, PUT-upgrade
+        # an existing member before POST-create. For plain view, create first then fall back to update.
+        upgrade_first = member_perm in ("edit", "full_access")
+        if upgrade_first:
             ok, err = _drive_minutes_member_perm(
                 tok,
                 minutes_tok,
                 member_type=member_type,
                 member_id=member_id,
-                perm=prole,
+                perm=member_perm,
                 use_create=False,
                 label=f"{label_prefix} update",
             )
@@ -1013,7 +1021,7 @@ def grant_minutes_drive_collaborators(
                 minutes_tok,
                 member_type=member_type,
                 member_id=member_id,
-                perm=prole,
+                perm=member_perm,
                 use_create=True,
                 label=f"{label_prefix} create",
             )
@@ -1023,7 +1031,7 @@ def grant_minutes_drive_collaborators(
             minutes_tok,
             member_type=member_type,
             member_id=member_id,
-            perm=prole,
+            perm=member_perm,
             use_create=True,
             label=f"{label_prefix} create",
         )
@@ -1034,18 +1042,23 @@ def grant_minutes_drive_collaborators(
             minutes_tok,
             member_type=member_type,
             member_id=member_id,
-            perm=prole,
+            perm=member_perm,
             use_create=False,
             label=f"{label_prefix} update",
         )
 
+    # Users to grant = fan-out user list ∪ manage list (manage ids are always included).
+    user_ids_ordered: List[str] = list(users_src or []) + [m for m in manage_ids if m not in set(users_src or [])]
     seen_user: set[str] = set()
-    for raw in users_src or []:
+    for raw in user_ids_ordered:
         uid = (raw or "").strip()
         if not uid.startswith("ou_") or len(uid) < 12 or uid in seen_user:
             continue
         seen_user.add(uid)
-        ok, err = _grant_member(member_type="openid", member_id=uid, label_prefix="drive_minutes user")
+        member_perm = "full_access" if uid in manage_ids else prole
+        ok, err = _grant_member(
+            member_type="openid", member_id=uid, label_prefix="drive_minutes user", member_perm=member_perm
+        )
         if ok:
             ok_any = True
         elif err:
@@ -1056,18 +1069,21 @@ def grant_minutes_drive_collaborators(
         if not cid.startswith("oc_") or len(cid) < 12 or cid in seen_chat:
             continue
         seen_chat.add(cid)
-        ok, err = _grant_member(member_type="openchat", member_id=cid, label_prefix="drive_minutes group")
+        ok, err = _grant_member(
+            member_type="openchat", member_id=cid, label_prefix="drive_minutes group", member_perm=prole
+        )
         if ok:
             ok_any = True
         elif err:
             errors.append(f"group {cid[-8:]}: {err}")
     if ok_any:
         log.info(
-            "VC recording drive Minutes perm ok token_tail=%s users=%s groups=%s perm=%s",
+            "VC recording drive Minutes perm ok token_tail=%s users=%s groups=%s default_perm=%s manage_users=%s",
             minutes_tok[-8:] if len(minutes_tok) > 8 else minutes_tok,
             len(seen_user),
             len(seen_chat),
             prole,
+            len(manage_ids),
         )
         return True
     if errors:

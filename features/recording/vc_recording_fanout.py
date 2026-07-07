@@ -157,14 +157,16 @@ def _grant_recording_permissions(
                 perm_tok, meeting_id, targets, user_open_ids=user_targets
             )
     drive_perm = _config.get_vc_recording_fanout_drive_perm()
+    manage_ids = _config.get_vc_recording_fanout_manage_open_ids()
     drive_ok = False
-    if drive_perm and (recording_url or "").strip():
+    # Run the Drive grant when a default perm is set OR specific users need manage (full_access).
+    if (drive_perm or manage_ids) and (recording_url or "").strip():
         drive_ok = _lark.grant_minutes_drive_collaborators(
             perm_tok,
             recording_url,
             targets,
             user_open_ids=user_targets,
-            perm=drive_perm,
+            perm=drive_perm or "view",
         )
         if drive_perm == "edit" and not drive_ok:
             log.warning(
