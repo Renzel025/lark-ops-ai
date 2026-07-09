@@ -19,6 +19,7 @@ from p0_logic import (
     get_tenant_token,
     get_lark_severity_app_credentials,
     handle_dm_generate_overview,
+    handle_group_overview_recalled,
     handle_lark_card_action,
     handle_lark_card_action_show_participants_sync,
     card_action_name_from_payload,
@@ -783,6 +784,18 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             from features.recording.vc_recording_fanout import handle_vc_recording_ready_fanout
 
             handle_vc_recording_ready_fanout(evt, tenant_token)
+            return
+
+        if event_type == "im.message.recalled_v1":
+            recalled_chat_id = (evt.get("chat_id") or "").strip()
+            recalled_message_id = (evt.get("message_id") or "").strip()
+            log.info(
+                "im.message.recalled_v1 chat_id=%s message_id=%s recall_type=%s",
+                recalled_chat_id,
+                recalled_message_id,
+                (evt.get("recall_type") or "").strip(),
+            )
+            handle_group_overview_recalled(tenant_token, recalled_chat_id, recalled_message_id)
             return
 
         msg = evt.get("message", {}) or {}

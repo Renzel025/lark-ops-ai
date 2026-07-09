@@ -1495,6 +1495,23 @@ def overview_ai_provider_chain() -> list:
     return chain
 
 
+def get_p0_overview_recall_restore_enabled() -> bool:
+    """
+    When a **sent** group overview is recalled (``im.message.recalled_v1``), re-DM the preview
+    (with Send/Edit) to the operator who sent it. Default on. Requires the Lark app to subscribe
+    to the ``im.message.recalled_v1`` event, and the overview must still be in the in-memory
+    ``group_overview_store`` (24h TTL, lost on restart). Toggle: ``P0_OVERVIEW_RECALL_RESTORE_ENABLED``.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_OVERVIEW_RECALL_RESTORE_ENABLED") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+        "",
+    )
+
+
 def get_overview_anthropic_model() -> str:
     """
     Optional Claude model override for overview generation (``P0_OVERVIEW_ANTHROPIC_MODEL``).

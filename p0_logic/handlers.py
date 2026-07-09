@@ -509,6 +509,75 @@ def _finalize_group_overview_for_edit(
         log.info("group_overview_edit: group overview stored for DM Edit chat_id=%s message_id=%s", cid, mid)
 
 
+def handle_group_overview_recalled(
+    tenant_token: str, group_chat_id: str, group_message_id: str
+) -> None:
+    """
+    A **sent** group overview was recalled (``im.message.recalled_v1``). If we still have its
+    snapshot, re-DM the preview (Send/Edit) to the operator who sent it so they can resend.
+    Idempotent: the snapshot is popped, so a redelivered recall event is a no-op.
+    """
+    if not _config.get_p0_overview_recall_restore_enabled():
+        return
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    if not cid or not mid:
+        return
+    row = _group_overview_store.pop_group_overview(cid, mid)
+    if not row:
+        return  # not a tracked overview, or already restored
+    oid = str(row.get("sent_by_open_id") or "").strip()
+    if not oid:
+        log.warning(
+            "overview recall restore: no sent_by_open_id — cannot DM chat_id=%s message_id=%s",
+            cid,
+            mid[:20] + "…" if len(mid) > 20 else mid,
+        )
+        return
+    tok = (tenant_token or "").strip()
+    if not tok:
+        return
+    target_chat = str(row.get("target_chat") or "").strip()
+    src = str(row.get("source_incident_chat_id") or "").strip()
+    pri = str(row.get("priority") or "P0").strip().upper()
+    if pri not in ("P0", "P1"):
+        pri = "P0"
+    md = _drafts.restore_preview_after_recall(
+        oid,
+        target_chat=target_chat,
+        start_epoch=int(row.get("start_epoch") or 0),
+        combined_text=str(row.get("combined_text") or ""),
+        mention_names=list(row.get("mention_names") or []),
+        issue=str(row.get("issue") or ""),
+        impact=str(row.get("impact") or ""),
+        support=str(row.get("support") or ""),
+        md=str(row.get("md") or ""),
+        priority=pri,
+        source_incident_chat_id=src,
+    )
+    _lark.post_text_to_open_id(
+        oid,
+        tok,
+        "↩️ The overview you sent to the group was recalled — here's the preview again. "
+        "Edit if needed, then tap **Send to group**.",
+    )
+    lab = _session.get_source_chat_label_for_target_chat(target_chat)
+    card = _cards.build_preview_card(
+        md,
+        priority=pri,
+        source_chat_label=lab,
+        target_chat=target_chat,
+        source_incident_chat_id=src,
+    )
+    ok = _drafts.post_or_patch_preview_card(oid, tok, card)
+    log.info(
+        "overview recall restore: re-DM preview open_id_tail=%s chat_id=%s posted=%s",
+        oid[-8:] if len(oid) > 8 else oid,
+        cid,
+        ok,
+    )
+
+
 def _patch_group_overview_cards(
     tenant_token: str, group_chat_id: str, group_message_id: str, card: Dict[str, Any]
 ) -> Tuple[bool, bool]:

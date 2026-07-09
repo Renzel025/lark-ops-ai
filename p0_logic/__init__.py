@@ -72,6 +72,7 @@ post_card_to_open_id = lark_client.post_card_to_open_id
 handle_dm_generate_overview = handlers.handle_dm_generate_overview
 handle_lark_card_action = handlers.handle_lark_card_action
 handle_lark_card_action_show_participants_sync = handlers.handle_lark_card_action_show_participants_sync
+handle_group_overview_recalled = handlers.handle_group_overview_recalled
 card_action_name_from_payload = handlers.card_action_name_from_payload
 handle_p0_submit = handlers.handle_p0_submit
 
@@ -177,6 +178,7 @@ __all__ = [
     "post_text_to_open_id",
     "post_card_to_open_id",
     "handle_dm_generate_overview",
+    "handle_group_overview_recalled",
     "handle_lark_card_action",
     "handle_p0_submit",
     "get_support_map",

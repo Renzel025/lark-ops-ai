@@ -63,6 +63,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT` | on | off | off | Send overview to detection group |
 | `P0_OVERVIEW_AI_PROVIDER` | `claude` / `groq` | `auto` | **auto** | LLM for overview issue+bilingual. `auto` = Claude if configured → Groq → `summarize_issue`. Mirrors `P0_ISSUE_WATCH_AI_PROVIDER` |
 | `P0_OVERVIEW_ANTHROPIC_MODEL` | model id set | blank | blank | Claude model just for overviews; blank = shared `ANTHROPIC_MODEL`. Set a Sonnet id for higher accuracy |
+| `P0_OVERVIEW_RECALL_RESTORE_ENABLED` | on | off | **on** | Recall a sent group overview → re-DM its preview to the sender. Needs `im.message.recalled_v1` event subscribed; in-memory 24h TTL |
 
 **Must set for Bitable:**
 

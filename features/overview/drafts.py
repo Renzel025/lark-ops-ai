@@ -298,6 +298,52 @@ def _save_preview(
     return str(md or "").strip()
 
 
+def restore_preview_after_recall(
+    sender_open_id: str,
+    *,
+    target_chat: str,
+    start_epoch: int,
+    combined_text: str,
+    mention_names: List[str],
+    issue: str,
+    impact: str,
+    support: str,
+    md: str,
+    priority: str = "P0",
+    source_incident_chat_id: str = "",
+) -> str:
+    """
+    Rebuild a fresh, sendable preview from a recalled overview's stored snapshot. Uses the exact
+    stored ``md`` (preserves the bilingual text) and drops all prior message-ids / sent / claim
+    flags, so ``post_or_patch_preview_card`` posts a NEW card and ``try_claim_overview_send`` lets
+    the operator Send again. Returns the preview ``md``.
+    """
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    md_s = (md or "").strip()
+    clear_preview(sender_open_id)
+    cancel_preview_timer(sender_open_id)
+    with _store.preview_transaction(sender_open_id) as tx:
+        tx.set(
+            {
+                "target_chat": (target_chat or "").strip(),
+                "start_epoch": int(start_epoch or 0),
+                "combined_text": combined_text or "",
+                "mention_names": list(mention_names or []),
+                "issue": issue or "",
+                "impact": impact or "",
+                "support": support or "",
+                "priority": prio,
+                "md": md_s,
+                "awaiting_edit_input": False,
+                "updated_at": int(time.time()),
+                "source_incident_chat_id": (source_incident_chat_id or "").strip(),
+            }
+        )
+    return md_s
+
+
 def get_preview(sender_open_id: str) -> Optional[Dict[str, Any]]:
     sender_open_id = (sender_open_id or "").strip()
     if not sender_open_id:
