@@ -223,6 +223,38 @@ def _patch_card_via_lark_app(message_id: str, card: Dict[str, Any]) -> Tuple[boo
         return False, 0, str(e)
 
 
+def _recall_via_lark_app(message_id: str) -> Tuple[bool, int, str]:
+    """Recall (delete) an overview message the Overview bot sent. DELETE /im/v1/messages/{id}."""
+    mid = (message_id or "").strip()
+    if not mid:
+        return False, 0, "missing message_id"
+    token = _get_tenant_token()
+    if not token:
+        return False, 0, "tenant token failed — check LARK_APP_ID / LARK_APP_SECRET"
+    url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}"
+    try:
+        r = requests.delete(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        body = r.json() if r.text else {}
+        code = body.get("code")
+        # code 0 = recalled; treat "already recalled / not found" as success (idempotent).
+        ok = r.status_code == 200 and code == 0
+        if not ok and code in (230002, 232004, 232006):
+            ok = True
+        if not ok:
+            log.warning(
+                "lark im recall failed HTTP=%s code=%s msg=%s message_id=%s",
+                r.status_code,
+                code,
+                body.get("msg"),
+                mid[:24],
+            )
+            return False, r.status_code, json.dumps(body, ensure_ascii=False)[:500]
+        return True, r.status_code, ""
+    except Exception as e:
+        log.warning("lark im recall error message_id=%s err=%s", mid[:24], e)
+        return False, 0, str(e)
+
+
 def _post_text_via_lark_app(chat_id: str, text: str) -> Tuple[bool, int, str]:
     cid = (chat_id or "").strip()
     if not cid.startswith("oc_") or not text.strip():
@@ -354,6 +386,26 @@ async def patch_overview(request: Request, authorization: Optional[str] = Header
     if not _lark_app_configured():
         return {"ok": False, "error": "lark app not configured — cannot PATCH (webhook posts are not editable)"}
     ok, status, detail = _patch_card_via_lark_app(message_id, card)
+    return {
+        "ok": ok,
+        "mode": "lark_app",
+        "message_id": message_id,
+        "lark_status": status,
+        "detail": detail if not ok else "",
+    }
+
+
+@app.post("/recall-overview")
+async def recall_overview(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Recall an overview message posted by the Overview Lark app (cascade from a primary recall)."""
+    _check_auth(authorization)
+    body = await request.json()
+    message_id = str(body.get("message_id") or "").strip()
+    if not message_id:
+        return {"ok": False, "error": "missing message_id"}
+    if not _lark_app_configured():
+        return {"ok": False, "error": "lark app not configured — cannot recall (webhook posts are not recallable)"}
+    ok, status, detail = _recall_via_lark_app(message_id)
     return {
         "ok": ok,
         "mode": "lark_app",

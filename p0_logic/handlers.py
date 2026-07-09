@@ -537,6 +537,15 @@ def handle_group_overview_recalled(
     tok = (tenant_token or "").strip()
     if not tok:
         return
+    # Cascade: also recall the Overview-bot broadcast copy so a re-Send does not duplicate it.
+    bc_mid = str(row.get("broadcast_message_id") or "").strip()
+    if bc_mid and _config.lark_overview_forwarder_enabled() and _config.get_lark_overview_forwarder_url():
+        recalled = _overview_forwarder.recall_overview_via_forwarder(bc_mid)
+        log.info(
+            "overview recall restore: cascade broadcast recall message_id=%s ok=%s",
+            bc_mid[:20] + "…" if len(bc_mid) > 20 else bc_mid,
+            recalled,
+        )
     target_chat = str(row.get("target_chat") or "").strip()
     src = str(row.get("source_incident_chat_id") or "").strip()
     pri = str(row.get("priority") or "P0").strip().upper()

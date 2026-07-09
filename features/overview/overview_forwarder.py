@@ -85,6 +85,36 @@ def post_overview_via_forwarder(
         return False, ""
 
 
+def recall_overview_via_forwarder(message_id: str) -> bool:
+    """Recall an overview posted by the Overview bot (``lark-forwarder`` ``/recall-overview``)."""
+    endpoint = _forwarder_endpoint("/recall-overview")
+    mid = (message_id or "").strip()
+    if not endpoint or not mid:
+        return False
+    try:
+        r = requests.post(
+            endpoint,
+            json={"message_id": mid},
+            headers=_forwarder_headers(),
+            **_config.timeout_kw(),
+        )
+        body = r.json() if r.content else {}
+        ok = r.status_code == 200 and isinstance(body, dict) and body.get("ok") is True
+        if ok:
+            log.info("overview_forwarder: recalled broadcast message_id=%s", mid[:24] + "…" if len(mid) > 24 else mid)
+            return True
+        log.warning(
+            "overview_forwarder: recall failed HTTP=%s message_id=%s body=%s",
+            r.status_code,
+            mid[:24],
+            (r.text or "")[:400],
+        )
+        return False
+    except Exception as e:
+        log.warning("overview_forwarder: recall failed message_id=%s err=%s", mid[:24], e)
+        return False
+
+
 def patch_overview_via_forwarder(message_id: str, card: Dict[str, Any]) -> bool:
     """PATCH an overview card posted by the Overview bot (``lark-forwarder`` ``/patch-overview``)."""
     endpoint = _forwarder_endpoint("/patch-overview")
