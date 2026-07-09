@@ -112,6 +112,8 @@ get_target_group_chat_id = config.get_target_group_chat_id
 get_owner_ids = config.get_owner_ids
 get_host_and_dm_open_id = config.get_host_and_dm_open_id
 get_p0_trigger_ignore_open_ids = config.get_p0_trigger_ignore_open_ids
+get_p0_redeclare_supersedes_active = config.get_p0_redeclare_supersedes_active
+get_p0_multi_meeting_per_group = config.get_p0_multi_meeting_per_group
 get_p0_thread_confirm_asker_open_ids = config.get_p0_thread_confirm_asker_open_ids
 get_p0_thread_confirm_target_open_ids = config.get_p0_thread_confirm_target_open_ids
 get_p0_thread_confirm_responder_open_ids = config.get_p0_thread_confirm_responder_open_ids
@@ -212,6 +214,8 @@ __all__ = [
     "get_owner_ids",
     "get_host_and_dm_open_id",
     "get_p0_trigger_ignore_open_ids",
+    "get_p0_redeclare_supersedes_active",
+    "get_p0_multi_meeting_per_group",
     "get_p0_thread_confirm_asker_open_ids",
     "get_p0_thread_confirm_target_open_ids",
     "get_p0_thread_confirm_responder_open_ids",
