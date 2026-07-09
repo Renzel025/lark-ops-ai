@@ -1495,6 +1495,22 @@ def overview_ai_provider_chain() -> list:
     return chain
 
 
+def get_p0_redeclare_supersedes_active() -> bool:
+    """
+    When a P0 is declared in a group that already has an active session, **supersede**: cancel the
+    current meeting, then start a fresh one. Default OFF — sessions are keyed by chat_id (one live
+    meeting per group), and with this ON an accidental re-declare during a live incident will KILL
+    the meeting everyone is in. Toggle: ``P0_REDECLARE_SUPERSEDES_ACTIVE``.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_REDECLARE_SUPERSEDES_ACTIVE") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def get_p0_overview_recall_restore_enabled() -> bool:
     """
     When a **sent** group overview is recalled (``im.message.recalled_v1``), re-DM the preview

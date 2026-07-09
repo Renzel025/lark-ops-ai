@@ -25,6 +25,7 @@ from p0_logic.config import (
     get_p0_thread_confirm_use_groq,
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
+    get_p0_redeclare_supersedes_active,
     get_p0_issue_watch_enabled,
     HELP_RE,
     RING_CMD_RE,
@@ -1452,8 +1453,17 @@ def process_message(
                     log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                     return
                 if chat_has_active_session(chat_id):
-                    log.info("Incident group: session already active chat_id=%s", chat_id)
-                    return
+                    if get_p0_redeclare_supersedes_active():
+                        log.info(
+                            "Incident group: re-declare supersedes active session — cancelling then starting new chat_id=%s",
+                            chat_id,
+                        )
+                        cancel_p0_session(chat_id, token, reason="Superseded by a new P0 declaration")
+                        clear_p0_cooldown(chat_id)
+                        # fall through to start a fresh P0 below
+                    else:
+                        log.info("Incident group: session already active chat_id=%s", chat_id)
+                        return
 
                 ai = _priority_keyword_ai_triage(kw_text, groq_key)
                 if ai is not None:

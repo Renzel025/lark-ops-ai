@@ -25,6 +25,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_MEETING_CANCELLED_FANOUT_ENABLED` | on | off | **on** |
 | `P0_ONGOING_DM_BUZZ_ENABLED` | on | off | **on** |
 | `P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC` | number (e.g. `1800`) | blank = off | off |
+| `P0_REDECLARE_SUPERSEDES_ACTIVE` | on = 2nd P0 cancels current + starts new | off = ignored | **off** ⚠️ on kills a live meeting on re-declare |
 
 **Not toggles — must be set:**
 
