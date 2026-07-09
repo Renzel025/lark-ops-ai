@@ -15,6 +15,7 @@ from p0_logic import config as _config
 from . import draft_store as _store
 from p0_logic import groq_client as _groq
 from . import issues as _issues
+from . import overview_ai as _overview_ai
 from p0_logic import lark_client as _lark
 from features.session import session as _session
 from p0_logic import support as _support
@@ -545,20 +546,18 @@ def _build_preview_from_draft(
     zh_issue_pc: Optional[str] = None
     zh_impact_pc: Optional[str] = None
     triplet = None
-    # Support map (Lark Sheets) and Groq one-shot are independent — run in parallel to cut wall time.
+    # Support map (Lark Sheets) and the overview AI one-shot are independent — run in parallel.
     def _support_only() -> str:
         return _support.build_support_request(support_source, tenant_token, mention_names=combined_mentions)
 
-    def _groq_triplet_only() -> Optional[Tuple[str, str, str]]:
-        if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
-            return _groq.groq_overview_issue_and_zh_bilingual(issue_source, impact)
-        return None
+    def _triplet_only() -> Optional[Tuple[str, str, str]]:
+        return _overview_ai.overview_issue_and_zh_bilingual(issue_source, impact)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_sup = pool.submit(_support_only)
-        f_groq = pool.submit(_groq_triplet_only)
+        f_ai = pool.submit(_triplet_only)
         support = f_sup.result()
-        triplet = f_groq.result()
+        triplet = f_ai.result()
     if triplet:
         issue_en_raw, zh_issue_pc, zh_impact_pc = triplet
         issue = (issue_en_raw or "").strip()

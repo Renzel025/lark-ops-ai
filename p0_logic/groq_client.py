@@ -410,14 +410,12 @@ def _scrub_issue_source_for_model(issue_source: str) -> str:
     return scrubbed
 
 
-def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> Optional[Tuple[str, str, str]]:
+def build_overview_oneshot_prompts(issue_source: str, impact_en: str) -> Optional[Tuple[str, str]]:
     """
-    Single Groq round trip: English issue one-liner + zh_issue + zh_impact.
-    Replaces summarize_issue + translate_issue_impact_pair (2–3 HTTP calls → 1).
-    Returns None on failure so callers fall back to the legacy path.
+    ``(system_prompt, user_prompt)`` for the overview issue+bilingual one-shot, or ``None`` when
+    there is nothing to summarize. Shared by the Groq and Claude providers so both emit the same
+    JSON shape (``issue_en`` / ``zh_issue`` / ``zh_impact``). See ``overview_ai``.
     """
-    if not GROQ_API_KEY:
-        return None
     scrubbed = _scrub_issue_source_for_model(issue_source)
     if not scrubbed:
         return None
@@ -436,19 +434,39 @@ def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> O
         f"Incident text:\n{scrubbed}\n\n"
         f"Impact scope (English — translate this exact line to zh_impact):\n{impact_line}\n"
     )
+    return system_prompt, user_prompt
+
+
+def parse_overview_oneshot(raw: str) -> Optional[Tuple[str, str, str]]:
+    """Parse ``issue_en`` / ``zh_issue`` / ``zh_impact`` from a model reply; ``None`` on failure."""
+    obj = _parse_json_object(raw or "")
+    if not obj:
+        log.warning("overview one-shot: JSON parse failed head=%s", (raw or "")[:200])
+        return None
+    issue_en = str(obj.get("issue_en") or "").strip()
+    zh_issue = str(obj.get("zh_issue") or "").strip()
+    zh_impact = str(obj.get("zh_impact") or "").strip()
+    if not issue_en:
+        return None
+    return issue_en, zh_issue, zh_impact
+
+
+def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Single Groq round trip: English issue one-liner + zh_issue + zh_impact.
+    Replaces summarize_issue + translate_issue_impact_pair (2–3 HTTP calls → 1).
+    Returns None on failure so callers fall back to the legacy path.
+    """
+    if not GROQ_API_KEY:
+        return None
+    prompts = build_overview_oneshot_prompts(issue_source, impact_en)
+    if not prompts:
+        return None
+    system_prompt, user_prompt = prompts
     t0 = time.perf_counter()
     try:
         raw = groq_chat_once(system_prompt, user_prompt, max_tokens=520)
-        obj = _parse_json_object(raw or "")
-        if not obj:
-            log.warning("groq_overview one-shot: JSON parse failed head=%s", (raw or "")[:200])
-            return None
-        issue_en = str(obj.get("issue_en") or "").strip()
-        zh_issue = str(obj.get("zh_issue") or "").strip()
-        zh_impact = str(obj.get("zh_impact") or "").strip()
-        if not issue_en:
-            return None
-        return issue_en, zh_issue, zh_impact
+        return parse_overview_oneshot(raw)
     finally:
         perf_log("groq_overview_issue_zh_one_shot", t0)
 

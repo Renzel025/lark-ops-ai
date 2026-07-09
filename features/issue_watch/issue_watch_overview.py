@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from p0_logic import cards as _cards
 from p0_logic import config as _config
 from features.overview import drafts as _drafts
-from p0_logic import groq_client as _groq
+from features.overview import overview_ai as _overview_ai
 from . import issue_watch_alert_disk as _iw_disk
 from features.overview import issues as _issues
 from p0_logic import lark_client as _lark
@@ -218,16 +218,14 @@ def build_overview_fields_from_alert(
     def _support_only() -> str:
         return _support.build_support_request(combined_text, tenant_token)
 
-    def _groq_triplet_only() -> Optional[Tuple[str, str, str]]:
-        if _groq.GROQ_API_KEY and _config.GROQ_OVERVIEW_ONE_SHOT:
-            return _groq.groq_overview_issue_and_zh_bilingual(combined_text, impact)
-        return None
+    def _triplet_only() -> Optional[Tuple[str, str, str]]:
+        return _overview_ai.overview_issue_and_zh_bilingual(combined_text, impact)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_sup = pool.submit(_support_only)
-        f_groq = pool.submit(_groq_triplet_only)
+        f_ai = pool.submit(_triplet_only)
         support = f_sup.result()
-        triplet = f_groq.result()
+        triplet = f_ai.result()
 
     if triplet:
         issue = _issue_from_groq_triplet(triplet)
