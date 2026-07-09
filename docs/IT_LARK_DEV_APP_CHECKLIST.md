@@ -27,6 +27,7 @@ Subscribe in Developer Console → Events:
 |-------|-----|
 | `im.message.receive_v1` | Group messages (p0/p1, Issue Watch) + DM (overview build) |
 | `card.action.trigger` | Buttons: Build overview, Send to group, Issue Watch, P1 confirm, etc. |
+| `im.message.recalled_v1` | Recall a sent group overview → re-DM its preview to the operator (`P0_OVERVIEW_RECALL_RESTORE_ENABLED`) |
 
 ### VC / recording (if P0 meetings + recording fanout enabled)
 

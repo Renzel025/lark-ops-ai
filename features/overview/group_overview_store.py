@@ -78,6 +78,26 @@ def save_group_overview(
     )
 
 
+def pop_group_overview(group_chat_id: str, group_message_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Atomically fetch **and remove** the stored overview. Used by the recall→restore flow so a
+    duplicate ``im.message.recalled_v1`` event (Lark may redeliver) finds nothing and is a no-op.
+    Returns None when absent or past TTL.
+    """
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    if not cid or not mid:
+        return None
+    k = _key(cid, mid)
+    with _LOCK:
+        row = _BY_KEY.pop(k, None)
+    if not row:
+        return None
+    if int(time.time()) - int(row.get("updated_at") or 0) > _TTL_SEC:
+        return None
+    return dict(row)
+
+
 def get_group_overview(group_chat_id: str, group_message_id: str) -> Optional[Dict[str, Any]]:
     cid = (group_chat_id or "").strip()
     mid = (group_message_id or "").strip()
