@@ -1471,6 +1471,40 @@ def priority_keyword_ai_provider_chain() -> list:
     return chain
 
 
+def overview_ai_provider_chain() -> list:
+    """
+    Ordered providers for the DM/Issue-Watch overview issue+bilingual one-shot, with failover.
+
+    ``auto`` (default): **claude → groq** (each skipped if unconfigured) — mirrors the P0 Issue
+    Watch (``P0_ISSUE_WATCH_AI_PROVIDER``). Force one: ``P0_OVERVIEW_AI_PROVIDER=claude|groq``.
+    Claude auth is whatever ``anthropic_client`` resolves (OAuth preferred, API key fallback —
+    see ``P0_ANTHROPIC_PREFER_OAUTH``); Groq needs ``GROQ_API_KEY`` and ``GROQ_OVERVIEW_ONE_SHOT``.
+    Empty list → caller falls back to the legacy ``summarize_issue`` path.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_OVERVIEW_AI_PROVIDER") or "auto").strip().lower()
+    has_claude = anthropic_claude_configured()
+    has_groq = bool(GROQ_API_KEY) and GROQ_OVERVIEW_ONE_SHOT
+    avail = {"claude": has_claude, "groq": has_groq}
+    if raw in avail:
+        return [raw] if avail[raw] else []
+    chain: list = []
+    for name in ("claude", "groq"):
+        if avail[name]:
+            chain.append(name)
+    return chain
+
+
+def get_overview_anthropic_model() -> str:
+    """
+    Optional Claude model override for overview generation (``P0_OVERVIEW_ANTHROPIC_MODEL``).
+    Empty → use the shared ``ANTHROPIC_MODEL`` / OAuth default. Set a Sonnet id here for
+    higher-accuracy overviews without changing the model used by other Claude features.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_OVERVIEW_ANTHROPIC_MODEL") or "").strip()
+
+
 def resolve_priority_keyword_ai_provider() -> str:
     """First provider in ``priority_keyword_ai_provider_chain()`` (for startup / availability checks)."""
     chain = priority_keyword_ai_provider_chain()

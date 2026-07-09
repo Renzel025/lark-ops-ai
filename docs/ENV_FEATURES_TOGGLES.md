@@ -61,6 +61,8 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `LARK_OVERVIEW_FORWARDER_ENABLED` | on | off | off | Broadcast overview via forwarder |
 | `P0_GROUP_OVERVIEW_EDIT_ENABLED` | on | off | **on** | Edit overview in group after Send |
 | `P0_OVERVIEW_POST_TO_INCIDENT_SOURCE_CHAT` | on | off | off | Send overview to detection group |
+| `P0_OVERVIEW_AI_PROVIDER` | `claude` / `groq` | `auto` | **auto** | LLM for overview issue+bilingual. `auto` = Claude if configured → Groq → `summarize_issue`. Mirrors `P0_ISSUE_WATCH_AI_PROVIDER` |
+| `P0_OVERVIEW_ANTHROPIC_MODEL` | model id set | blank | blank | Claude model just for overviews; blank = shared `ANTHROPIC_MODEL`. Set a Sonnet id for higher accuracy |
 
 **Must set for Bitable:**
 
