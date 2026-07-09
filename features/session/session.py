@@ -715,11 +715,15 @@ def record_vc_external_join_for_meeting_ref(meeting_ref: str, joiner_open_id: st
     )
 
 
-def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
-    """Schedule auto-cancel when no external join was recorded (see config per-source chat)."""
+def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str, *, session_key: str = "") -> None:
+    """Schedule auto-cancel when no external join was recorded (see config per-source chat).
+
+    ``session_key`` targets a specific session in multi-meeting mode; defaults to ``chat_id``.
+    """
     chat_id = (chat_id or "").strip()
     if not chat_id:
         return
+    sk = (session_key or "").strip() or chat_id
     _config.reload_env_runtime()
     delay = float(_config.get_p0_vc_auto_cancel_sec_for_source_chat(chat_id))
     if delay <= 0:
@@ -740,15 +744,15 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
                 chat_id,
             )
         return
-    sess0 = P0_SESSIONS.get(chat_id)
+    sess0 = P0_SESSIONS.get(sk)
     if not sess0:
-        log.warning("vc auto-cancel: not scheduled chat_id=%s (no session in memory)", chat_id)
+        log.warning("vc auto-cancel: not scheduled key=%s (no session in memory)", sk)
         return
     run_id = secrets.token_hex(8)
     sess0["vc_auto_cancel_run_id"] = run_id
-    P0_SESSIONS[chat_id] = sess0
+    P0_SESSIONS[sk] = sess0
     if _session_disk.enabled():
-        _session_disk.save_session(chat_id, sess0)
+        _session_disk.save_session(sk, sess0)
     log.info(
         "vc auto-cancel: scheduled chat_id=%s delay_sec=%s run_id=%s",
         chat_id,
@@ -766,14 +770,14 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
                     chat_id,
                 )
                 return
-            sess = P0_SESSIONS.get(chat_id)
+            sess = P0_SESSIONS.get(sk)
             if not sess:
-                log.info("vc auto-cancel: worker exit (session gone) chat_id=%s", chat_id)
+                log.info("vc auto-cancel: worker exit (session gone) key=%s", sk)
                 return
             if str(sess.get("vc_auto_cancel_run_id") or "") != run_id:
                 log.info(
-                    "vc auto-cancel: worker exit (stale run_id, new session?) chat_id=%s",
-                    chat_id,
+                    "vc auto-cancel: worker exit (stale run_id, new session?) key=%s",
+                    sk,
                 )
                 return
             ext = int(sess.get("vc_external_join_count") or 0)
@@ -794,12 +798,12 @@ def schedule_vc_auto_cancel_if_no_external_joins(chat_id: str) -> None:
                 chat_id,
             )
             cancel_p0_session(
-                chat_id,
+                sk,
                 tok,
                 reason="No participants joined (auto-cancel).",
             )
         except Exception as e:
-            log.warning("vc auto-cancel worker failed chat_id=%s err=%s", chat_id, e)
+            log.warning("vc auto-cancel worker failed key=%s err=%s", sk, e)
 
     threading.Thread(
         target=worker,
@@ -889,15 +893,16 @@ def _send_p0_ongoing_dm_buzz(
     )
 
 
-def _mark_p0_ongoing_buzz_sent(chat_id: str, run_id: str, tier: str) -> None:
+def _mark_p0_ongoing_buzz_sent(chat_id: str, run_id: str, tier: str, *, session_key: str = "") -> None:
+    sk = (session_key or "").strip() or chat_id
     sent_key = _p0_ongoing_buzz_sent_key(tier)
-    sess2 = P0_SESSIONS.get(chat_id)
+    sess2 = P0_SESSIONS.get(sk)
     if not sess2 or str(sess2.get("p0_ongoing_buzz_run_id") or "") != run_id:
         return
     sess2[sent_key] = True
-    P0_SESSIONS[chat_id] = sess2
+    P0_SESSIONS[sk] = sess2
     if _session_disk.enabled():
-        _session_disk.save_session(chat_id, sess2)
+        _session_disk.save_session(sk, sess2)
 
 
 def _try_send_p0_ongoing_dm_buzz_now(
@@ -905,13 +910,15 @@ def _try_send_p0_ongoing_dm_buzz_now(
     *,
     tier: str,
     run_id: str = "",
+    session_key: str = "",
 ) -> bool:
     """Send buzz if session active and not already sent."""
     cid = (chat_id or "").strip()
+    sk = (session_key or "").strip() or cid
     t = (tier or "").strip().lower()
     if not cid or t not in ("major", "minor"):
         return False
-    sess = P0_SESSIONS.get(cid)
+    sess = P0_SESSIONS.get(sk)
     if not sess:
         return False
     rid = (run_id or str(sess.get("p0_ongoing_buzz_run_id") or "")).strip()
@@ -935,7 +942,7 @@ def _try_send_p0_ongoing_dm_buzz_now(
         else _config.get_p0_ongoing_dm_buzz_minor_delay_sec()
     )
     _send_p0_ongoing_dm_buzz(cid, sess, tok, trigger, tier=t, delay_sec=delay_sec)
-    _mark_p0_ongoing_buzz_sent(cid, rid, t)
+    _mark_p0_ongoing_buzz_sent(cid, rid, t, session_key=sk)
     return True
 
 
@@ -946,8 +953,10 @@ def _start_p0_ongoing_buzz_worker(
     *,
     tier: str,
     delay_sec: float,
+    session_key: str = "",
 ) -> None:
     t = (tier or "").strip().lower()
+    sk = (session_key or "").strip() or chat_id
 
     def worker() -> None:
         time.sleep(max(0.0, float(delay_sec)))
@@ -955,23 +964,23 @@ def _start_p0_ongoing_buzz_worker(
             _config.reload_env_runtime()
             if not _config.get_p0_ongoing_dm_buzz_enabled():
                 return
-            sess = P0_SESSIONS.get(chat_id)
+            sess = P0_SESSIONS.get(sk)
             if not sess:
-                log.info("p0 ongoing buzz: worker exit (session ended) chat_id=%s tier=%s", chat_id, t)
+                log.info("p0 ongoing buzz: worker exit (session ended) key=%s tier=%s", sk, t)
                 return
             if str(sess.get("p0_ongoing_buzz_run_id") or "") != run_id:
-                log.info("p0 ongoing buzz: worker exit (stale run_id) chat_id=%s tier=%s", chat_id, t)
+                log.info("p0 ongoing buzz: worker exit (stale run_id) key=%s tier=%s", sk, t)
                 return
             if not _p0_ongoing_buzz_tier_allowed(sess, t):
                 log.info(
-                    "p0 ongoing buzz: worker skip (tier=%s) chat_id=%s",
+                    "p0 ongoing buzz: worker skip (tier=%s) key=%s",
                     t,
-                    chat_id,
+                    sk,
                 )
                 return
-            _try_send_p0_ongoing_dm_buzz_now(chat_id, tier=t, run_id=run_id)
+            _try_send_p0_ongoing_dm_buzz_now(chat_id, tier=t, run_id=run_id, session_key=sk)
         except Exception as e:
-            log.warning("p0 ongoing buzz worker failed chat_id=%s tier=%s err=%s", chat_id, t, e)
+            log.warning("p0 ongoing buzz worker failed key=%s tier=%s err=%s", sk, t, e)
 
     threading.Thread(
         target=worker,
@@ -980,17 +989,20 @@ def _start_p0_ongoing_buzz_worker(
     ).start()
 
 
-def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
+def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str, *, session_key: str = "") -> None:
     """
     After P0 start, DM operators when the meeting is still active:
     **Major** → 5 min (default); **Minor** → 10 min (default).
+
+    ``session_key`` targets a specific session in multi-meeting mode; defaults to ``chat_id``.
     """
     chat_id = (chat_id or "").strip()
     if not chat_id or not _config.get_p0_ongoing_dm_buzz_enabled():
         return
-    sess0 = P0_SESSIONS.get(chat_id)
+    sk = (session_key or "").strip() or chat_id
+    sess0 = P0_SESSIONS.get(sk)
     if not sess0:
-        log.warning("p0 ongoing buzz: not scheduled chat_id=%s (no session)", chat_id)
+        log.warning("p0 ongoing buzz: not scheduled key=%s (no session)", sk)
         return
     if str(sess0.get("priority") or "").strip().upper() != "P0":
         log.info("p0 ongoing buzz: not scheduled chat_id=%s (priority is not P0)", chat_id)
@@ -1004,9 +1016,9 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
     sess0["p0_ongoing_buzz_major_sent"] = False
     sess0["p0_ongoing_buzz_minor_sent"] = False
     sess0.pop("p0_ongoing_buzz_sent", None)
-    P0_SESSIONS[chat_id] = sess0
+    P0_SESSIONS[sk] = sess0
     if _session_disk.enabled():
-        _session_disk.save_session(chat_id, sess0)
+        _session_disk.save_session(sk, sess0)
     log.info(
         "p0 ongoing buzz: scheduled chat_id=%s run_id=%s major_sec=%s minor_sec=%s",
         chat_id,
@@ -1021,6 +1033,7 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
             run_id,
             tier="major",
             delay_sec=major_delay,
+            session_key=sk,
         )
     if minor_delay > 0:
         _start_p0_ongoing_buzz_worker(
@@ -1029,6 +1042,7 @@ def schedule_p0_ongoing_dm_buzz(chat_id: str, trigger_open_id: str) -> None:
             run_id,
             tier="minor",
             delay_sec=minor_delay,
+            session_key=sk,
         )
 
 
@@ -1440,6 +1454,11 @@ def chat_has_active_session(chat_id: str) -> bool:
         return False
     if cid in P0_SESSIONS:
         return True
+    # Multi-meeting mode: a group may only have composite-keyed (chat_id#meeting_no) sessions left.
+    prefix = cid + "#"
+    for k in P0_SESSIONS:
+        if k.startswith(prefix):
+            return True
     if _session_disk.enabled():
         d = _session_disk.load_session(cid)
         if d:
@@ -1718,12 +1737,15 @@ def start_p0(
     priority = (priority or "P0").strip().upper()
     if not chat_id:
         return
+    # Multi-meeting mode: every declaration creates its own coexisting VC + session (keyed per
+    # meeting). When off, classic one-meeting-per-group behaviour (guards + cooldown apply).
+    multi = _config.get_p0_multi_meeting_per_group()
     pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
     # Bot warnings during start: same chat as meeting cards (incident vs mirror — see config).
     notify_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
     with _session_disk.exclusive_lock(chat_id):
-        if P0_SESSIONS.get(chat_id):
+        if not multi and P0_SESSIONS.get(chat_id):
             if silent_when_blocked:
                 log.info("start_p0: blocked (session already active) silent chat_id=%s", chat_id)
                 return
@@ -1733,19 +1755,20 @@ def start_p0(
                 "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
             )
             return
-        sd = _session_disk.load_session(chat_id)
-        if sd:
-            P0_SESSIONS[chat_id] = sd
-            if silent_when_blocked:
-                log.info("start_p0: blocked (session loaded from disk) silent chat_id=%s", chat_id)
+        if not multi:
+            sd = _session_disk.load_session(chat_id)
+            if sd:
+                P0_SESSIONS[chat_id] = sd
+                if silent_when_blocked:
+                    log.info("start_p0: blocked (session loaded from disk) silent chat_id=%s", chat_id)
+                    return
+                _lark.post_text_to_chat(
+                    notify_chat,
+                    token,
+                    "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
+                )
                 return
-            _lark.post_text_to_chat(
-                notify_chat,
-                token,
-                "ℹ️ A P0/P1 meeting session is already active in this group. Use **end meeting** or **cancel meeting** before declaring again.",
-            )
-            return
-        if p0_cooldown(chat_id):
+        if not multi and p0_cooldown(chat_id):
             if silent_when_blocked:
                 log.info("start_p0: blocked (cooldown active) silent chat_id=%s", chat_id)
                 return
@@ -1767,7 +1790,13 @@ def start_p0(
         if not chat_label:
             chat_label = _lark.get_group_chat_name(chat_id, token)
         affected_players = ""
-        P0_SESSIONS[chat_id] = {
+        # Store key: chat_id for the classic single meeting; a per-meeting composite for the 2nd+
+        # concurrent meeting in multi-mode so they coexist instead of overwriting each other.
+        _mtg_no_key = str(vc.get("meeting_no", "")).strip()
+        session_key = chat_id
+        if multi and chat_id in P0_SESSIONS and _mtg_no_key:
+            session_key = f"{chat_id}#{_mtg_no_key}"
+        P0_SESSIONS[session_key] = {
             "priority": priority,
             "start_epoch": now,
             "link": link,
@@ -1827,7 +1856,7 @@ def start_p0(
                         f"(target_tail={target_chat[-12:] if len(target_chat) > 12 else target_chat}). "
                         f"Lark: {lark_msg or lark_msg2 or 'unknown'}",
                     )
-                    P0_SESSIONS.pop(chat_id, None)
+                    P0_SESSIONS.pop(session_key, None)
                     return
                 invite_mid = _lark.parse_im_message_id_from_response(body_fb2)
                 log.warning(
@@ -1840,8 +1869,8 @@ def start_p0(
                     target_chat[-12:] if len(target_chat) > 12 else target_chat,
                 )
         if invite_mid:
-            P0_SESSIONS[chat_id]["meeting_invite_message_id"] = invite_mid
-            P0_SESSIONS[chat_id]["meeting_invite_notice_kind"] = "text_unfurl"
+            P0_SESSIONS[session_key]["meeting_invite_message_id"] = invite_mid
+            P0_SESSIONS[session_key]["meeting_invite_notice_kind"] = "text_unfurl"
         if priority == "P0":
             _fanout_p0_meeting_created_link_notice(
                 token,
@@ -1852,7 +1881,7 @@ def start_p0(
                 emergency_topic=emergency_topic,
             )
         if _session_disk.enabled():
-            _session_disk.save_session(chat_id, P0_SESSIONS[chat_id])
+            _session_disk.save_session(session_key, P0_SESSIONS[session_key])
     dm_targets = _dm_instruction_targets(trigger_open_id)
     log.info(
         "start_p0 DM targets count=%s open_ids=%s (API expects open_id ou_..., not user_id gceda344-style)",
@@ -1909,12 +1938,12 @@ def start_p0(
         else:
             enqueue_dm_instruction_if_needed(oid, token, dm_item)
     try:
-        schedule_vc_auto_cancel_if_no_external_joins(chat_id)
+        schedule_vc_auto_cancel_if_no_external_joins(chat_id, session_key=session_key)
     except Exception as e:
         log.warning("start_p0: schedule vc auto-cancel failed: %s", e)
     if priority == "P0":
         try:
-            schedule_p0_ongoing_dm_buzz(chat_id, trigger_open_id)
+            schedule_p0_ongoing_dm_buzz(chat_id, trigger_open_id, session_key=session_key)
         except Exception as e:
             log.warning("start_p0: schedule p0 ongoing DM buzz failed: %s", e)
 

@@ -26,6 +26,7 @@ from p0_logic.config import (
     p0_thread_confirm_target_mentions_enabled,
     get_p0_trigger_ignore_open_ids,
     get_p0_redeclare_supersedes_active,
+    get_p0_multi_meeting_per_group,
     get_p0_issue_watch_enabled,
     HELP_RE,
     RING_CMD_RE,
@@ -1453,7 +1454,13 @@ def process_message(
                     log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
                     return
                 if chat_has_active_session(chat_id):
-                    if get_p0_redeclare_supersedes_active():
+                    if get_p0_multi_meeting_per_group():
+                        log.info(
+                            "Incident group: multi-meeting mode — starting an additional concurrent P0 chat_id=%s",
+                            chat_id,
+                        )
+                        # fall through: start_p0 creates a new coexisting meeting + session
+                    elif get_p0_redeclare_supersedes_active():
                         log.info(
                             "Incident group: re-declare supersedes active session — cancelling then starting new chat_id=%s",
                             chat_id,

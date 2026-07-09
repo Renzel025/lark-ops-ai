@@ -1495,6 +1495,23 @@ def overview_ai_provider_chain() -> list:
     return chain
 
 
+def get_p0_multi_meeting_per_group() -> bool:
+    """
+    Allow MULTIPLE concurrent P0 meetings in one group: every ``p0`` declaration spins up its own
+    VC link + session, all coexisting. Each ends independently when its VC ends natively
+    (``vc.meeting.meeting_ended_v1``). Default OFF — sessions are keyed per meeting only in this mode;
+    when off, behaviour is the classic one-meeting-per-group. Toggle: ``P0_MULTI_MEETING_PER_GROUP``.
+    Keep OFF in prod unless you truly want stacked meetings in the same incident group.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_MULTI_MEETING_PER_GROUP") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def get_p0_redeclare_supersedes_active() -> bool:
     """
     When a P0 is declared in a group that already has an active session, **supersede**: cancel the
