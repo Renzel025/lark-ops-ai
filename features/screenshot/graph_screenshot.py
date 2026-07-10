@@ -1639,10 +1639,6 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
               );
               const loginPanels = panels.filter((p) => isLoginPanel(p));
 
-              const u1 = union(topPanels.length ? topPanels : panels.filter((p) => p.top < band2Start));
-              const u2 = union(midPanels.length ? midPanels : panels.filter((p) => p.top >= band2Start));
-              if (!u1 || !u2) return null;
-
               const pad = 8;
               const mk = (u, minH) => ({
                 x: Math.max(left, Math.floor(u.x0 - pad)),
@@ -1651,12 +1647,30 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 height: Math.max(minH, Math.ceil(u.y1 - u.y0 + pad * 2)),
               });
 
+              // HARD split on the CPMS header: band1 = content top → CPMS, band2 = CPMS → content
+              // bottom. Robust vs per-panel unions, which go short (lazy render) or overshoot past
+              // 9280 into CPMS/IGO. Full page is pre-warmed, so content extents are accurate.
+              const contentPanels = panels.filter((p) => !isLoginPanel(p));
+              const uAll = union(contentPanels.length ? contentPanels : panels);
+              if (!uAll) return null;
+              const outLeft = Math.max(left, Math.floor(uAll.x0 - pad));
+              const outWidth = Math.max(320, Math.ceil(uAll.x1 - uAll.x0 + pad * 2));
+              const b1y = Math.max(0, Math.floor(uAll.y0 - pad));
+              const band1 = {
+                x: outLeft, y: b1y, width: outWidth,
+                height: Math.max(200, Math.ceil(cpmsSplit - b1y)),
+              };
+              const band2 = {
+                x: outLeft, y: Math.max(0, Math.floor(cpmsSplit)), width: outWidth,
+                height: Math.max(200, Math.ceil(uAll.y1 + pad - cpmsSplit)),
+              };
+
               const out = {
                 loginSplit,
                 cpmsSplit,
                 cpmsFromHeader,
-                band1: mk(u1, 200),
-                band2: mk(u2, 200),
+                band1,
+                band2,
                 band3: null,
               };
 
@@ -1676,11 +1690,10 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
                 }
                 if (ax) {
                   out.band1.y = Math.min(out.band1.y, Math.max(0, Math.floor(ax.top - 12)));
-                  out.band1.height = Math.max(
-                    out.band1.height,
-                    Math.ceil(ax.bottom - out.band1.y + 16)
-                  );
                 }
+                // Keep band1's BOTTOM pinned at the CPMS split (top moved up for the toolbar,
+                // so grow height to still end exactly at CPMS — never cut 9280).
+                out.band1.height = Math.max(200, Math.ceil(cpmsSplit - out.band1.y));
               }
 
               if (includeLogin && loginPanels.length) {
