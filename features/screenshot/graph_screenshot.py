@@ -2182,11 +2182,40 @@ def _screenshot_document_band(page, doc_clip: Dict[str, int]) -> Optional[bytes]
     return None
 
 
+def _prewarm_full_page_lazy_panels(page) -> None:
+    """
+    Scroll the whole document (top→bottom→top) so Grafana renders every lazy/virtualized panel at
+    full height BEFORE band clips are measured. Without this, a tall below-the-fold panel (e.g. the
+    9280 Connection panel at the end of the KPI section) measures short and gets cut off in band 1.
+    """
+    try:
+        page.evaluate(
+            """async () => {
+              const de = document.scrollingElement || document.documentElement;
+              const step = Math.max(300, Math.floor((window.innerHeight || 1080) * 0.8));
+              let total = de.scrollHeight;
+              for (let y = 0; y <= total; y += step) {
+                window.scrollTo(0, y);
+                await new Promise(r => setTimeout(r, 130));
+                total = de.scrollHeight;  // grows as lazy panels load in
+              }
+              window.scrollTo(0, 0);
+              await new Promise(r => setTimeout(r, 250));
+            }"""
+        )
+        page.wait_for_timeout(400)
+        log.info("p0 graph screenshot: pre-warmed full page (lazy panels rendered before measure)")
+    except Exception as e:
+        log.debug("p0 graph screenshot: full-page pre-warm failed: %s", e)
+
+
 def _screenshot_highlight_bands(page) -> List[bytes]:
     """Capture dashboard bands: 2 (VNC-style) or 3 (optional separate Login PNG)."""
     from p0_logic import config as _config
 
     include_login = _config.get_p0_graph_screenshot_include_login_panel()
+    if _config.get_p0_graph_screenshot_band_warm_scroll():
+        _prewarm_full_page_lazy_panels(page)
     clips = _measure_grafana_highlight_band_clips(page, include_login_panel=include_login)
     if len(clips) < 2:
         return []
