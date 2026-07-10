@@ -1873,7 +1873,7 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
     try:
         page.wait_for_function(
             _BAND_PANEL_READY_JS,
-            {"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=False)},
+            arg={"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=False)},
             timeout=timeout_ms,
             polling=350,
         )
@@ -1935,7 +1935,7 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
     try:
         page.wait_for_function(
             _BAND_PANEL_READY_JS,
-            {"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=True)},
+            arg={"clip": doc_clip, "opts": _band_panel_ready_opts(bottom_zone_only=True)},
             timeout=timeout_ms,
             polling=350,
         )
