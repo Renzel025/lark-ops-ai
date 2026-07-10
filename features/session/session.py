@@ -1478,22 +1478,66 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     return True
 
 
+def _session_is_stale(sess: Dict[str, Any]) -> bool:
+    """
+    A kept/persisted session older than ``P0_SESSION_DISK_MAX_AGE_HOURS`` is treated as ended.
+
+    Root cause this guards: when a VC is ended **natively** (not via typed "end meeting"/"cancel"),
+    ``delete_session`` never runs, so a ``sessions/<chat>.json`` lingers on disk and
+    ``chat_has_active_session`` would report "active" forever — silently blocking every new P0
+    declaration ("Incident group: session already active"). Age it out instead.
+    """
+    try:
+        max_h = _config.get_p0_session_disk_max_age_hours()
+    except Exception:
+        max_h = 12
+    if max_h <= 0:
+        return False
+    started = 0
+    try:
+        started = int(sess.get("start_epoch") or sess.get("ts") or 0)
+    except Exception:
+        started = 0
+    if started <= 0:
+        return False
+    return (time.time() - started) > (max_h * 3600)
+
+
+def _expire_session(key: str) -> None:
+    """Drop a stale session from memory + disk so it stops blocking new declarations."""
+    P0_SESSIONS.pop(key, None)
+    if _session_disk.enabled():
+        _session_disk.delete_session(key)
+
+
 def chat_has_active_session(chat_id: str) -> bool:
     cid = (chat_id or "").strip()
     if not cid:
         return False
     if cid in P0_SESSIONS:
-        return True
+        if _session_is_stale(P0_SESSIONS[cid]):
+            log.info("chat_has_active_session: expiring stale in-memory session key=%s", cid)
+            _expire_session(cid)
+        else:
+            return True
     # Multi-meeting mode: a group may only have composite-keyed (chat_id#meeting_no) sessions left.
     prefix = cid + "#"
-    for k in P0_SESSIONS:
+    for k in list(P0_SESSIONS):
         if k.startswith(prefix):
-            return True
+            if _session_is_stale(P0_SESSIONS[k]):
+                log.info("chat_has_active_session: expiring stale composite session key=%s", k)
+                _expire_session(k)
+            else:
+                return True
     if _session_disk.enabled():
         d = _session_disk.load_session(cid)
         if d:
-            P0_SESSIONS[cid] = d
-            return True
+            if _session_is_stale(d):
+                log.info("chat_has_active_session: cleared stale persisted session cid=%s (age > max)", cid)
+                _session_disk.delete_session(cid)
+            else:
+                P0_SESSIONS[cid] = d
+                return True
     return False
 
 

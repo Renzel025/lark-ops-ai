@@ -273,6 +273,22 @@ def get_p0_session_error_to_group_enabled() -> bool:
     )
 
 
+def get_p0_session_disk_max_age_hours() -> float:
+    """
+    Max age (hours) before a **persisted** session (``P0_SHARED_STATE_DIR/sessions/*.json``) is
+    treated as ended by ``chat_has_active_session``. Guards the case where a VC is ended natively
+    (no typed "end meeting"/"cancel"), leaving a stale file that blocks every new P0 declaration.
+    Default ``12``. ``0`` disables the guard (a file = active forever, old behavior).
+    Toggle: ``P0_SESSION_DISK_MAX_AGE_HOURS``.
+    """
+    reload_env_runtime()
+    raw = _env_scalar(os.getenv("P0_SESSION_DISK_MAX_AGE_HOURS") or "12")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 12.0
+
+
 def get_p0_session_log_min_level() -> int:
     """Level captured for the session summary + real-time group throw. Default **WARNING** (all details)."""
     reload_env_runtime()
