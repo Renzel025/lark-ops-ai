@@ -2387,6 +2387,21 @@ def get_p0_graph_screenshot_auto_max_sec() -> int:
     return max(180, min(n, 1200))
 
 
+def get_p0_graph_screenshot_busy_lock_timeout_sec() -> float:
+    """
+    Bounded wait to acquire the capture busy-lock. Kept small so a wedged capture can NEVER
+    block an interval tick or on-demand scheduler forever — if it can't be taken in time we
+    treat the slot as busy (skip / queue) instead of blocking. Default **5**s.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BUSY_LOCK_TIMEOUT_SEC") or "5").strip()
+    try:
+        n = float(raw)
+    except ValueError:
+        n = 5.0
+    return max(0.5, min(n, 60.0))
+
+
 def get_p0_graph_screenshot_band_panel_ready_ratio() -> float:
     """
     Fraction of viewport panels that must show chart / table / stable ``No data`` before capture.
