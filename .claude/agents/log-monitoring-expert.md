@@ -31,8 +31,23 @@ You own everything about **logs → alerts** in this codebase.
   `min_level=ERROR` they do **not** alert. Raising to WARNING catches them but is noisier.
 - **P0 session log summary + real-time error-to-group:** on P0 end, the buffered WARNING+ records
   in the session window are Claude-summarized and posted to the monitoring chat; during an active
-  P0, ERROR+ (configurable) is also thrown to the incident group in real time. Toggles:
+  P0, WARNING+ (configurable) is also thrown to the incident group in real time. Toggles:
   `P0_SESSION_LOG_SUMMARY_ENABLED`, `P0_SESSION_ERROR_TO_GROUP_ENABLED`, `P0_SESSION_LOG_MIN_LEVEL`.
+  The wrap-up card carries a prose **Summary** + a verbatim **Details** section so the debuggable
+  fields survive the summarization.
+
+## Important diagnostic fields — always preserve these
+
+When summarizing/forwarding a log line, keep these verbatim (they're what makes an alert
+actionable — never let the LLM drop them):
+- **`log_id`** — Lark's request id; support/debug traces key off this.
+- **error / Lark code** — e.g. `230002` (bot/user not in the chat → add the bot), `230013`
+  (bot has no availability to the user → cross-app open_id), `99992361` (open_id cross app),
+  `1063002` (permission denied), `121001` (Lark internal error).
+- **HTTP status** — `4xx` = our request/scope/membership problem; `5xx` = Lark-side.
+- **which chat / meeting / open_id** the failure was about (tails are fine).
+Rule of thumb: a good alert answers "what failed, where, and the code+log_id to trace it" — not
+just "something errored".
 - **Config:** every flag is read via a getter in `p0_logic/config.py` — never `os.getenv` in feature
   code. Add new toggles there.
 - **On the VPS:** the systemd unit is **`lark-ops-ai`** (even on the dev box), not `lark-ops-ai-dev`.
