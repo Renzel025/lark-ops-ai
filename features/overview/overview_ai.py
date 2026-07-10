@@ -10,26 +10,93 @@ auth are config-driven — see ``config.overview_ai_provider_chain`` and ``anthr
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Optional, Tuple
 
 from p0_logic import config as _config
 from p0_logic import groq_client as _groq
+from p0_logic import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
 _OVERVIEW_MAX_TOKENS = 520
 
+# Cache English→Chinese translations: same text → same result, so repeated edits/saves/regenerates
+# of the same issue/impact skip the (slower, all-Claude) LLM call. Bounded in-memory.
+_ZH_CACHE: Dict[str, str] = {}
+_ZH_CACHE_LOCK = threading.Lock()
+_ZH_CACHE_MAX = 500
 
-def _run_provider(provider: str, system_prompt: str, user_prompt: str) -> str:
+# Same prompt as groq_client.translate_to_zh so provider output stays consistent.
+_ZH_TRANSLATE_SYSTEM = (
+    "You are a professional translator for gaming incident reports.\n"
+    "Translate the user's text into Simplified Chinese.\n"
+    "STRICT RULES:\n"
+    "- Translate ONLY the provided text.\n"
+    "- Do NOT add explanations.\n"
+    "- Do NOT add examples.\n"
+    "- Do NOT summarize.\n"
+    "- Do NOT expand the content.\n"
+    "- Do NOT create incident IDs, templates, bullets, or extra paragraphs.\n"
+    "- Keep numbers, IDs, acronyms, product names, and timestamps exactly as they are.\n"
+    "- Use 玩家 for game players, not 球员.\n"
+    "- Output exactly ONE concise line of Simplified Chinese only.\n"
+)
+
+
+def _run_provider(provider: str, system_prompt: str, user_prompt: str, *, max_tokens: int = _OVERVIEW_MAX_TOKENS) -> str:
     """One model round trip for ``provider``. Returns raw text ('' on failure)."""
     if provider == "claude":
         from p0_logic.anthropic_client import anthropic_chat_once
 
         model = _config.get_overview_anthropic_model() or None
-        return anthropic_chat_once(system_prompt, user_prompt, max_tokens=_OVERVIEW_MAX_TOKENS, model=model)
+        return anthropic_chat_once(system_prompt, user_prompt, max_tokens=max_tokens, model=model)
     if provider == "groq":
-        return _groq.groq_chat_once(system_prompt, user_prompt, max_tokens=_OVERVIEW_MAX_TOKENS)
+        return _groq.groq_chat_once(system_prompt, user_prompt, max_tokens=max_tokens)
     return ""
+
+
+def _translate_one_zh(text: str) -> str:
+    """English → one-line Simplified Chinese via the overview provider chain (claude → groq)."""
+    src = (text or "").strip()
+    if not src:
+        return ""
+    if _text.is_not_specified(src):
+        return "未指定"
+    if _text.looks_like_chinese(src):
+        return _text.normalize_gaming_zh(_text.clean_single_line_translation(src))
+    with _ZH_CACHE_LOCK:
+        hit = _ZH_CACHE.get(src)
+    if hit is not None:
+        return hit
+    out = ""
+    for provider in _config.overview_ai_provider_chain():
+        try:
+            out = _run_provider(provider, _ZH_TRANSLATE_SYSTEM, src, max_tokens=160)
+        except Exception as e:  # noqa: BLE001 — try the next provider
+            log.warning("overview zh-translate: provider=%s raised %s", provider, e)
+            out = ""
+        if (out or "").strip():
+            break
+    cleaned = _text.clean_single_line_translation(out)
+    if not cleaned:
+        return src  # don't cache failures — retry next time
+    result = _text.normalize_gaming_zh(cleaned)
+    with _ZH_CACHE_LOCK:
+        if len(_ZH_CACHE) >= _ZH_CACHE_MAX:
+            for k in list(_ZH_CACHE)[: _ZH_CACHE_MAX // 5]:  # drop oldest ~20%
+                _ZH_CACHE.pop(k, None)
+        _ZH_CACHE[src] = result
+    return result
+
+
+def translate_issue_impact_pair(en_issue: str, en_impact: str) -> Tuple[str, str]:
+    """(zh_issue, zh_impact) via the provider chain (claude → groq), the two calls in parallel."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fi = pool.submit(_translate_one_zh, en_issue)
+        fj = pool.submit(_translate_one_zh, en_impact)
+        return fi.result(), fj.result()
 
 
 def overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> Optional[Tuple[str, str, str]]:

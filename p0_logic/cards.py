@@ -1543,7 +1543,11 @@ def build_bilingual_overview_md(
         zh_issue = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_issue_precomputed)) or "未指定"
         zh_impact = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_impact_precomputed)) or "未指定"
     else:
-        zh_issue, zh_impact = _groq.translate_issue_impact_pair_to_zh(en_issue, en_impact)
+        # Edit/regenerate path: no precomputed zh — translate via the overview provider chain
+        # (Claude → Groq), same as the one-shot generation, so edits stay all-Claude when configured.
+        from features.overview import overview_ai as _overview_ai
+
+        zh_issue, zh_impact = _overview_ai.translate_issue_impact_pair(en_issue, en_impact)
         zh_issue = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_issue)) or "未指定"
         zh_impact = _text.normalize_gaming_zh(_text.clean_single_line_translation(zh_impact)) or "未指定"
     # Dept / team codes (FPMS, CPMS, OSE, …) must not be “translated” in 中文.
