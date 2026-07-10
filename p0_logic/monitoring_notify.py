@@ -6,7 +6,8 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from . import cards as _cards
 from . import config as _config
@@ -16,6 +17,11 @@ log = logging.getLogger("lark-ops-ai")
 
 _DEDUPE_LOCK = threading.Lock()
 _LAST_SENT: Dict[str, float] = {}
+
+# Rolling buffer of log anomalies (WARNING+/session min) for the P0 session wrap-up summary.
+# Each item: (ts_epoch, levelno, levelname, logger_name, message).
+_SESSION_LOG_LOCK = threading.Lock()
+_SESSION_LOG_BUF: "Deque[Tuple[float, int, str, str, str]]" = deque(maxlen=4000)
 
 
 def _enabled() -> bool:
@@ -180,20 +186,134 @@ def post_duty_dm(
     return st, resp
 
 
+def _session_capture_enabled() -> bool:
+    return _config.get_p0_session_log_summary_enabled() or _config.get_p0_session_error_to_group_enabled()
+
+
+def _active_p0_group_ids() -> List[str]:
+    """Source incident chat_ids of currently active P0/P1 sessions (lazy import avoids cycles)."""
+    try:
+        from features.session.session import P0_SESSIONS
+    except Exception:
+        return []
+    out: List[str] = []
+    for sess in list(P0_SESSIONS.values()):
+        cid = str((sess or {}).get("source_chat") or "").strip()
+        if cid.startswith("oc_") and cid not in out:
+            out.append(cid)
+    return out
+
+
+def _capture_session_log_record(record: logging.LogRecord, msg: str) -> None:
+    """
+    Buffer WARNING+ (session min level) for the end-of-session wrap-up, and — while a P0 is active —
+    throw the error to the incident group(s) in real time. Called from the log handler; must never
+    raise (would break logging).
+    """
+    try:
+        if record.levelno < _config.get_p0_session_log_min_level():
+            return
+        level = (record.levelname or "LOG").upper()
+        name = (record.name or "logger").strip()
+        if _config.get_p0_session_log_summary_enabled():
+            with _SESSION_LOG_LOCK:
+                _SESSION_LOG_BUF.append((time.time(), record.levelno, level, name, msg))
+        if _config.get_p0_session_error_to_group_enabled():
+            groups = _active_p0_group_ids()
+            if groups:
+                tok = _lark.get_tenant_token_primary()
+                if tok:
+                    text = f"⚠️ [{level}] {name}: {msg}"[:900]
+                    for cid in groups:
+                        dedupe = f"sesserr:{cid}:{level}:{hashlib.sha256(msg.encode()).hexdigest()[:16]}"
+                        if _should_send_dedupe(dedupe):
+                            _lark.post_text_to_chat(cid, tok, text)
+    except Exception:
+        pass
+
+
+def _claude_summarize_session_logs(log_blob: str, priority: str, duration_text: str, count_str: str) -> str:
+    try:
+        from p0_logic.anthropic_client import anthropic_chat_once, has_anthropic_auth
+
+        if not has_anthropic_auth():
+            return f"(Anomalies: {count_str}. Configure Claude for a written summary.)"
+        system = (
+            "You are an on-call SRE summarizing the log anomalies captured during a P0 incident "
+            "session for the ops group. Write a SHORT plain-English summary (2-4 sentences): what "
+            "errors/warnings happened, which components, and whether they look impactful or "
+            "benign/transient. Do NOT list every line, do NOT invent facts, no fluff."
+        )
+        user = f"Priority: {priority}\nDuration: {duration_text}\nCounts: {count_str}\n\nLOG ANOMALIES:\n{log_blob}"
+        out = anthropic_chat_once(system, user, max_tokens=320)
+        return (out or "").strip() or f"(Anomalies: {count_str}.)"
+    except Exception as e:
+        log.warning("session log summary: claude failed: %s", e)
+        return f"(Anomalies: {count_str}.)"
+
+
+def summarize_session_logs(
+    *,
+    tenant_token: str,
+    source_chat_id: str,
+    start_epoch: float,
+    end_epoch: Optional[float] = None,
+    priority: str = "P0",
+    duration_text: str = "",
+) -> None:
+    """On P0 end: Claude-summarize the log anomalies in the session window → monitoring chat(s)."""
+    if not _config.get_p0_session_log_summary_enabled():
+        return
+    start = float(start_epoch or 0)
+    end = float(end_epoch or time.time())
+    with _SESSION_LOG_LOCK:
+        recs = [r for r in list(_SESSION_LOG_BUF) if start <= r[0] <= end]
+    tok = (tenant_token or "").strip() or _lark.get_tenant_token_primary()
+    if not tok:
+        return
+    pri = (priority or "P0").strip().upper()
+    dur = (duration_text or "").strip()
+    if not recs:
+        body = (
+            f"✅ **{pri} session wrap-up** — walang aberya na na-detect (no ERROR/WARNING logs) "
+            f"sa buong session."
+            + (f"\n🕒 Duration: {dur}" if dur else "")
+        )
+        card = _cards.build_monitoring_log_card(body, level="INFO", logger_name="p0-session-summary")
+        post_card_to_monitoring_chats(tok, card, dedupe_key=f"sess-clean:{source_chat_id}:{int(start)}")
+        return
+    counts: Dict[str, int] = {}
+    lines: List[str] = []
+    seen = set()
+    for _ts, _levelno, level, name, msg in recs:
+        counts[level] = counts.get(level, 0) + 1
+        k = (level, name, msg[:160])
+        if k in seen:
+            continue
+        seen.add(k)
+        lines.append(f"[{level}] {name}: {msg}"[:300])
+    count_str = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    summary = _claude_summarize_session_logs("\n".join(lines[:60]), pri, dur, count_str)
+    body = (
+        f"🧾 **{pri} session wrap-up** — {len(recs)} anomaly log(s) during session ({count_str})."
+        + (f"\n🕒 Duration: {dur}" if dur else "")
+        + f"\n\n{summary}"
+    )
+    card = _cards.build_monitoring_log_card(body, level="WARNING", logger_name="p0-session-summary")
+    post_card_to_monitoring_chats(tok, card, dedupe_key=f"sess-summary:{source_chat_id}:{int(start)}")
+
+
 class LarkMonitoringLogHandler(logging.Handler):
     """Post ERROR+ (configurable) log records to ``P0_MONITORING_CHAT_IDS``."""
 
     _SKIP_LOGGER_NAMES = frozenset({"uvicorn.access"})
 
     def emit(self, record: logging.LogRecord) -> None:
-        if not _log_alerts_enabled():
+        if not (_log_alerts_enabled() or _session_capture_enabled()):
             return
         try:
             logger_name = (record.name or "").strip()
             if logger_name in self._SKIP_LOGGER_NAMES:
-                return
-            min_level = _config.get_p0_monitoring_log_min_level()
-            if record.levelno < min_level:
                 return
             # Skip our own monitoring posts to avoid loops.
             if logger_name.startswith("lark-ops-ai") and "monitoring:" in (record.getMessage() or ""):
@@ -203,6 +323,15 @@ class LarkMonitoringLogHandler(logging.Handler):
                 return
             # Bitable card failures use post_bitable_card_failure_alert (formatted GC card).
             if "adjustment_bitable:" in msg and "card post failed" in msg:
+                return
+            # Session capture (WARNING+): buffer for the wrap-up + real-time throw to incident group.
+            # Runs before the ERROR gate so WARNING-level failures are still captured.
+            if _session_capture_enabled():
+                _capture_session_log_record(record, msg)
+            # Monitoring-chat alert (ERROR+ by default).
+            if not _log_alerts_enabled():
+                return
+            if record.levelno < _config.get_p0_monitoring_log_min_level():
                 return
             tok = _lark.get_tenant_token_primary()
             if not tok:
@@ -222,14 +351,18 @@ def install_log_handler(*, use_root_logger: bool = True) -> None:
     Default: root logger so ERROR/WARNING from any module (uvicorn, handlers, …)
     reaches ``P0_MONITORING_CHAT_IDS``. ``uvicorn.access`` is skipped (too noisy).
     """
-    if not _log_alerts_enabled():
+    if not (_log_alerts_enabled() or _session_capture_enabled()):
         return
     target = logging.getLogger() if use_root_logger else logging.getLogger("lark-ops-ai")
     for h in target.handlers:
         if isinstance(h, LarkMonitoringLogHandler):
             return
     handler = LarkMonitoringLogHandler()
-    handler.setLevel(_config.get_p0_monitoring_log_min_level())
+    # Set to the LOWEST threshold in use so WARNING records still reach emit for session capture.
+    lvl = _config.get_p0_monitoring_log_min_level()
+    if _session_capture_enabled():
+        lvl = min(lvl, _config.get_p0_session_log_min_level())
+    handler.setLevel(lvl)
     target.addHandler(handler)
     chat_ids = _config.get_p0_monitoring_chat_ids()
     tails = ",".join((c[-12:] if len(c) > 12 else c) for c in chat_ids[:3])

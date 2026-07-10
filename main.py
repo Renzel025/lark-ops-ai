@@ -135,8 +135,9 @@ from p0_logic.config import (
 
 from p0_logic import monitoring_notify as _monitoring_notify
 
+# Self-gates internally on monitoring chats OR the P0 session-capture toggles.
+_monitoring_notify.install_log_handler()
 if get_p0_monitoring_chat_ids():
-    _monitoring_notify.install_log_handler()
     _mon_chats = get_p0_monitoring_chat_ids()
     _mon_tails = ",".join((c[-12:] if len(c) > 12 else c) for c in _mon_chats[:3])
     log.info(
