@@ -2089,11 +2089,13 @@ def _screenshot_viewport_at_band_start(
         if extra > 0:
             page.wait_for_timeout(extra)
         band_h = int(doc_clip.get("height") or 0)
-        if _config.get_p0_graph_screenshot_band_full_height() and band_h > int(vh * 1.15):
-            # Section taller than the viewport (redesigned dashboard): capture the WHOLE band as one
-            # tall PNG so nothing below the fold (e.g. Pulsar) is cut off. Lazy panels were already
+        band_y = int(doc_clip.get("y") or 0)
+        if _config.get_p0_graph_screenshot_band_full_height() and band_h > 200:
+            # Clip to the EXACT measured band box (section-aligned), whether the band is TALLER or
+            # SHORTER than the viewport. A plain viewport shot of a short band overflows into the
+            # next section (CPMS header bled into pic 1, 9280 into pic 2). Lazy panels were already
             # warmed above (warm-scroll + _scroll_viewport_to_paint_lazy_panels).
-            page.evaluate("(yy) => window.scrollTo(0, Math.max(0, yy - 8))", y)
+            page.evaluate("(yy) => window.scrollTo(0, Math.max(0, yy - 8))", band_y)
             page.wait_for_timeout(300)
             try:
                 full = page.screenshot(
@@ -2101,7 +2103,7 @@ def _screenshot_viewport_at_band_start(
                     type="png",
                     clip={
                         "x": int(vp_band["x"]),
-                        "y": int(y),
+                        "y": band_y,
                         "width": int(vp_band["width"]),
                         "height": band_h,
                     },
@@ -3316,7 +3318,9 @@ def _kill_stale_grafana_chromium(user_data: str) -> None:
     try:
         import subprocess
 
-        r = subprocess.run(["pkill", "-f", f"--user-data-dir={ud}"], timeout=10)
+        # Pattern must NOT start with '-' or pkill treats it as an option. Drop the leading dashes;
+        # "-f" still matches the substring anywhere in the full command line.
+        r = subprocess.run(["pkill", "-f", f"user-data-dir={ud}"], timeout=10)
         if r.returncode == 0:
             log.warning(
                 "p0 graph screenshot: killed stale Chromium holding profile %s (freeing lock)", ud
