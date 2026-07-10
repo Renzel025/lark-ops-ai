@@ -27,6 +27,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_VC_AUTO_CANCEL_IF_NO_JOINS_SEC` | number (e.g. `1800`) | blank = off | off |
 | `P0_REDECLARE_SUPERSEDES_ACTIVE` | on = 2nd P0 cancels current + starts new | off = ignored | **off** ⚠️ on kills a live meeting on re-declare |
 | `P0_MULTI_MEETING_PER_GROUP` | on = each p0 = its own coexisting meeting | off = one per group | **off** (wins over supersede; end each via native VC end) |
+| `P0_SESSION_DISK_MAX_AGE_HOURS` | hours before a persisted session file is treated as ended | `12` | **12** — stops a stale `sessions/*.json` (native VC-end missed cleanup) from blocking every new p0; `0` = never expire |
 
 **Not toggles — must be set:**
 
