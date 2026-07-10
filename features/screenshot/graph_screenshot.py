@@ -79,6 +79,115 @@ _BROWSER_POOL_LOCK = threading.Lock()
 _BROWSER_POOL: Dict[str, Any] = {}
 
 
+def _busy_lock_timeout_sec() -> float:
+    from p0_logic import config as _config
+
+    return float(_config.get_p0_graph_screenshot_busy_lock_timeout_sec())
+
+
+def _read_capture_busy() -> bool:
+    """Bounded read of the busy flag. Never blocks forever; on contention assume busy."""
+    got = _capture_busy_lock.acquire(timeout=_busy_lock_timeout_sec())
+    try:
+        return bool(_capture_busy)
+    finally:
+        if got:
+            _capture_busy_lock.release()
+
+
+def _mark_capture_busy() -> bool:
+    """
+    Bounded acquire + claim of the capture slot. Returns True iff we now own an *idle* slot
+    (caller must later call ``_clear_capture_busy``). Returns False if a capture is already
+    running OR the lock is contended past the timeout — either way the caller skips/queues
+    instead of blocking. The lock is held ONLY for the check-then-set, never across capture.
+    """
+    global _capture_busy
+    got = _capture_busy_lock.acquire(timeout=_busy_lock_timeout_sec())
+    if not got:
+        log.warning(
+            "p0 graph screenshot: busy-lock contended >%.1fs — treating slot as busy",
+            _busy_lock_timeout_sec(),
+        )
+        return False
+    try:
+        if _capture_busy:
+            return False
+        _capture_busy = True
+        return True
+    finally:
+        _capture_busy_lock.release()
+
+
+def _clear_capture_busy() -> None:
+    """Bounded release of the busy flag. Clears the flag even if the lock is contended
+    (bool assignment is GIL-atomic) so a wedged lock can never leave the slot stuck busy."""
+    global _capture_busy
+    got = _capture_busy_lock.acquire(timeout=_busy_lock_timeout_sec())
+    try:
+        _capture_busy = False
+    finally:
+        if got:
+            _capture_busy_lock.release()
+        else:
+            log.warning(
+                "p0 graph screenshot: busy-lock contended on release — cleared flag anyway"
+            )
+
+
+def _force_kill_capture_chromium() -> None:
+    """
+    Watchdog escape hatch: kill the Grafana Chromium so any stuck sync Playwright call raises
+    (sync API can't be signal-interrupted), then drop the warm pool so the next capture cold
+    starts clean. Best-effort, never raises. Safe because captures are serialised by
+    ``_capture_busy`` — this only ever targets the wedged capture's own browser.
+    """
+    from p0_logic import config as _config
+
+    ud = ""
+    try:
+        ud = (_config.get_p0_graph_screenshot_playwright_user_data_dir() or "").strip()
+    except Exception:
+        ud = ""
+    if ud:
+        try:
+            _kill_stale_grafana_chromium(ud)
+        except Exception as e:
+            log.warning("p0 graph screenshot watchdog: kill chromium failed: %s", e)
+    else:
+        log.warning(
+            "p0 graph screenshot watchdog: no persistent user-data-dir — cannot pkill by profile"
+        )
+    try:
+        _browser_pool_close()
+    except Exception as e:
+        log.warning("p0 graph screenshot watchdog: pool close failed: %s", e)
+
+
+def _react_failed_explicit(token: str, trigger_message_id: str) -> None:
+    """
+    Post the FAILED emoji reaction using an EXPLICIT trigger message id (not the thread-local
+    capture ctx). The watchdog runs on a separate Timer thread where the thread-local ctx is
+    unset, so ``_react_to_trigger_message`` would no-op there — this path always works.
+    """
+    from p0_logic import config as _config
+    from p0_logic import lark_client as _lark
+
+    if not _config.get_p0_graph_screenshot_react_enabled():
+        return
+    et = (_config.get_p0_graph_screenshot_react_failed_emoji() or "").strip()
+    mid = (trigger_message_id or "").strip()
+    tok = (token or "").strip()
+    if not et or not mid or not tok:
+        return
+    try:
+        st, _ = _lark.add_message_reaction(mid, tok, et)
+        if st == 200:
+            log.info("p0 graph screenshot: FAILED reaction on trigger msg tail=%s", mid[-12:])
+    except Exception as e:
+        log.warning("p0 graph screenshot: failed-reaction post error: %s", e)
+
+
 def _capture_ctx_set(
     *,
     on_demand: bool = False,
@@ -201,17 +310,16 @@ def _graph_screenshot_interval_tick() -> None:
             log.warning("p0 graph screenshot interval: no tenant token")
             return
         label = _interval_source_label
-        with _capture_busy_lock:
-            if _capture_busy:
-                log.info(
-                    "p0 graph screenshot interval: previous capture still running — skip this tick"
-                )
-            else:
-                log.info(
-                    "p0 graph screenshot interval: repeat capture (%s min, P0 still active)",
-                    mins,
-                )
-                _capture_and_post_ranges_thread_body(tok, chat_id, label)
+        log.info(
+            "p0 graph screenshot interval: repeat capture (%s min, P0 still active)",
+            mins,
+        )
+        # NOTE: do NOT hold _capture_busy_lock across this call. The body re-acquires the
+        # (non-reentrant) busy-lock itself via _mark_capture_busy(); wrapping it here caused a
+        # self-deadlock that wedged the lock forever (killed the interval AND on-demand). The
+        # body now claims the slot with a bounded acquire and skips cleanly if a capture is
+        # already running.
+        _capture_and_post_ranges_thread_body(tok, chat_id, label)
     except Exception as e:
         log.warning("p0 graph screenshot interval tick failed: %s", e, exc_info=True)
     finally:
@@ -2565,8 +2673,7 @@ def _format_captured_at(dt: datetime) -> str:
 
 
 def is_graph_capture_busy() -> bool:
-    with _capture_busy_lock:
-        return bool(_capture_busy)
+    return _read_capture_busy()
 
 
 def _start_on_demand_capture_thread(
@@ -2657,9 +2764,7 @@ def schedule_on_demand_graph_screenshot(
         "trigger_message_id": trig_mid,
     }
 
-    with _capture_busy_lock:
-        busy = bool(_capture_busy)
-    if busy:
+    if _read_capture_busy():
         with _ON_DEMAND_PENDING_LOCK:
             _ON_DEMAND_PENDING.append(job)
         log.info("p0 graph screenshot on-demand: queued (capture busy) range=%s", rk)
@@ -3017,7 +3122,7 @@ def _capture_and_post_ranges_thread_body(
     on_demand: bool = False,
     trigger_message_id: str = "",
 ) -> None:
-    global _capture_busy, _on_demand_timed_out
+    global _on_demand_timed_out
     from p0_logic import config as _config
 
     log.info(
@@ -3026,10 +3131,35 @@ def _capture_and_post_ranges_thread_body(
         on_demand,
         range_keys or "(auto)",
     )
+
+    # Claim the capture slot with a BOUNDED acquire (non-reentrant lock, never blocks forever).
+    # If a capture is already running (or the lock is wedged past the timeout) we skip (interval)
+    # or requeue+notify (on-demand) instead of blocking — this is what stops one stuck capture
+    # from permanently starving every future interval tick and on-demand request.
+    if not _mark_capture_busy():
+        if on_demand:
+            rk0 = (range_keys or [""])[0] if range_keys else ""
+            with _ON_DEMAND_PENDING_LOCK:
+                _ON_DEMAND_PENDING.append(
+                    {
+                        "tenant_token": token,
+                        "post_chat_id": chat_id,
+                        "range_key": rk0,
+                        "source_chat_label": source_label,
+                        "trigger_message_id": trigger_message_id,
+                    }
+                )
+            log.info(
+                "p0 graph screenshot on-demand: capture busy — requeued range=%s", rk0
+            )
+        else:
+            log.info(
+                "p0 graph screenshot interval: previous capture still running — skip this tick"
+            )
+        return
+
     with _on_demand_timed_out_lock:
         _on_demand_timed_out = False
-    with _capture_busy_lock:
-        _capture_busy = True
     _capture_ctx_set(
         on_demand=on_demand,
         force_full=False,
@@ -3043,6 +3173,21 @@ def _capture_and_post_ranges_thread_body(
         else _config.get_p0_graph_screenshot_auto_max_sec()
     )
 
+    # Exactly-once release of the shared capture slot. Callable from BOTH the watchdog (Timer)
+    # thread and the capture thread's finally — whichever runs first frees the slot and drains
+    # the queue; the other is a no-op. This guarantees the busy flag is ALWAYS cleared even if
+    # the capture thread is wedged in an un-interruptible sync Playwright call.
+    _final_lock = threading.Lock()
+    _finalized = {"done": False}
+
+    def _finalize_release() -> None:
+        with _final_lock:
+            if _finalized["done"]:
+                return
+            _finalized["done"] = True
+        _clear_capture_busy()
+        _drain_on_demand_pending()
+
     def _capture_watchdog() -> None:
         global _on_demand_timed_out
         if completed.is_set():
@@ -3050,22 +3195,28 @@ def _capture_and_post_ranges_thread_body(
         with _on_demand_timed_out_lock:
             _on_demand_timed_out = True
         log.error(
-            "p0 graph screenshot: wall-clock timeout after %ss on_demand=%s chat_id_tail=%s",
+            "p0 graph screenshot: wall-clock timeout after %ss on_demand=%s chat_id_tail=%s "
+            "— force-killing Chromium",
             max_sec,
             on_demand,
             chat_id[-12:] if chat_id else "",
         )
+        # HARD kill so the stuck sync Playwright call raises and the capture thread unwinds.
+        _force_kill_capture_chromium()
         _post_capture_failure_to_chat(
             token,
             chat_id,
             range_label=(range_keys or [""])[0] if range_keys else "",
             reason=(
-                f"Timed out after {max_sec}s — Grafana/Playwright may be stuck. "
+                f"Timed out after {max_sec}s — Grafana/Playwright was stuck (killed). "
                 "Check journalctl -u lark-ops-ai."
             ),
         )
         if on_demand:
-            _react_to_trigger_message(token, _config.get_p0_graph_screenshot_react_failed_emoji())
+            _react_failed_explicit(token, trigger_message_id)
+        # Free the slot NOW so interval / on-demand resume even if the wedged thread never
+        # reaches its finally.
+        _finalize_release()
 
     watchdog = threading.Timer(float(max_sec), _capture_watchdog)
     watchdog.daemon = True
@@ -3089,10 +3240,9 @@ def _capture_and_post_ranges_thread_body(
         if watchdog:
             watchdog.cancel()
         _capture_ctx_clear()
-        with _capture_busy_lock:
-            _capture_busy = False
-        # Drain queued on-demand jobs after any capture (auto/interval or on-demand).
-        _drain_on_demand_pending()
+        # Exactly-once: if the watchdog already fired it freed the slot (and may have started a
+        # new capture); this call then no-ops so we never clobber the new capture's busy flag.
+        _finalize_release()
 
 
 def _wait_for_grafana_panels_if_configured(page) -> None:
