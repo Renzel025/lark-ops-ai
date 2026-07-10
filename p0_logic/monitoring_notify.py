@@ -242,7 +242,9 @@ def _claude_summarize_session_logs(log_blob: str, priority: str, duration_text: 
             "You are an on-call SRE summarizing the log anomalies captured during a P0 incident "
             "session for the ops group. Write a SHORT plain-English summary (2-4 sentences): what "
             "errors/warnings happened, which components, and whether they look impactful or "
-            "benign/transient. Do NOT list every line, do NOT invent facts, no fluff."
+            "benign/transient. PRESERVE important diagnostics inline when present — log_id, "
+            "error/Lark code (e.g. 230002 = bot not in chat), and HTTP status. Do NOT list every "
+            "line, do NOT invent facts, no fluff."
         )
         user = f"Priority: {priority}\nDuration: {duration_text}\nCounts: {count_str}\n\nLOG ANOMALIES:\n{log_blob}"
         out = anthropic_chat_once(system, user, max_tokens=320)
@@ -294,10 +296,14 @@ def summarize_session_logs(
         lines.append(f"[{level}] {name}: {msg}"[:300])
     count_str = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
     summary = _claude_summarize_session_logs("\n".join(lines[:60]), pri, dur, count_str)
+    # Verbatim details so log_id / Lark code / HTTP status are always there for debugging,
+    # not just the prose summary.
+    detail_lines = "\n".join(f"• {ln}" for ln in lines[:8])
     body = (
         f"🧾 **{pri} session wrap-up** — {len(recs)} anomaly log(s) during session ({count_str})."
         + (f"\n🕒 Duration: {dur}" if dur else "")
-        + f"\n\n{summary}"
+        + f"\n\n**Summary:** {summary}"
+        + (f"\n\n**🔎 Details (log_id / code / HTTP):**\n{detail_lines}" if detail_lines else "")
     )
     card = _cards.build_monitoring_log_card(body, level="WARNING", logger_name="p0-session-summary")
     post_card_to_monitoring_chats(tok, card, dedupe_key=f"sess-summary:{source_chat_id}:{int(start)}")

@@ -2125,6 +2125,21 @@ def get_p0_graph_screenshot_band_full_height() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_capturing_notice_enabled() -> bool:
+    """
+    Post the "📊 Capturing Grafana dashboard…" placeholder when the auto (P0-declare) capture starts.
+    Default on. Set ``P0_GRAPH_SCREENSHOT_CAPTURING_NOTICE=0`` to suppress it so the Bitable card lands
+    first (the screenshot images still post when rendered).
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_GRAPH_SCREENSHOT_CAPTURING_NOTICE") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def get_p0_graph_screenshot_include_login_panel() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — ``0`` (recommended): **two** PNGs like manual VNC —
