@@ -218,16 +218,18 @@ def _capture_session_log_record(record: logging.LogRecord, msg: str) -> None:
         if _config.get_p0_session_log_summary_enabled():
             with _SESSION_LOG_LOCK:
                 _SESSION_LOG_BUF.append((time.time(), record.levelno, level, name, msg))
+        # Real-time surface to the MONITORING chat (P0_MONITORING_CHAT_IDS) while a P0 is active —
+        # NOT the incident/detection group. Skip levels the always-on handler already sends (so ERROR
+        # isn't double-posted); this adds the below-threshold levels (e.g. WARNING) during a P0.
         if _config.get_p0_session_error_to_group_enabled():
-            groups = _active_p0_group_ids()
-            if groups:
+            if _active_p0_group_ids() and record.levelno < _config.get_p0_monitoring_log_min_level():
                 tok = _lark.get_tenant_token_primary()
-                if tok:
-                    text = f"⚠️ [{level}] {name}: {msg}"[:900]
-                    for cid in groups:
-                        dedupe = f"sesserr:{cid}:{level}:{hashlib.sha256(msg.encode()).hexdigest()[:16]}"
-                        if _should_send_dedupe(dedupe):
-                            _lark.post_text_to_chat(cid, tok, text)
+                chats = _config.get_p0_monitoring_chat_ids()
+                if tok and chats:
+                    dedupe = f"sesswarn:{level}:{hashlib.sha256(msg.encode()).hexdigest()[:16]}"
+                    if _should_send_dedupe(dedupe):
+                        card = _cards.build_monitoring_log_card(msg, level=level, logger_name=name)
+                        post_card_to_monitoring_chats(tok, card, dedupe_key=dedupe)
     except Exception:
         pass
 
