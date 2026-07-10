@@ -1129,6 +1129,19 @@ def end_p0_session(
             )
         except Exception as e:
             log.warning("end_p0_session: recording fanout schedule failed: %s", e)
+    if sess:
+        try:
+            from p0_logic import monitoring_notify as _mon
+
+            _mon.summarize_session_logs(
+                tenant_token=(token or _lark.get_tenant_token_primary()),
+                source_chat_id=chat_id,
+                start_epoch=start_epoch_snap,
+                priority=priority_snap,
+                duration_text=duration_snap,
+            )
+        except Exception as e:
+            log.warning("end_p0_session: session log summary failed: %s", e)
 
 
 def cancel_p0_session(
@@ -1144,6 +1157,10 @@ def cancel_p0_session(
         P0_SESSIONS[chat_id] = sess
     if sess:
         _clear_last_ended_snapshot(chat_id)
+    had_sess = bool(sess)
+    start_epoch_snap = int(sess.get("start_epoch") or 0)
+    priority_snap = str(sess.get("priority") or "P0").strip().upper()
+    duration_snap = _cards.format_duration(start_epoch_snap) if start_epoch_snap else ""
     reserve_id = str(sess.get("reserve_id") or "").strip()
     meeting_id = str(sess.get("meeting_id") or "").strip()
     meeting_no = str(sess.get("meeting_no") or "").strip()
@@ -1202,6 +1219,19 @@ def cancel_p0_session(
         on_p0_session_ended_for_graph_screenshot()
     except Exception as e:
         log.warning("cancel_p0_session: graph screenshot interval stop failed: %s", e)
+    if had_sess:
+        try:
+            from p0_logic import monitoring_notify as _mon
+
+            _mon.summarize_session_logs(
+                tenant_token=(token or _lark.get_tenant_token_primary()),
+                source_chat_id=chat_id,
+                start_epoch=start_epoch_snap,
+                priority=priority_snap,
+                duration_text=duration_snap,
+            )
+        except Exception as e:
+            log.warning("cancel_p0_session: session log summary failed: %s", e)
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:

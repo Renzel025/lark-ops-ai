@@ -242,6 +242,47 @@ def get_p0_monitoring_log_min_level() -> int:
     }.get(raw, logging.ERROR)
 
 
+def get_p0_session_log_summary_enabled() -> bool:
+    """
+    On P0 end, Claude-summarize the log anomalies captured during the session window and post to
+    ``P0_MONITORING_CHAT_IDS`` (says "no anomalies" when clean). Default off.
+    Toggle: ``P0_SESSION_LOG_SUMMARY_ENABLED``.
+    """
+    reload_env_runtime()
+    return _env_scalar(os.getenv("P0_SESSION_LOG_SUMMARY_ENABLED") or "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def get_p0_session_error_to_group_enabled() -> bool:
+    """
+    While a P0 is active, also throw log errors (>= ``P0_SESSION_LOG_MIN_LEVEL``) to the incident
+    group in real time. Default off. Toggle: ``P0_SESSION_ERROR_TO_GROUP_ENABLED``.
+    """
+    reload_env_runtime()
+    return _env_scalar(os.getenv("P0_SESSION_ERROR_TO_GROUP_ENABLED") or "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def get_p0_session_log_min_level() -> int:
+    """Level captured for the session summary + real-time group throw. Default **WARNING** (all details)."""
+    reload_env_runtime()
+    raw = _env_scalar(os.getenv("P0_SESSION_LOG_MIN_LEVEL") or "WARNING").upper()
+    return {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+    }.get(raw, logging.WARNING)
+
+
 def get_p0_monitoring_alert_cooldown_sec() -> int:
     """Dedupe identical monitoring alerts (default 120s). ``0`` = no dedupe."""
     reload_env_runtime()
