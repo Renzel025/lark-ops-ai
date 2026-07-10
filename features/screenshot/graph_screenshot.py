@@ -3257,6 +3257,33 @@ def _browser_pool_close() -> None:
     _browser_pool_shutdown_state(st)
 
 
+# A cold persistent-context launch must never hang forever waiting on a profile lock.
+_PERSISTENT_LAUNCH_TIMEOUT_MS = 60_000
+
+
+def _kill_stale_grafana_chromium(user_data: str) -> None:
+    """
+    Kill any orphaned Chromium still holding the persistent Grafana profile. A pooled browser
+    survives a ``systemctl restart`` (the child is not reaped), keeps the ``user_data_dir`` locked,
+    and makes the next cold ``launch_persistent_context`` hang forever. Call ONLY on a cold launch —
+    captures are serialised by ``_capture_busy``, so this can't kill a live capture's browser.
+    """
+    ud = (user_data or "").strip()
+    if not ud:
+        return
+    try:
+        import subprocess
+
+        r = subprocess.run(["pkill", "-f", f"--user-data-dir={ud}"], timeout=10)
+        if r.returncode == 0:
+            log.warning(
+                "p0 graph screenshot: killed stale Chromium holding profile %s (freeing lock)", ud
+            )
+            time.sleep(1.0)  # let the OS release the SingletonLock before relaunch
+    except Exception as e:
+        log.warning("p0 graph screenshot: stale-chromium cleanup failed: %s", e)
+
+
 def _browser_pool_acquire(
     *,
     user_data: str,
@@ -3297,6 +3324,7 @@ def _browser_pool_acquire(
     except ImportError:
         return None
     try:
+        _kill_stale_grafana_chromium(user_data)
         pw = sync_playwright().start()
         context = pw.chromium.launch_persistent_context(
             user_data,
@@ -3304,6 +3332,7 @@ def _browser_pool_acquire(
             viewport={"width": w, "height": h},
             device_scale_factor=dsf,
             args=launch_args,
+            timeout=_PERSISTENT_LAUNCH_TIMEOUT_MS,
         )
         page = context.pages[0] if context.pages else context.new_page()
         with _BROWSER_POOL_LOCK:
@@ -3649,12 +3678,14 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
                 user_data,
                 headless,
             )
+            _kill_stale_grafana_chromium(user_data)
             context = p.chromium.launch_persistent_context(
                 user_data,
                 headless=headless,
                 viewport={"width": w, "height": h},
                 device_scale_factor=dsf,
                 args=launch_args,
+                timeout=_PERSISTENT_LAUNCH_TIMEOUT_MS,
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
