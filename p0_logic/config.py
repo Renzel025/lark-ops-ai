@@ -259,8 +259,10 @@ def get_p0_session_log_summary_enabled() -> bool:
 
 def get_p0_session_error_to_group_enabled() -> bool:
     """
-    While a P0 is active, also throw log errors (>= ``P0_SESSION_LOG_MIN_LEVEL``) to the incident
-    group in real time. Default off. Toggle: ``P0_SESSION_ERROR_TO_GROUP_ENABLED``.
+    While a P0 is active, surface log warnings (>= ``P0_SESSION_LOG_MIN_LEVEL``, below the normal
+    ERROR alert cutoff) to the **monitoring chat** (``P0_MONITORING_CHAT_IDS``) in real time — NOT
+    the incident/detection group. ERROR+ already goes to monitoring via the always-on handler; this
+    adds the below-threshold levels during a P0. Default off. Toggle: ``P0_SESSION_ERROR_TO_GROUP_ENABLED``.
     """
     reload_env_runtime()
     return _env_scalar(os.getenv("P0_SESSION_ERROR_TO_GROUP_ENABLED") or "0").lower() in (
