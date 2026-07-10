@@ -1554,17 +1554,25 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
               if (panels.length < 2) return null;
 
               const findSplitY = (re, maxLen) => {
-                for (const el of document.querySelectorAll(
-                  'h2, h3, button, div, span, [class*="row"], [data-testid*="row" i]'
-                )) {
+                // Prefer Grafana row-TITLE elements (short own text). Generic div/span containers
+                // include every nested panel's text, blow past maxLen, and get skipped — which is
+                // why detection failed and we fell back to a 52% half-cut. Among all matches, pick
+                // the SHORTEST-text one (that's the title, not a wrapper).
+                const sel = [
+                  'a[class*="row__title"]', '[class*="row__title"]', '[class*="row-title"]',
+                  '[data-testid*="row-title" i]', '[data-testid*="dashboard-row" i]',
+                  '[class*="dashboard-row"]', 'h2', 'h3', 'button', 'span', 'div'
+                ].join(', ');
+                let bestY = null, bestLen = Infinity;
+                for (const el of document.querySelectorAll(sel)) {
                   const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
                   if (!t || t.length > maxLen) continue;
                   if (!re.test(t)) continue;
                   const r = el.getBoundingClientRect();
-                  if (r.height > 180) continue;
-                  return sy + r.top - 4;
+                  if (r.height > 180 || r.width < 16) continue;
+                  if (t.length < bestLen) { bestLen = t.length; bestY = sy + r.top - 4; }
                 }
-                return null;
+                return bestY;
               };
 
               const loginRe = /login\\s*(with\\s*)?password/i;
@@ -1572,6 +1580,7 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
 
               let loginSplit = findSplitY(loginRe, 120);
               let cpmsSplit = findSplitY(cpmsRe, 120);
+              let cpmsFromHeader = cpmsSplit != null;
 
               if (cpmsSplit == null) {
                 const grid = document.querySelector(
@@ -1645,6 +1654,7 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
               const out = {
                 loginSplit,
                 cpmsSplit,
+                cpmsFromHeader,
                 band1: mk(u1, 200),
                 band2: mk(u2, 200),
                 band3: null,
@@ -1715,13 +1725,20 @@ def _measure_grafana_highlight_band_clips(page, *, include_login_panel: bool = T
             })
         if len(out) < 2:
             return []
+        cpms_from_header = bool(raw.get("cpmsFromHeader"))
         log.info(
-            "p0 graph screenshot: highlight bands login_y=%s cpms_y=%s parts=%s sizes=%s",
+            "p0 graph screenshot: highlight bands login_y=%s cpms_y=%s cpms_from_header=%s parts=%s sizes=%s",
             raw.get("loginSplit"),
             raw.get("cpmsSplit"),
+            cpms_from_header,
             len(out),
             [(c["width"], c["height"]) for c in out],
         )
+        if not cpms_from_header:
+            log.warning(
+                "p0 graph screenshot: CPMS header NOT found — using 52%% geometric half-split "
+                "(bands will overlap / not be section-aligned). Check the row title regex vs the dashboard."
+            )
         return out
     except (TypeError, ValueError):
         return []
