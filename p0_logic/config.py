@@ -2072,6 +2072,18 @@ def get_p0_graph_screenshot_top_and_bottom() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_band_full_height() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_BAND_FULL_HEIGHT=1`` — capture each band at its FULL document height
+    (one tall PNG per section) instead of a single 1080px viewport. Needed when a section is taller
+    than the viewport (redesigned/taller dashboards) so image 2 isn't cut off before Pulsar.
+    Default 0 (classic single-viewport bands). Pairs with a readable zoom (~60-70%).
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_BAND_FULL_HEIGHT") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_graph_screenshot_include_login_panel() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — ``0`` (recommended): **two** PNGs like manual VNC —

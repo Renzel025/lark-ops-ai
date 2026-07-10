@@ -2071,6 +2071,31 @@ def _screenshot_viewport_at_band_start(
         extra = _band_post_capture_settle_ms()
         if extra > 0:
             page.wait_for_timeout(extra)
+        band_h = int(doc_clip.get("height") or 0)
+        if _config.get_p0_graph_screenshot_band_full_height() and band_h > int(vh * 1.15):
+            # Section taller than the viewport (redesigned dashboard): capture the WHOLE band as one
+            # tall PNG so nothing below the fold (e.g. Pulsar) is cut off. Lazy panels were already
+            # warmed above (warm-scroll + _scroll_viewport_to_paint_lazy_panels).
+            page.evaluate("(yy) => window.scrollTo(0, Math.max(0, yy - 8))", y)
+            page.wait_for_timeout(300)
+            try:
+                full = page.screenshot(
+                    full_page=True,
+                    type="png",
+                    clip={
+                        "x": int(vp_band["x"]),
+                        "y": int(y),
+                        "width": int(vp_band["width"]),
+                        "height": band_h,
+                    },
+                )
+            except Exception as e_full:
+                log.warning("p0 graph screenshot: full-height band capture failed (%s) — viewport fallback", e_full)
+                full = b""
+            if full and not _png_bytes_uniformly_blank(full):
+                log.info("p0 graph screenshot: full-height band PNG bytes=%s h=%s", len(full), band_h)
+                return _normalize_screenshot_png(full)
+            log.info("p0 graph screenshot: full-height band blank/failed — falling back to single viewport")
         raw = _dashboard_viewport_screenshot(page)
         if raw and not _png_bytes_uniformly_blank(raw):
             return _normalize_screenshot_png(raw)
