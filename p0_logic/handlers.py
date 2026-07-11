@@ -1108,7 +1108,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 return
             return
 
-        if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no"):
+        if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no", "p0_keyword_confirm_cancel"):
             # DM Yes/No for a group ``p0`` mention that was NOT auto-declared
             # (P0_KEYWORD_CONFIRM_DM_ENABLED). Pending state lives in lark_logic; consume the
             # nonce once so a double-click / Lark redelivery cannot double-start a meeting.
@@ -1117,6 +1117,22 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             val = _card_action_value_dict(payload)
             nonce = str(val.get("kw_confirm_nonce") or "").strip()
             card_mid = _extract_card_action_open_message_id(payload)
+
+            if action_name == "p0_keyword_confirm_cancel":
+                # Undo an accidental create: end the VC, remove the invite link card, stop the
+                # session (no further interval screenshots / overview). Already-sent declare-time
+                # artifacts (bitable row, first screenshot) cannot be un-posted.
+                cancel_chat = str(val.get("cancel_chat_id") or "").strip()
+                log.info("p0_keyword_confirm: CANCEL chat_tail=%s", cancel_chat[-12:] if len(cancel_chat) > 12 else cancel_chat)
+                try:
+                    if cancel_chat:
+                        _session.cancel_p0_session(cancel_chat, tenant_token, reason="Dismissed via P0 mention confirm card")
+                except Exception as e:
+                    log.warning("p0_keyword_confirm: cancel_p0_session failed chat_tail=%s err=%s", cancel_chat[-12:], e)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "🗑 Meeting cancelled — link removed, session stopped."
+                )
+                return
 
             if action_name == "p0_keyword_confirm_no":
                 # Do NOT consume on dismiss — keep the pending alive so the dismissed card can
@@ -1178,9 +1194,16 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
                 )
                 return
-            _patch_p0_keyword_confirm_result(
-                tenant_token, card_mid, "✅ P0 meeting created.", template="green"
-            )
+            if card_mid:
+                ccard = _cards.build_p0_keyword_confirm_created_card(src_chat)
+                st, body = _lark.patch_interactive_card(tenant_token, card_mid, ccard)
+                if st != 200:
+                    log.warning(
+                        "p0_keyword_confirm: patch created card HTTP=%s mid_tail=%s body=%r",
+                        st,
+                        card_mid[-12:] if len(card_mid) > 12 else card_mid,
+                        (body or "")[:200],
+                    )
             return
 
         if not sender_open_id or not action_name:
