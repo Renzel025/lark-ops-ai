@@ -279,8 +279,8 @@ def summarize_session_logs(
     dur = (duration_text or "").strip()
     if not recs:
         body = (
-            f"✅ **{pri} session wrap-up** — walang aberya na na-detect (no ERROR/WARNING logs) "
-            f"sa buong session."
+            f"✅ **{pri} session wrap-up** — no anomalies detected (no ERROR/WARNING logs) "
+            f"during the session."
             + (f"\n🕒 Duration: {dur}" if dur else "")
         )
         card = _cards.build_monitoring_log_card(body, level="INFO", logger_name="p0-session-summary")
