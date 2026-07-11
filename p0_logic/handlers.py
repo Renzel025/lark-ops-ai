@@ -1144,19 +1144,31 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     tenant_token, card_mid, "ℹ️ A meeting is already active in that group."
                 )
                 return
+            # Instant feedback: patch to a pending state BEFORE start_p0 (VC reserve + invite
+            # cards take a few seconds); otherwise the card looks frozen until it all finishes.
+            _patch_p0_keyword_confirm_result(
+                tenant_token, card_mid, "⏳ Creating P0 meeting…"
+            )
             log.info(
                 "p0_keyword_confirm: YES → start_p0 chat_tail=%s nonce=%s",
                 src_chat[-12:] if len(src_chat) > 12 else src_chat,
                 nonce,
             )
-            _session.start_p0(
-                src_chat,
-                tenant_token,
-                str(entry.get("trigger_open_id") or "").strip(),
-                priority="P0",
-                source_chat_name=str(entry.get("source_chat_name") or "").strip(),
-                trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
-            )
+            try:
+                _session.start_p0(
+                    src_chat,
+                    tenant_token,
+                    str(entry.get("trigger_open_id") or "").strip(),
+                    priority="P0",
+                    source_chat_name=str(entry.get("source_chat_name") or "").strip(),
+                    trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
+                )
+            except Exception as e:
+                log.warning("p0_keyword_confirm: start_p0 failed nonce=%s err=%s", nonce, e)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
+                )
+                return
             _patch_p0_keyword_confirm_result(
                 tenant_token, card_mid, "✅ P0 meeting created.", template="green"
             )
