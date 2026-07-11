@@ -649,6 +649,15 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
             t,
         ):
             return True
+        # Passive / subjectless tag: "this issue tagged as p0", "tagged as p0", "marked as p0"
+        # (no I/we subject). These are real declarations the LLM triage keeps mislabeling as
+        # "handoff" — make them deterministic so a declaration never depends on the classifier.
+        # Modal questions ("should we tag … as p0") are already excluded by the guard above.
+        if re.search(
+            r"(?is)\b(?:tagged|treated|marked|flagged|classified|labell?ed)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
     return False
 
 
