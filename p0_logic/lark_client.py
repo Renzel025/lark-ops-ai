@@ -691,7 +691,9 @@ def end_vc_meeting(token: str, meeting_id: str) -> bool:
             last_err = f"code={j.get('code')} msg={j.get('msg')}"
         except Exception as e:
             last_err = str(e)
-    log.error("End VC meeting failed meeting_id=%s err=%s", meeting_id, last_err)
+    # WARNING (not ERROR): callers treat this as best-effort — the invite card is recalled/patched
+    # and a terminal notice posted regardless; /end needs the owner user token (99991663/99991679).
+    log.warning("End VC meeting failed meeting_id=%s err=%s", meeting_id, last_err)
     return False
 
 

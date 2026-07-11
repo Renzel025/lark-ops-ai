@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
@@ -1130,9 +1131,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 # the card outcome on it, so no scary "couldn't auto-end" message.
                 try:
                     if cancel_chat:
-                        _session.cancel_p0_session(
-                            cancel_chat, tenant_token, reason="Dismissed via P0 mention confirm card"
-                        )
+                        # No reason string — the cancelled notice stays clean ("no meeting created"),
+                        # not "Reason: Dismissed via P0 mention confirm card".
+                        _session.cancel_p0_session(cancel_chat, tenant_token, reason="")
                 except Exception as e:
                     log.warning("p0_keyword_confirm: cancel_p0_session failed chat_tail=%s err=%s", cancel_chat[-12:], e)
                 _patch_p0_keyword_confirm_result(
@@ -1185,22 +1186,41 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 src_chat[-12:] if len(src_chat) > 12 else src_chat,
                 nonce,
             )
-            try:
-                _session.start_p0(
-                    src_chat,
-                    tenant_token,
-                    str(entry.get("trigger_open_id") or "").strip(),
-                    priority="P0",
-                    source_chat_name=str(entry.get("source_chat_name") or "").strip(),
-                    trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
-                )
-            except Exception as e:
-                log.warning("p0_keyword_confirm: start_p0 failed nonce=%s err=%s", nonce, e)
-                _patch_p0_keyword_confirm_result(
-                    tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
-                )
-                return
-            if card_mid:
+            # Run start_p0 in the background so the card can flip to "created" the moment the
+            # meeting actually exists (session registered right after the VC reserve, ~2s), instead
+            # of waiting for the whole flow (invite post, Bitable, screenshot scheduling, timers).
+            _start_err: Dict[str, Any] = {}
+            _trigger_open_id = str(entry.get("trigger_open_id") or "").strip()
+            _src_name = str(entry.get("source_chat_name") or "").strip()
+            _trigger_luid = str(entry.get("trigger_lark_user_id") or "").strip()
+
+            def _run_start_p0() -> None:
+                try:
+                    _session.start_p0(
+                        src_chat,
+                        tenant_token,
+                        _trigger_open_id,
+                        priority="P0",
+                        source_chat_name=_src_name,
+                        trigger_lark_user_id=_trigger_luid,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    _start_err["e"] = e
+                    log.warning("p0_keyword_confirm: start_p0 failed nonce=%s err=%s", nonce, e)
+
+            threading.Thread(target=_run_start_p0, name="p0-confirm-start", daemon=True).start()
+
+            # Poll for the session to come up (fast: VC reserved) so we patch "created" quickly.
+            created = False
+            for _ in range(40):  # ~20s ceiling; normally resolves in 2-3s
+                if _start_err:
+                    break
+                if _session.chat_has_active_session(src_chat):
+                    created = True
+                    break
+                time.sleep(0.5)
+
+            if created and card_mid:
                 ccard = _cards.build_p0_keyword_confirm_created_card(src_chat)
                 st, body = _lark.patch_interactive_card(tenant_token, card_mid, ccard)
                 if st != 200:
@@ -1210,6 +1230,14 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         card_mid[-12:] if len(card_mid) > 12 else card_mid,
                         (body or "")[:200],
                     )
+            elif _start_err:
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
+                )
+            else:
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "⚠️ Still creating — check the group; if no meeting appeared, see logs."
+                )
             return
 
         if not sender_open_id or not action_name:
