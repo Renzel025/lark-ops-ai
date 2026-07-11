@@ -660,10 +660,17 @@ def invite_users_to_vc_meeting(
 
 def end_vc_meeting(token: str, meeting_id: str) -> bool:
     """
-    ``POST /vc/v1/meetings/{meeting_id}/end``.
+    ``PATCH /vc/v1/meetings/{meeting_id}/end`` — end the LIVE meeting for everyone.
 
-    ``meeting_id`` may be the join-event id **or** the numeric ``meeting_no`` from reserve,
-    depending on tenant — callers try both (see ``end_p0_session``).
+    NOTE: the endpoint is **PATCH**, not POST. Hitting it with POST makes the Lark API gateway
+    return a plain-text ``404 page not found`` (no JSON ``code``), which is what we used to see —
+    a genuinely-missing meeting instead returns JSON ``code=122002``.
+
+    ``meeting_id`` MUST be the live meeting ``id`` (a long snowflake generated **after the meeting
+    starts**), not the numeric ``meeting_no`` and not the ``reserve_id``. Resolve it with
+    ``get_active_meeting_id()`` when unsure. Per docs the endpoint expects the meeting owner's
+    ``user_access_token`` (scope ``vc:meeting``); a tenant token can return ``code=99991663`` — see
+    ``end_vc_meeting_via_reserve`` callers for the user-token fallback.
     """
     meeting_id = (meeting_id or "").strip()
     if not meeting_id:
@@ -673,7 +680,7 @@ def end_vc_meeting(token: str, meeting_id: str) -> bool:
     for base in VC_BASES:
         url = f"{base}/vc/v1/meetings/{quote(meeting_id, safe='')}/end"
         try:
-            r = _lark_http().post(url, headers=headers, json={}, **_timeout_kw())
+            r = _lark_http().patch(url, headers=headers, json={}, **_timeout_kw())
             log.info("VC end meeting try: %s -> %s", url, r.status_code)
             if r.status_code != 200:
                 last_err = f"HTTP={r.status_code} body={(r.text or '')[:200]}"
@@ -686,6 +693,84 @@ def end_vc_meeting(token: str, meeting_id: str) -> bool:
             last_err = str(e)
     log.error("End VC meeting failed meeting_id=%s err=%s", meeting_id, last_err)
     return False
+
+
+def get_active_meeting_id(token: str, reserve_id: str) -> str:
+    """
+    ``GET /vc/v1/reserves/{reserve_id}/get_active_meeting`` -> the live ``meeting.id``.
+
+    The returned id is "the unique identifier for a video meeting, generated after the meeting
+    starts" — i.e. the exact value ``/vc/v1/meetings/{id}/end`` needs. This is the robust way to
+    end a meeting created from a reserve: the ``meeting_id`` bound from a ``vc.meeting.*`` webhook
+    can be stale (a previous meeting instance of the same reserve) or bound to the wrong session.
+
+    Scope: ``vc:reserve:readonly`` (or ``vc:reserve``). Accepts tenant_access_token or
+    user_access_token. Returns ``""`` when no meeting is currently active for the reserve.
+    """
+    reserve_id = (reserve_id or "").strip()
+    if not token or not reserve_id:
+        return ""
+    headers = {"Authorization": f"Bearer {token}"}
+    last_err = ""
+    for base in VC_BASES:
+        url = f"{base}/vc/v1/reserves/{quote(reserve_id, safe='')}/get_active_meeting"
+        try:
+            r = _lark_http().get(url, headers=headers, **_timeout_kw())
+            log.info("VC get_active_meeting try: %s -> %s", url, r.status_code)
+            if r.status_code != 200:
+                last_err = f"HTTP={r.status_code} body={(r.text or '')[:200]}"
+                continue
+            j = r.json() if r.text else {}
+            if not isinstance(j, dict) or j.get("code") != 0:
+                last_err = f"code={j.get('code') if isinstance(j, dict) else '?'} msg={j.get('msg') if isinstance(j, dict) else ''}"
+                continue
+            meeting = (j.get("data") or {}).get("meeting") or {}
+            mid = str(meeting.get("id") or "").strip()
+            if mid:
+                return mid
+            last_err = "code=0 but no active meeting.id (meeting not currently running?)"
+        except Exception as e:
+            last_err = str(e)
+    log.warning("get_active_meeting_id failed reserve_id=%s err=%s", reserve_id, last_err)
+    return ""
+
+
+def end_vc_meeting_via_reserve(
+    token: str,
+    reserve_id: str,
+    *,
+    fallback_meeting_id: str = "",
+    fallback_meeting_no: str = "",
+) -> Tuple[bool, str]:
+    """
+    Reliably end the LIVE meeting tied to ``reserve_id``.
+
+    1. Resolve the currently-active meeting ``id`` via ``get_active_meeting_id``.
+    2. ``PATCH /vc/v1/meetings/{id}/end`` on that id.
+    3. Fall back to the caller-supplied stored ``meeting_id`` then ``meeting_no`` (best effort).
+
+    Returns ``(ended_ok, detail)``. The caller should ``delete_vc_reserve()`` when this returns
+    ``False`` so the reserve at least can't be re-used.
+    """
+    active_id = get_active_meeting_id(token, reserve_id) if (reserve_id or "").strip() else ""
+    stored_id = (fallback_meeting_id or "").strip()
+    meeting_no = (fallback_meeting_no or "").strip()
+    candidates: List[str] = []
+    for c in (active_id, stored_id, meeting_no):
+        c = (c or "").strip()
+        if c and c not in candidates:
+            candidates.append(c)
+    if not candidates:
+        return False, "no active meeting id from reserve and no fallback id/no"
+    for mid in candidates:
+        if end_vc_meeting(token, mid):
+            src = "active_meeting" if mid == active_id else ("stored_meeting_id" if mid == stored_id else "meeting_no")
+            log.info(
+                "end_vc_meeting_via_reserve: ended reserve_id=%s meeting_id=%s via=%s",
+                reserve_id, mid, src,
+            )
+            return True, f"ended via {src} id={mid}"
+    return False, f"all end attempts failed ids={candidates}"
 
 
 def fetch_vc_meeting_recording_url(token: str, meeting_id: str) -> str:

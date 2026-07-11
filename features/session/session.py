@@ -534,11 +534,20 @@ def _patch_meeting_invite_to_terminal(
     if not mid or not token:
         return False
     if str((sess or {}).get("meeting_invite_notice_kind") or "") == "text_unfurl":
-        log.info(
-            "patch meeting invite skipped kind=text_unfurl — Lark VC link preview updates in place mid=%s",
-            mid[:24],
-        )
-        return True
+        # The invite was posted as a plain-text message whose VC link Lark unfurls into a preview.
+        # patch_interactive_card CANNOT rewrite a text message, and the unfurl preview does NOT flip
+        # to "ended/cancelled" when the meeting stops — the live-looking join link would linger in
+        # the incident group. Recall the original link message (best effort) so the stale link is
+        # removed, then return False so the caller posts a fresh terminal card IN THE SAME CHAT.
+        try:
+            st_r, body_r = _lark.recall_im_message(token, mid)
+            log.info(
+                "patch meeting invite kind=text_unfurl -> recalled link msg HTTP=%s mid=%s body=%s",
+                st_r, mid[:24], (body_r or "")[:160],
+            )
+        except Exception as e:
+            log.warning("patch meeting invite text_unfurl recall exception mid=%s err=%s", mid[:24], e)
+        return False
     try:
         meeting_no = str(sess.get("meeting_no") or "").strip()
         priority = str(sess.get("priority") or "P0").strip().upper()
@@ -1096,11 +1105,28 @@ def end_p0_session(
         em_topic = str(sess.get("emergency_topic") or "").strip()
         patched = _patch_meeting_invite_to_terminal(sess, token, kind="ended", duration_text=duration_text)
         if not patched:
+            # text_unfurl invite (link now recalled) or un-patchable message: post a fresh ended card
+            # so the group where the invite lived reflects the ended state instead of a dead link.
             log.warning(
-                "end_p0_session: could not patch invite card to ended state chat_id=%s message_id=%s",
+                "end_p0_session: could not patch invite card to ended state chat_id=%s message_id=%s — posting fresh ended card",
                 chat_id,
                 str(sess.get("meeting_invite_message_id") or "")[:24],
             )
+            prompt_cid = _session_prompt_chat_id(sess, chat_id)
+            try:
+                _lark.post_card_to_chat(
+                    prompt_cid,
+                    token,
+                    _cards.build_meeting_link_ended_card(
+                        priority=priority,
+                        duration_text=duration_text,
+                        meeting_no=meeting_no,
+                        emergency_topic=em_topic,
+                        update_multi=False,
+                    ),
+                )
+            except Exception as e:
+                log.error("end_p0_session: failed to post ended card (fallback) dest_tail=%s err=%s", prompt_cid[-12:], e)
     if token and chat_id:
         s_end = P0_SESSIONS.get(chat_id)
         if s_end and s_end.get("dm_instruction_deferred"):
@@ -1144,11 +1170,72 @@ def end_p0_session(
             log.warning("end_p0_session: session log summary failed: %s", e)
 
 
+def _duty_user_token_for_end(sess: Dict[str, Any]) -> str:
+    """
+    Best-effort meeting-owner user_access_token for ``/vc/v1/meetings/{id}/end``.
+
+    Docs say ``end`` requires the owner's user token; a tenant token can return ``code=99991663``.
+    Reuse the VC-OAuth token captured for the P0 declarer / host (same one recording uses).
+    """
+    try:
+        from features.recording import vc_user_oauth as _oauth
+    except Exception as e:
+        log.warning("cancel_p0_session: vc_user_oauth import failed: %s", e)
+        return ""
+    trigger = str((sess or {}).get("trigger_open_id") or "").strip()
+    if not trigger:
+        owners = _config.get_owner_ids()
+        trigger = (owners[0] if owners else "").strip()
+    if not trigger:
+        return ""
+    try:
+        return (_oauth.get_user_access_token(trigger) or "").strip()
+    except Exception as e:
+        log.warning("cancel_p0_session: duty user token lookup failed: %s", e)
+        return ""
+
+
+def _end_live_vc_for_cancel(
+    sess: Dict[str, Any],
+    token: str,
+    reserve_id: str,
+    meeting_id: str,
+    meeting_no: str,
+) -> Tuple[bool, str]:
+    """
+    End the LIVE meeting when cancelling: resolve the active meeting from the reserve, then end it.
+
+    Tries tenant token first (the path the rest of VC uses); if that fails, retries with the duty
+    host's user_access_token because ``/end`` officially wants the owner's user token.
+    """
+    ok, detail = _lark.end_vc_meeting_via_reserve(
+        token, reserve_id, fallback_meeting_id=meeting_id, fallback_meeting_no=meeting_no
+    )
+    if ok:
+        return True, detail
+    user_tok = _duty_user_token_for_end(sess)
+    if user_tok and user_tok != token:
+        ok2, detail2 = _lark.end_vc_meeting_via_reserve(
+            user_tok, reserve_id, fallback_meeting_id=meeting_id, fallback_meeting_no=meeting_no
+        )
+        if ok2:
+            return True, f"{detail2} (user_token)"
+        return False, f"tenant[{detail}] | user[{detail2}]"
+    return False, f"{detail} (no duty user token for owner-token retry)"
+
+
 def cancel_p0_session(
     chat_id: str,
     token: Optional[str] = None,
     reason: str = "Unspecified",
-) -> None:
+) -> bool:
+    """
+    Cancel an active P0/P1 session and end its live VC.
+
+    Returns ``True`` when the VC was ended (or there was nothing live to end), ``False`` when a live
+    meeting could not be auto-ended after all fallbacks (caller should tell the user to end it
+    manually). ``delete_vc_reserve`` is still attempted as a last resort on failure.
+    """
     chat_id = (chat_id or "").strip()
     sess = P0_SESSIONS.get(chat_id) or {}
     if not sess and _session_disk.enabled():
@@ -1164,13 +1251,24 @@ def cancel_p0_session(
     reserve_id = str(sess.get("reserve_id") or "").strip()
     meeting_id = str(sess.get("meeting_id") or "").strip()
     meeting_no = str(sess.get("meeting_no") or "").strip()
+    vc_end_ok = True
     if token and sess:
-        meeting_ended = False
-        if meeting_id:
-            meeting_ended = _lark.end_vc_meeting(token, meeting_id)
-        if (not meeting_ended) and reserve_id:
-            _lark.delete_vc_reserve(token, reserve_id)
-        log.info("cancel_p0_session VC action chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s", chat_id, reserve_id, meeting_id, meeting_no)
+        # End the LIVE meeting reliably: resolve the active meeting id from the reserve, then end it
+        # (the stored meeting_id can be stale/misbound and yields 404). Only treat this as a failure
+        # when there was actually something to end.
+        if reserve_id or meeting_id or meeting_no:
+            vc_end_ok, end_detail = _end_live_vc_for_cancel(sess, token, reserve_id, meeting_id, meeting_no)
+            log.info(
+                "cancel_p0_session VC end chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s ok=%s detail=%s",
+                chat_id, reserve_id, meeting_id, meeting_no, vc_end_ok, end_detail,
+            )
+            if not vc_end_ok:
+                log.error(
+                    "cancel_p0_session: could NOT auto-end live VC chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s detail=%s",
+                    chat_id, reserve_id, meeting_id, meeting_no, end_detail,
+                )
+                if reserve_id:
+                    _lark.delete_vc_reserve(token, reserve_id)
         start_epoch = int(sess.get("start_epoch") or 0)
         priority = str(sess.get("priority") or "P0").strip().upper()
         duration_text = _cards.format_duration(start_epoch)
@@ -1180,21 +1278,28 @@ def cancel_p0_session(
         )
         prompt_cid = _session_prompt_chat_id(sess, chat_id)
         if not patched:
-            try:
-                _lark.post_card_to_chat(
-                    prompt_cid,
-                    token,
-                    _cards.build_meeting_link_cancelled_card(
-                        priority=priority,
-                        duration_text=duration_text,
-                        meeting_no=meeting_no,
-                        reason=reason,
-                        emergency_topic=em_topic,
-                        update_multi=False,
-                    ),
-                )
-            except Exception as e:
-                log.error("Failed to post meeting cancelled card (fallback): %s", e)
+            # The original invite was a text_unfurl (now recalled) or couldn't be patched in place:
+            # post a fresh cancelled card. Land it in BOTH the group the invite was posted to
+            # (prompt_cid) AND the source incident group, so the incident group always reflects the
+            # cancel — not only the fan-out hub.
+            cancel_card = _cards.build_meeting_link_cancelled_card(
+                priority=priority,
+                duration_text=duration_text,
+                meeting_no=meeting_no,
+                reason=reason,
+                emergency_topic=em_topic,
+                update_multi=False,
+            )
+            posted_to = set()
+            for dest in (prompt_cid, chat_id):
+                dest = (dest or "").strip()
+                if not dest or dest in posted_to:
+                    continue
+                posted_to.add(dest)
+                try:
+                    _lark.post_card_to_chat(dest, token, cancel_card)
+                except Exception as e:
+                    log.error("Failed to post meeting cancelled card (fallback) dest_tail=%s err=%s", dest[-12:], e)
         _fanout_p0_meeting_cancelled(
             token,
             source_incident_chat_id=chat_id,
@@ -1232,6 +1337,7 @@ def cancel_p0_session(
             )
         except Exception as e:
             log.warning("cancel_p0_session: session log summary failed: %s", e)
+    return vc_end_ok
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:
