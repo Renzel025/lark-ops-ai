@@ -1112,23 +1112,32 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             # DM Yes/No for a group ``p0`` mention that was NOT auto-declared
             # (P0_KEYWORD_CONFIRM_DM_ENABLED). Pending state lives in lark_logic; consume the
             # nonce once so a double-click / Lark redelivery cannot double-start a meeting.
-            from lark_logic import p0_keyword_confirm_consume
+            from lark_logic import p0_keyword_confirm_consume, p0_keyword_confirm_lookup
 
             val = _card_action_value_dict(payload)
             nonce = str(val.get("kw_confirm_nonce") or "").strip()
             card_mid = _extract_card_action_open_message_id(payload)
 
             if action_name == "p0_keyword_confirm_no":
-                entry = p0_keyword_confirm_consume(nonce)
+                # Do NOT consume on dismiss — keep the pending alive so the dismissed card can
+                # still offer a "create the meeting after all" button (duty can change their mind).
+                entry = p0_keyword_confirm_lookup(nonce)
                 if entry is None:
                     _patch_p0_keyword_confirm_result(
                         tenant_token, card_mid, "⌛ This confirmation expired or was already answered."
                     )
                     return
-                log.info("p0_keyword_confirm: dismissed nonce=%s", nonce)
-                _patch_p0_keyword_confirm_result(
-                    tenant_token, card_mid, "✅ Dismissed — no meeting created."
-                )
+                log.info("p0_keyword_confirm: dismissed (kept for optional Yes) nonce=%s", nonce)
+                if card_mid:
+                    dcard = _cards.build_p0_keyword_confirm_dismissed_card(nonce)
+                    st, body = _lark.patch_interactive_card(tenant_token, card_mid, dcard)
+                    if st != 200:
+                        log.warning(
+                            "p0_keyword_confirm: patch dismissed card HTTP=%s mid_tail=%s body=%r",
+                            st,
+                            card_mid[-12:] if len(card_mid) > 12 else card_mid,
+                            (body or "")[:200],
+                        )
                 return
 
             # p0_keyword_confirm_yes — consume BEFORE start_p0 (idempotent).

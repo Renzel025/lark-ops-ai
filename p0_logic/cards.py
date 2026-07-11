@@ -912,6 +912,38 @@ def build_p0_keyword_confirm_result_card(
     }
 
 
+def build_p0_keyword_confirm_dismissed_card(nonce: str) -> Dict[str, Any]:
+    """
+    Dismissed outcome that STILL offers a "create the meeting after all" button — the duty can
+    change their mind. The nonce stays alive (not consumed on dismiss) so Yes here still works.
+    """
+    nonce = (nonce or "").strip()
+    val_yes: Dict[str, Any] = {"action": "p0_keyword_confirm_yes"}
+    if nonce:
+        val_yes["kw_confirm_nonce"] = nonce
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {
+            "template": "grey",
+            "title": {"tag": "plain_text", "content": "P0 mention confirmation"},
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "✅ Dismissed — no meeting created."}},
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": "Changed your mind? You can still create it:"}},
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "🚨 Create the P0 meeting"},
+                    "type": "primary",
+                    "value": val_yes,
+                },
+            ]
+        },
+    }
+
+
 def _dm_scope_button_fields(
     *,
     target_chat: str = "",
