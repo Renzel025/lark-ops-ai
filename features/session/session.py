@@ -1232,25 +1232,20 @@ def _end_live_vc_for_cancel(
     meeting_no: str,
 ) -> Tuple[bool, str]:
     """
-    End the LIVE meeting when cancelling: resolve the active meeting from the reserve, then end it.
-
-    Tries tenant token first (the path the rest of VC uses); if that fails, retries with the duty
-    host's user_access_token because ``/end`` officially wants the owner's user token.
+    Best-effort end of the LIVE meeting when cancelling: resolve the active meeting from the reserve,
+    then end it. These VC ops (get_active_meeting, /end) require the meeting OWNER's user_access_token
+    — a tenant token always returns 99991663/99991679 — so we only attempt when a duty/host user token
+    is actually available. When it isn't, we skip the API end entirely (no futile calls, no ERROR
+    noise): the recalled join link + "cancelled" notice already communicate the cancel, and the VC
+    closes when the remaining participants leave.
     """
-    ok, detail = _lark.end_vc_meeting_via_reserve(
-        token, reserve_id, fallback_meeting_id=meeting_id, fallback_meeting_no=meeting_no
-    )
-    if ok:
-        return True, detail
     user_tok = _duty_user_token_for_end(sess)
-    if user_tok and user_tok != token:
-        ok2, detail2 = _lark.end_vc_meeting_via_reserve(
-            user_tok, reserve_id, fallback_meeting_id=meeting_id, fallback_meeting_no=meeting_no
-        )
-        if ok2:
-            return True, f"{detail2} (user_token)"
-        return False, f"tenant[{detail}] | user[{detail2}]"
-    return False, f"{detail} (no duty user token for owner-token retry)"
+    if not user_tok:
+        return False, "skipped API end — no owner user token (link recalled + cancelled notice already posted)"
+    ok, detail = _lark.end_vc_meeting_via_reserve(
+        user_tok, reserve_id, fallback_meeting_id=meeting_id, fallback_meeting_no=meeting_no
+    )
+    return ok, detail if ok else f"user_token end failed: {detail}"
 
 
 def cancel_p0_session(
@@ -1296,8 +1291,10 @@ def cancel_p0_session(
                 chat_id, reserve_id, meeting_id, meeting_no, vc_end_ok, end_detail,
             )
             if not vc_end_ok:
-                log.error(
-                    "cancel_p0_session: could NOT auto-end live VC chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s detail=%s",
+                # Not an ERROR: cancel is still complete (link recalled + cancelled notice posted +
+                # session stopped). API end is a best-effort bonus that needs owner user-OAuth.
+                log.warning(
+                    "cancel_p0_session: API auto-end not done chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s detail=%s",
                     chat_id, reserve_id, meeting_id, meeting_no, end_detail,
                 )
                 if reserve_id:
