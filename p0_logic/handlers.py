@@ -1124,23 +1124,20 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 # artifacts (bitable row, first screenshot) cannot be un-posted.
                 cancel_chat = str(val.get("cancel_chat_id") or "").strip()
                 log.info("p0_keyword_confirm: CANCEL chat_tail=%s", cancel_chat[-12:] if len(cancel_chat) > 12 else cancel_chat)
-                vc_ended = True
+                # cancel_p0_session recalls the join-link message + posts a "meeting cancelled" card
+                # to the incident group and stops the session (this always works). It also best-effort
+                # ends the live VC via API — a bonus when the owner token is available; we don't gate
+                # the card outcome on it, so no scary "couldn't auto-end" message.
                 try:
                     if cancel_chat:
-                        vc_ended = _session.cancel_p0_session(
+                        _session.cancel_p0_session(
                             cancel_chat, tenant_token, reason="Dismissed via P0 mention confirm card"
                         )
                 except Exception as e:
-                    vc_ended = False
                     log.warning("p0_keyword_confirm: cancel_p0_session failed chat_tail=%s err=%s", cancel_chat[-12:], e)
-                if vc_ended:
-                    result_msg = "🗑 Meeting cancelled — link removed, session stopped."
-                else:
-                    result_msg = (
-                        "⚠️ Session stopped and the join link was removed, but I could not auto-end the "
-                        "live VC — please tap End in the meeting to close it for everyone."
-                    )
-                _patch_p0_keyword_confirm_result(tenant_token, card_mid, result_msg)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "🗑 Meeting cancelled — join link removed, session stopped."
+                )
                 return
 
             if action_name == "p0_keyword_confirm_no":
