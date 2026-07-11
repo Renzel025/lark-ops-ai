@@ -3455,6 +3455,143 @@ def _wait_for_grafana_chart_content_if_configured(page) -> None:
             pass
 
 
+def _cold_grid_ready_timeout_ms(nav_ms: int) -> int:
+    """
+    Generous timeout for the cold grid+paint gate. Reuses ``PANEL_CONTENT_READY_TIMEOUT_MS``
+    (e.g. 90000) so a cold render — which redirects through login and only paints on the warm
+    load — has real time, instead of the short 9s per-band wait. Floors to ``max(nav_ms, 45000)``
+    when content-ready is disabled so the self-heal still has a bounded, non-trivial budget.
+    """
+    from p0_logic import config as _config
+
+    t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
+    if t <= 0:
+        t = max(nav_ms, 45_000)
+    return t
+
+
+_GRID_AND_PAINT_READY_JS = r"""
+() => {
+  const grid = document.querySelector(
+    '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
+  );
+  if (!grid) return false;
+  const gr = grid.getBoundingClientRect();
+  if (gr.width < 200 || gr.height < 120) return false;
+  // Any panel still showing a spinner/loader means the grid has not settled yet.
+  if (grid.querySelector(
+        '[class*="spinner"], [class*="Spinner"], [class*="panel-loading"], '
+        + '[class*="PanelLoading"], [aria-busy="true"], [role="progressbar"], '
+        + '[data-testid*="panel-loader"]'
+      )) {
+    return false;
+  }
+  // Require actual painted content (canvas / big SVG / a real table) — a mounted-but-blank
+  // grid (the reported symptom: KPI header shows, panel area below is black) must NOT pass.
+  let painted = 0;
+  grid.querySelectorAll('canvas').forEach((c) => {
+    const r = c.getBoundingClientRect();
+    if (r.width > 96 && r.height > 48) painted++;
+  });
+  if (painted >= 1) return true;
+  let svgBig = 0;
+  grid.querySelectorAll('svg').forEach((s) => {
+    const r = s.getBoundingClientRect();
+    if (r.width > 40 && r.height > 24) svgBig++;
+  });
+  if (svgBig >= 3) return true;
+  const rows = grid.querySelectorAll(
+    'table tbody tr, [role="rowgroup"] [role="row"]'
+  ).length;
+  if (rows >= 6) return true;
+  return false;
+}
+"""
+
+
+def _wait_for_grafana_grid_and_paint(page, *, timeout_ms: int) -> bool:
+    """
+    Wait until the dashboard GRID exists AND at least one panel has actually painted
+    (canvas / big SVG / real table), with spinners gone. Returns True when ready, False on
+    timeout. This is the cold-start gate: a False result is the signal to RELOAD, not capture.
+    """
+    if timeout_ms <= 0:
+        return _grafana_on_dashboard_page(page)
+    try:
+        page.wait_for_function(_GRID_AND_PAINT_READY_JS, timeout=timeout_ms, polling=400)
+        return True
+    except Exception:
+        return False
+
+
+def _reload_grafana_dashboard(page, dashboard_url: str, *, nav_ms: int, goto_wait: str) -> None:
+    """Re-navigate to the dashboard URL (falls back to ``page.reload``) and re-seed nav storage."""
+    _preset_grafana_nav_local_storage(page)
+    dash = (dashboard_url or "").strip()
+    try:
+        if dash:
+            page.goto(dash, wait_until=goto_wait, timeout=nav_ms)
+        else:
+            page.reload(wait_until=goto_wait, timeout=nav_ms)
+    except Exception as e:
+        log.warning("p0 graph screenshot: reload goto failed (%s) — trying page.reload()", e)
+        try:
+            page.reload(wait_until=goto_wait, timeout=nav_ms)
+        except Exception as e2:
+            log.warning("p0 graph screenshot: page.reload() also failed: %s", e2)
+
+
+def _ensure_dashboard_grid_ready_with_reload(
+    page, dashboard_url: str, *, nav_ms: int, goto_wait: str
+) -> bool:
+    """
+    Cold-start self-heal. After navigation + login, wait (generously) for the dashboard grid to
+    exist AND paint. If it does not, RELOAD the dashboard and re-wait — up to
+    ``P0_GRAPH_SCREENSHOT_COLD_RELOAD_MAX`` times (a cold Grafana almost always renders on the warm
+    second load). Returns True when the grid is painted, False if still not ready after all reloads
+    (caller then captures as an honest last resort). A warm/already-rendered page passes the gate on
+    the first poll and reloads nothing, so the good path pays ~nothing.
+    """
+    from p0_logic import config as _config
+
+    cold_wait = _cold_grid_ready_timeout_ms(nav_ms)
+    max_reloads = _config.get_p0_graph_screenshot_cold_reload_max()
+    for attempt in range(max_reloads + 1):
+        if _wait_for_grafana_grid_and_paint(page, timeout_ms=cold_wait):
+            if attempt > 0:
+                log.info(
+                    "p0 graph screenshot: dashboard grid painted after %s reload(s)", attempt
+                )
+            return True
+        if attempt >= max_reloads:
+            break
+        log.warning(
+            "p0 graph screenshot: dashboard grid not detected / panels unpainted after %sms — "
+            "reloading (self-heal attempt %s/%s)",
+            cold_wait,
+            attempt + 1,
+            max_reloads,
+        )
+        _reload_grafana_dashboard(page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait)
+        # A cold reload can bounce through the login page again before landing on the dashboard.
+        if not _grafana_auto_login_if_needed(
+            page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait
+        ):
+            log.warning("p0 graph screenshot: re-login during reload self-heal failed")
+    if max_reloads > 0:
+        log.warning(
+            "p0 graph screenshot: dashboard grid still unpainted after %s reload(s) — "
+            "capturing anyway (likely blank last resort)",
+            max_reloads,
+        )
+    else:
+        log.warning(
+            "p0 graph screenshot: dashboard grid not detected after login and cold reload "
+            "self-heal is disabled (P0_GRAPH_SCREENSHOT_COLD_RELOAD_MAX=0) — screenshot may be blank"
+        )
+    return False
+
+
 def _load_grafana_dashboard_for_capture(
     page,
     dashboard_url: str,
@@ -3477,6 +3614,11 @@ def _load_grafana_dashboard_for_capture(
                     "Grafana login failed — run features/screenshot/scripts/grafana_playwright_login_once.py "
                     "and set P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
                 )
+        # Warm reuse normally passes on the first poll (~free). If a reused context is wedged/blank
+        # the same cold self-heal reloads it rather than capturing a stale/blank frame.
+        _ensure_dashboard_grid_ready_with_reload(
+            page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait
+        )
         try:
             page.evaluate("window.scrollTo(0, 0)")
         except Exception:
@@ -3492,11 +3634,13 @@ def _load_grafana_dashboard_for_capture(
             "Grafana login failed — login form still visible. "
             "Run features/screenshot/scripts/grafana_playwright_login_once.py + P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR"
         )
-    if not _grafana_on_dashboard_page(page):
-        log.warning(
-            "p0 graph screenshot: dashboard grid not detected after login — "
-            "screenshot may be wrong (panels still loading?)"
-        )
+    # Cold-start gate: do NOT proceed to band capture while the grid is absent or its panels have
+    # not painted. Reloads the dashboard (up to COLD_RELOAD_MAX) — a cold Grafana session renders
+    # on the warm second load. This replaces the old passive "grid not detected" warning that
+    # captured a blank dashboard anyway.
+    _ensure_dashboard_grid_ready_with_reload(
+        page, dashboard_url, nav_ms=nav_ms, goto_wait=goto_wait
+    )
     try:
         page.evaluate("window.scrollTo(0, 0)")
     except Exception:

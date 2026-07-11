@@ -651,6 +651,18 @@ def get_vc_recording_fanout_tenant_wide_view_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_vc_cancel_api_end_enabled() -> bool:
+    """
+    ``P0_VC_CANCEL_API_END_ENABLED`` — when ``1``, cancel tries to force-END the live VC via the API
+    (get_active_meeting + PATCH /end). This needs the meeting OWNER's user_access_token with
+    ``vc:reserve:readonly`` + ``vc:meeting`` scopes; without them every attempt just logs
+    99991663/99991679/122002 noise. Default **off**: cancel recalls the join link + posts a cancelled
+    notice + stops the session (the VC closes when participants leave) — no API end, no noise.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_VC_CANCEL_API_END_ENABLED") or "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_vc_recording_fanout_drive_perm() -> str:
     """
     Optional Drive API collaborator role for Minutes after VC ``set_permission`` (view-only).
@@ -2351,6 +2363,28 @@ def get_p0_graph_screenshot_blank_max_retries() -> int:
     except ValueError:
         n = 2
     return max(0, min(n, 5))
+
+
+def get_p0_graph_screenshot_cold_reload_max() -> int:
+    """
+    Cold-start self-heal: how many times to ``reload`` the Grafana dashboard when, after
+    navigation + login, the dashboard **grid is still absent or its panels have not painted**
+    (the classic *first capture is blank* bug — a cold Grafana session redirects through login
+    and renders only on the warm second load). Each reload re-waits up to
+    ``PANEL_CONTENT_READY_TIMEOUT_MS`` for the grid + a painted canvas/SVG before capturing.
+
+    This is a **bug fix**, so it defaults **on** (``2`` reloads); the reloads are only paid on a
+    cold/blank/no-grid page — a warm, already-rendered dashboard passes the gate on the first poll
+    and reloads nothing. Set ``P0_GRAPH_SCREENSHOT_COLD_RELOAD_MAX=0`` to disable the self-heal.
+    Capped at 4.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_COLD_RELOAD_MAX") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(0, min(n, 4))
 
 
 def get_p0_graph_screenshot_fast_capture() -> bool:

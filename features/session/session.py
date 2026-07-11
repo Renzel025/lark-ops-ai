@@ -1281,18 +1281,26 @@ def cancel_p0_session(
     if meeting_no or meeting_id or reserve_id:
         _mark_meeting_cancelled(meeting_no, meeting_id, reserve_id)
     if token and sess:
-        # End the LIVE meeting reliably: resolve the active meeting id from the reserve, then end it
-        # (the stored meeting_id can be stale/misbound and yields 404). Only treat this as a failure
-        # when there was actually something to end.
-        if reserve_id or meeting_id or meeting_no:
+        # Cancel = clean up ALL groups: recall the join-link message in every fan-out group (boss/hub)
+        # so no live-looking link lingers anywhere, not just the incident group.
+        for _fc in (sess.get("fanout_link_mids") or []):
+            try:
+                _fmid = str((_fc or ["", ""])[1] or "").strip()
+                if _fmid:
+                    _lark.recall_im_message(token, _fmid)
+            except Exception as e:
+                log.warning("cancel_p0_session: recall fan-out join link failed err=%s", e)
+        # Force-end the live VC via API is OPT-IN (P0_VC_CANCEL_API_END_ENABLED, default OFF): it needs
+        # the owner's user-OAuth + vc:reserve:readonly/vc:meeting scopes, and without them every attempt
+        # just logs 99991663/99991679/122002 noise. Default cancel = recall link + notice + stop session
+        # (the VC closes when participants leave). Turn the toggle on only when OAuth+scopes are set up.
+        if _config.get_p0_vc_cancel_api_end_enabled() and (reserve_id or meeting_id or meeting_no):
             vc_end_ok, end_detail = _end_live_vc_for_cancel(sess, token, reserve_id, meeting_id, meeting_no)
             log.info(
                 "cancel_p0_session VC end chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s ok=%s detail=%s",
                 chat_id, reserve_id, meeting_id, meeting_no, vc_end_ok, end_detail,
             )
             if not vc_end_ok:
-                # Not an ERROR: cancel is still complete (link recalled + cancelled notice posted +
-                # session stopped). API end is a best-effort bonus that needs owner user-OAuth.
                 log.warning(
                     "cancel_p0_session: API auto-end not done chat_id=%s reserve_id=%s meeting_id=%s meeting_no=%s detail=%s",
                     chat_id, reserve_id, meeting_id, meeting_no, end_detail,
@@ -1312,13 +1320,11 @@ def cancel_p0_session(
             # post a simple plain-text cancelled notice (not a card). Land it in BOTH the group the
             # invite was posted to (prompt_cid) AND the source incident group, so the incident group
             # always reflects the cancel — not only the fan-out hub.
-            parts = ["🔴 {} meeting cancelled.".format(priority or "P0")]
+            parts = ["{} meeting cancelled.".format(priority or "P0")]
             if meeting_no:
                 parts.append("Meeting ID: {}".format(meeting_no))
             if duration_text:
                 parts.append("Duration: {}".format(duration_text))
-            if (reason or "").strip() and reason.strip().lower() != "unspecified":
-                parts.append("Reason: {}".format(reason.strip()))
             cancel_text = " · ".join(parts)
             posted_to = set()
             for dest in (prompt_cid, chat_id):
@@ -1343,7 +1349,11 @@ def cancel_p0_session(
     if token and chat_id:
         s_can = P0_SESSIONS.get(chat_id)
         if s_can and s_can.get("dm_instruction_deferred"):
-            _flush_deferred_dm_instruction_for_incident(chat_id)
+            # CANCEL != END: a cancelled meeting should NOT send the overview-builder DM. Drop the
+            # deferred instruction (clear the flag) instead of flushing it, so a cancel doesn't
+            # surprise the duty with an overview prompt for a meeting that was called off.
+            s_can["dm_instruction_deferred"] = False
+            log.info("cancel_p0_session: dropped deferred DM overview instruction (not sending) chat_id=%s", chat_id)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
     if token:
@@ -1856,22 +1866,29 @@ def _fanout_p0_meeting_created_link_notice(
     link: str,
     priority: str = "P0",
     emergency_topic: str = "",
-) -> None:
-    """Same unfurl text to boss / hub — native Lark VC preview below the link."""
+) -> List[Tuple[str, str]]:
+    """
+    Same unfurl text to boss / hub — native Lark VC preview below the link. Returns the posted
+    ``[(chat_id, message_id)]`` so a later cancel can recall each join-link message in every group.
+    """
+    out: List[Tuple[str, str]] = []
     targets = _config.get_p0_meeting_created_text_fanout_chat_ids(source_incident_chat_id)
     if not targets:
-        return
+        return out
     prompt = (prompt_chat_id or "").strip()
     for oc in targets:
         if oc == prompt:
             continue
-        _post_meeting_link_unfurl_notice(
+        mid = _post_meeting_link_unfurl_notice(
             oc,
             token,
             link=link,
             priority=priority,
             emergency_topic=emergency_topic,
         )
+        if mid:
+            out.append((oc, mid))
+    return out
 
 
 def _fanout_p0_meeting_cancelled(
@@ -1885,45 +1902,29 @@ def _fanout_p0_meeting_cancelled(
     reason: str,
     emergency_topic: str,
 ) -> None:
-    """Post the grey cancelled card to boss / hub groups (prompt group already got the primary notice)."""
+    """Post a plain-text cancelled notice to boss / hub groups (prompt group already got the primary)."""
     targets = _config.get_p0_meeting_cancelled_fanout_chat_ids(source_incident_chat_id)
     if not targets:
         return
-    card = _cards.build_meeting_link_cancelled_card(
-        priority=priority,
-        duration_text=duration_text,
-        meeting_no=meeting_no,
-        reason=reason,
-        emergency_topic=emergency_topic,
-        update_multi=False,
-    )
+    parts = ["{} meeting cancelled.".format((priority or "P0").strip() or "P0")]
+    if meeting_no:
+        parts.append("Meeting ID: {}".format(meeting_no))
+    if duration_text:
+        parts.append("Duration: {}".format(duration_text))
+    text = " · ".join(parts)
     prompt = (prompt_chat_id or "").strip()
     for oc in targets:
         if oc == prompt:
             continue
         try:
-            st, body, _ = _lark.post_card_to_chat(oc, token, card)
-            ok, code, msg = _lark.lark_im_message_create_ok(body)
-            if st == 200 and ok:
-                log.info(
-                    "cancel_p0: meeting cancelled fan-out ok chat_id_tail=%s source=%s",
-                    oc[-12:] if len(oc) > 12 else oc,
-                    source_incident_chat_id[:24],
-                )
-            else:
-                log.warning(
-                    "cancel_p0: meeting cancelled fan-out HTTP=%s lark_code=%s chat=%s msg=%r",
-                    st,
-                    code,
-                    oc[:24],
-                    msg,
-                )
-        except Exception as e:
-            log.warning(
-                "cancel_p0: meeting cancelled fan-out exception chat=%s err=%s",
-                oc[:24],
-                e,
+            _lark.post_text_to_chat(oc, token, text)
+            log.info(
+                "cancel_p0: meeting cancelled fan-out (text) chat_id_tail=%s source=%s",
+                oc[-12:] if len(oc) > 12 else oc,
+                source_incident_chat_id[:24],
             )
+        except Exception as e:
+            log.warning("cancel_p0: meeting cancelled fan-out exception chat=%s err=%s", oc[:24], e)
 
 
 def start_p0(
@@ -2091,7 +2092,7 @@ def start_p0(
             P0_SESSIONS[session_key]["meeting_invite_message_id"] = invite_mid
             P0_SESSIONS[session_key]["meeting_invite_notice_kind"] = "text_unfurl"
         if priority == "P0":
-            _fanout_p0_meeting_created_link_notice(
+            fanout_mids = _fanout_p0_meeting_created_link_notice(
                 token,
                 chat_id,
                 target_chat,
@@ -2099,6 +2100,9 @@ def start_p0(
                 priority=priority,
                 emergency_topic=emergency_topic,
             )
+            if fanout_mids:
+                # Remember every group's join-link message so cancel can recall them all.
+                P0_SESSIONS[session_key]["fanout_link_mids"] = fanout_mids
         if _session_disk.enabled():
             _session_disk.save_session(session_key, P0_SESSIONS[session_key])
     dm_targets = _dm_instruction_targets(trigger_open_id)
