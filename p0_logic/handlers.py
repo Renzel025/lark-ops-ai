@@ -1220,16 +1220,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     break
                 time.sleep(0.5)
 
-            if created and card_mid:
-                ccard = _cards.build_p0_keyword_confirm_created_card(src_chat)
-                st, body = _lark.patch_interactive_card(tenant_token, card_mid, ccard)
-                if st != 200:
-                    log.warning(
-                        "p0_keyword_confirm: patch created card HTTP=%s mid_tail=%s body=%r",
-                        st,
-                        card_mid[-12:] if len(card_mid) > 12 else card_mid,
-                        (body or "")[:200],
-                    )
+            if created:
+                # Simple confirmation — no "cancel this meeting" button (kept the flow simple; an
+                # accidental meeting is ended natively in the VC or via typed "cancel meeting").
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "✅ P0 meeting created.", template="green"
+                )
             elif _start_err:
                 _patch_p0_keyword_confirm_result(
                     tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
