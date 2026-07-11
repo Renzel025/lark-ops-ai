@@ -1792,6 +1792,74 @@ def get_p0_graph_screenshot_url() -> str:
     return (os.getenv("P0_GRAPH_SCREENSHOT_URL") or "").strip()
 
 
+def get_p0_graph_screenshot_use_render_api() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_USE_RENDER_API`` — when ``1`` (default **off**), capture uses the Grafana
+    server-side **Render API** (``/render/d/...``, ``grafana-image-renderer``) with HTTP basic auth
+    instead of launching Playwright/Chromium. Fast, no headless browser, no blank/black, no login
+    session. On render failure the code falls back to the Playwright path unless
+    ``P0_GRAPH_SCREENSHOT_RENDER_API_STRICT=1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_USE_RENDER_API") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_render_api_strict() -> bool:
+    """
+    ``P0_GRAPH_SCREENSHOT_RENDER_API_STRICT`` — when ``1``, a Render-API failure is terminal (posts the
+    FAILED reaction / failure card) instead of falling back to Playwright. Default **off** (fall back).
+    Only consulted when ``P0_GRAPH_SCREENSHOT_USE_RENDER_API=1``.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_API_STRICT") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_graph_screenshot_render_height() -> int:
+    """
+    ``P0_GRAPH_SCREENSHOT_RENDER_HEIGHT`` — pixel height requested from the Render API (``&height=``).
+    Tall enough to fit the whole dashboard in one image so the height-split yields two full bands.
+    Default **2400**; clamped 480–8000. Width reuses ``P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH`` (default 1920).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_HEIGHT") or "2400").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 2400
+    return max(480, min(n, 8000))
+
+
+def get_p0_graph_screenshot_render_split_ratio() -> float:
+    """
+    ``P0_GRAPH_SCREENSHOT_RENDER_SPLIT_RATIO`` — where to split the single tall Render-API PNG into the
+    two Lark bands (top height = ratio × total). Default **0.5** (halves); clamped 0.1–0.9.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_SPLIT_RATIO") or "0.5").strip()
+    try:
+        x = float(raw)
+    except Exception:
+        x = 0.5
+    return max(0.1, min(x, 0.9))
+
+
+def get_p0_graph_screenshot_render_timeout_sec() -> int:
+    """
+    ``P0_GRAPH_SCREENSHOT_RENDER_TIMEOUT_SEC`` — HTTP timeout for the Render-API GET (server-side render
+    can take 10–30s). Default **60**; clamped 10–600. The capture is still bounded by the overall
+    ``P0_GRAPH_SCREENSHOT_ON_DEMAND_MAX_SEC`` / ``AUTO_MAX_SEC`` watchdog.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_TIMEOUT_SEC") or "60").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 60
+    return max(10, min(n, 600))
+
+
 _GRAFANA_RANGE_FROM_QUERY = {
     "30m": "now-30m",
     "1h": "now-1h",
@@ -2320,6 +2388,34 @@ def get_p0_graph_screenshot_swiftshader() -> bool:
     if raw in ("1", "true", "yes", "on"):
         return True
     return sys.platform.startswith("linux")
+
+
+def get_p0_graph_screenshot_chromium_channel() -> str:
+    """
+    Chromium **channel** for Playwright launches. This is the single most important lever for
+    Grafana panels painting under headless on a server.
+
+    Playwright's ``headless=True`` **without** a channel launches the stripped-down *chromium
+    headless shell*, which frequently renders uPlot/canvas/WebGL panels (time-series, KPI) as
+    solid **black** even when the same dashboard paints fine in a real browser. Setting
+    ``channel="chromium"`` launches the **full Chromium build in NEW headless mode** ("real Chrome"),
+    which composites canvas/WebGL like headed. See https://playwright.dev/python/docs/browsers
+    ("new headless mode" — activated via the ``chromium`` channel).
+
+    Requires the full build on the box: ``playwright install chromium`` (installs both the full
+    build and the headless shell). If you only ran ``--only-shell``, the channel launch will fail
+    and the code falls back to the bundled headless shell (black-panel risk).
+
+    * **Unset** → ``chromium`` on Linux (server default; new headless), empty on macOS/Windows
+      (bundled build is fine for headed dev).
+    * Set ``P0_GRAPH_SCREENSHOT_CHROMIUM_CHANNEL=`` (empty) to force the old bundled headless shell.
+    * Set to ``chrome``/``msedge`` to use a system-installed Chrome/Edge instead.
+    """
+    reload_env_runtime()
+    raw = os.getenv("P0_GRAPH_SCREENSHOT_CHROMIUM_CHANNEL")
+    if raw is not None:
+        return raw.strip()
+    return "chromium" if sys.platform.startswith("linux") else ""
 
 
 def get_p0_graph_screenshot_viewport_only() -> bool:

@@ -32,8 +32,11 @@ then a single full-page PNG.
 
 If Lark shows **solid gray / blank** PNGs, the first CSS match was often a **narrow** scroll strip
 (not the dashboard); the bot now skips those and tries the next selector (e.g. ``main``).
-**Solid black** on Linux headless is often missing GPU compositing — SwiftShader flags are enabled by
-default on Linux (see ``get_p0_graph_screenshot_swiftshader``); set ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` to force off.
+**Solid black** panels on Linux headless are almost always the bundled *headless shell* failing to
+composite uPlot/canvas/WebGL. Primary fix: launch the full Chromium build in NEW headless mode via
+``channel="chromium"`` (``get_p0_graph_screenshot_chromium_channel`` — on by default on Linux; needs
+``playwright install chromium``). SwiftShader software-GL flags are also enabled by default on Linux
+(see ``get_p0_graph_screenshot_swiftshader``); set ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` to force off.
 Install **Pillow** so uniformly-dark captures can trigger an automatic viewport-only retry.
 
 Logged-in runs should use a **fixed browser zoom** in the persistent Playwright profile (100 % is
@@ -3853,6 +3856,7 @@ def open_grafana_dashboard_for_inspection() -> int:
     dsf = _config.get_p0_graph_screenshot_device_scale_factor()
     zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
     launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
+    channel = _config.get_p0_graph_screenshot_chromium_channel()
     top_bottom = _uses_top_and_bottom_framing()
     log.info(
         "p0 graph screenshot inspect: headed viewport=%sx%s zoom=%s%% top+bottom=%s",
@@ -3866,6 +3870,7 @@ def open_grafana_dashboard_for_inspection() -> int:
             context = p.chromium.launch_persistent_context(
                 user_data,
                 headless=False,
+                channel=(channel or None),
                 viewport={"width": w, "height": h},
                 device_scale_factor=dsf,
                 args=launch_args,
@@ -3881,7 +3886,9 @@ def open_grafana_dashboard_for_inspection() -> int:
             finally:
                 context.close()
         else:
-            browser = p.chromium.launch(headless=False, args=launch_args)
+            browser = p.chromium.launch(
+                headless=False, channel=(channel or None), args=launch_args
+            )
             try:
                 page = browser.new_page(
                     viewport={"width": w, "height": h},
@@ -3953,6 +3960,63 @@ def _kill_stale_grafana_chromium(user_data: str) -> None:
         log.warning("p0 graph screenshot: stale-chromium cleanup failed: %s", e)
 
 
+def _channel_not_installed(exc: Exception, channel: str) -> bool:
+    """
+    True when ``exc`` indicates the requested Chromium ``channel`` (full build for new headless)
+    is not installed on this box — i.e. only the headless *shell* was downloaded. In that case
+    the caller should retry WITHOUT a channel so captures keep working (bundled headless shell),
+    while logging that panels may render black until ``playwright install chromium`` is run.
+    """
+    if not channel:
+        return False
+    msg = str(exc).lower()
+    return (
+        "executable doesn't exist" in msg
+        or "is not found" in msg
+        or "please run the following command to download" in msg
+        or "looks like playwright" in msg
+    )
+
+
+def _launch_persistent_context_with_channel(
+    pw, user_data, *, headless, channel, viewport, device_scale_factor, args, timeout
+):
+    """
+    ``launch_persistent_context`` with the new-headless ``channel`` (default ``chromium`` on Linux),
+    falling back to the bundled headless shell if that full build is not installed. Fail loud, not
+    wedged: a missing full build logs a clear "run playwright install chromium" line and still
+    returns a (headless-shell) context rather than crashing the whole capture.
+    """
+    try:
+        return pw.chromium.launch_persistent_context(
+            user_data,
+            headless=headless,
+            channel=(channel or None),
+            viewport=viewport,
+            device_scale_factor=device_scale_factor,
+            args=args,
+            timeout=timeout,
+        )
+    except Exception as e:
+        if _channel_not_installed(e, channel):
+            log.error(
+                "p0 graph screenshot: Chromium channel=%s not installed (%s) — falling back to the "
+                "bundled headless SHELL, which may render Grafana panels BLACK. Fix: run "
+                "`playwright install chromium` (full build) on the box, then retry.",
+                channel,
+                e,
+            )
+            return pw.chromium.launch_persistent_context(
+                user_data,
+                headless=headless,
+                viewport=viewport,
+                device_scale_factor=device_scale_factor,
+                args=args,
+                timeout=timeout,
+            )
+        raise
+
+
 def _browser_pool_acquire(
     *,
     user_data: str,
@@ -3961,6 +4025,7 @@ def _browser_pool_acquire(
     dsf: float,
     launch_args: List[str],
     headless: bool,
+    channel: str = "",
 ) -> Optional[Tuple[Any, Any, Any, bool]]:
     """Return ``(playwright, context, page, reused)`` from warm pool, or ``None`` to cold-start."""
     from p0_logic import config as _config
@@ -3995,9 +4060,11 @@ def _browser_pool_acquire(
     try:
         _kill_stale_grafana_chromium(user_data)
         pw = sync_playwright().start()
-        context = pw.chromium.launch_persistent_context(
+        context = _launch_persistent_context_with_channel(
+            pw,
             user_data,
             headless=headless,
+            channel=channel,
             viewport={"width": w, "height": h},
             device_scale_factor=dsf,
             args=launch_args,
@@ -4019,11 +4086,189 @@ def _browser_pool_touch() -> None:
             _BROWSER_POOL["last"] = time.time()
 
 
+def _derive_grafana_render_url(dashboard_url: str) -> str:
+    """
+    Turn a normal Grafana dashboard URL into its server-side Render-API URL:
+    ``https://<host>/d/<uid>/<slug>?...`` → ``https://<host>/render/d/<uid>/<slug>?...``.
+
+    Preserves ``orgId`` / ``from`` / ``to`` / timezone already on the URL, drops ``refresh``
+    (pointless for a one-shot render), and appends ``width`` / ``height`` (and ``tz`` when the
+    capture timezone is known and not already present). Idempotent if ``/render`` is already there.
+    """
+    from p0_logic import config as _config
+
+    u = (dashboard_url or "").strip() or _config.get_p0_graph_screenshot_url()
+    if not u:
+        return ""
+    parsed = urlparse(u)
+    path = parsed.path or "/"
+    if not path.startswith("/render/"):
+        idx = path.find("/d/")
+        if idx < 0:
+            # Not a dashboard-style path we recognise — cannot build a render URL.
+            return ""
+        path = path[:idx] + "/render" + path[idx:]
+
+    q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+         if k.lower() not in ("refresh", "width", "height")]
+    w = _config.get_p0_graph_screenshot_viewport_width()
+    h = _config.get_p0_graph_screenshot_render_height()
+    q.append(("width", str(w)))
+    q.append(("height", str(h)))
+    if not any(k.lower() == "tz" for k, _ in q):
+        tz_name = (_config.get_p0_graph_screenshot_timezone_name() or "").strip()
+        if tz_name:
+            q.append(("tz", tz_name))
+    return urlunparse(parsed._replace(path=path, query=urlencode(q)))
+
+
+def _split_png_vertical_by_ratio(png_bytes: bytes, ratio: float) -> List[bytes]:
+    """
+    Split one tall PNG into a top band (height = ratio × total) and a bottom band.
+    Falls back to the whole image as a single part if Pillow is missing or the split fails.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        log.warning(
+            "p0 graph screenshot render: Pillow not installed — posting single render PNG "
+            "(install pillow for the 2-band split)"
+        )
+        return [png_bytes]
+    try:
+        im = Image.open(BytesIO(png_bytes))
+        im.load()
+    except Exception as e:
+        log.warning("p0 graph screenshot render: failed to open render PNG for split: %s", e)
+        return [png_bytes]
+    w, h = im.size
+    if h < 8:
+        return [png_bytes]
+    r = max(0.1, min(float(ratio or 0.5), 0.9))
+    mid = max(1, min(int(h * r), h - 1))
+    out: List[bytes] = []
+    for box in ((0, 0, w, mid), (0, mid, w, h)):
+        try:
+            crop = im.crop(box)
+            buf = BytesIO()
+            crop.save(buf, format="PNG", optimize=True)
+            out.append(buf.getvalue())
+        except Exception as e:
+            log.warning("p0 graph screenshot render: failed to encode render split band: %s", e)
+            return [png_bytes]
+    return out
+
+
+def _capture_via_grafana_render_api(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
+    """
+    PRIMARY capture path (no browser): fetch the dashboard from the Grafana server-side Render API
+    (``grafana-image-renderer``) over HTTP with basic auth, validate it's a real PNG, then split the
+    single tall image into the usual 2 Lark bands (top / bottom).
+
+    Returns ``(pngs, captured_at)`` — empty list on any failure so the caller can fall back to
+    Playwright (unless ``P0_GRAPH_SCREENSHOT_RENDER_API_STRICT=1``).
+    """
+    from p0_logic import config as _config
+
+    render_url = _derive_grafana_render_url((capture_url or "").strip())
+    if not render_url:
+        _set_capture_error("Could not derive Render-API URL from P0_GRAPH_SCREENSHOT_URL (no /d/ path).")
+        log.warning(
+            "p0 graph screenshot render: cannot derive /render URL from %r",
+            (capture_url or "")[:80],
+        )
+        return [], ""
+
+    user = _config.get_p0_graph_screenshot_username()
+    pwd = _config.get_p0_graph_screenshot_password()
+    if not user or not pwd:
+        _set_capture_error("Render API needs P0_GRAPH_SCREENSHOT_USERNAME / _PASSWORD (basic auth).")
+        log.warning("p0 graph screenshot render: missing basic-auth username/password")
+        return [], ""
+
+    timeout_sec = _config.get_p0_graph_screenshot_render_timeout_sec()
+    tz = _resolve_capture_tz()
+
+    try:
+        import requests
+    except ImportError:
+        _set_capture_error("requests not installed on server (needed for Render API).")
+        log.warning("p0 graph screenshot render: requests not installed")
+        return [], ""
+
+    # Log without query so from/to/tz are visible but no secrets leak (auth is in the header).
+    log.info(
+        "p0 graph screenshot render: GET %s?<params> width/height=%sx%s timeout=%ss",
+        render_url.split("?", 1)[0],
+        _config.get_p0_graph_screenshot_viewport_width(),
+        _config.get_p0_graph_screenshot_render_height(),
+        timeout_sec,
+    )
+    try:
+        resp = requests.get(
+            render_url,
+            auth=(user, pwd),
+            timeout=timeout_sec,
+            stream=False,
+        )
+    except Exception as e:
+        _set_capture_error(f"Render API request failed: {e}")
+        log.warning("p0 graph screenshot render: HTTP request failed: %s", e)
+        return [], ""
+
+    status = resp.status_code
+    ctype = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    body = resp.content or b""
+    if status != 200 or ctype != "image/png" or len(body) < 3000:
+        _set_capture_error(
+            f"Render API returned HTTP={status} type={ctype or '?'} size={len(body)} "
+            "(expected 200 image/png > 3KB)."
+        )
+        log.warning(
+            "p0 graph screenshot render: bad response HTTP=%s type=%s size=%s first=%r",
+            status,
+            ctype or "?",
+            len(body),
+            body[:80],
+        )
+        return [], ""
+
+    cap_time = _format_captured_at(datetime.now(tz))
+    parts = _split_png_vertical_by_ratio(body, _config.get_p0_graph_screenshot_render_split_ratio())
+    log.info(
+        "p0 graph screenshot render: OK size=%s bytes → %s image part(s) captured_at=%s",
+        len(body),
+        len(parts),
+        cap_time,
+    )
+    return parts, cap_time
+
+
 def _capture_png_payloads(capture_url: Optional[str] = None) -> Tuple[List[bytes], str]:
     """
     Returns a non-empty list of PNG byte blobs and a formatted capture timestamp.
     On-demand: retries once with full cold capture if the first attempt returns empty.
+
+    PRIMARY path: when ``P0_GRAPH_SCREENSHOT_USE_RENDER_API=1`` the Grafana server-side Render API is
+    used (no browser). On render failure it falls back to Playwright below unless
+    ``P0_GRAPH_SCREENSHOT_RENDER_API_STRICT=1``.
     """
+    from p0_logic import config as _config
+
+    if _config.get_p0_graph_screenshot_use_render_api():
+        pngs, captured_at = _capture_via_grafana_render_api(capture_url)
+        if pngs:
+            return pngs, captured_at
+        if _config.get_p0_graph_screenshot_render_api_strict():
+            log.warning(
+                "p0 graph screenshot render: failed and RENDER_API_STRICT=1 — not falling back to Playwright"
+            )
+            return [], ""
+        log.info(
+            "p0 graph screenshot render: failed — falling back to Playwright capture (%s)",
+            _get_capture_error() or "no detail",
+        )
+
     if _is_on_demand_capture() and _effective_fast_capture():
         attempts = 1
     else:
@@ -4296,6 +4541,12 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
         launch_args.extend([a for a in extra if a not in launch_args])
         log.info("p0 graph screenshot: SwiftShader (ANGLE) flags enabled for headless GL")
     headless = _config.get_p0_graph_screenshot_playwright_headless()
+    channel = _config.get_p0_graph_screenshot_chromium_channel()
+    if channel:
+        log.info(
+            "p0 graph screenshot: Chromium channel=%s (new headless mode — real GPU/canvas compositing)",
+            channel,
+        )
     snap_full = split_halves or full_page or bool(clip_selectors)
     dsf = _config.get_p0_graph_screenshot_device_scale_factor()
     zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
@@ -4312,6 +4563,7 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
         dsf=dsf,
         launch_args=launch_args,
         headless=headless,
+        channel=channel,
     )
     if pooled:
         _pw, _ctx, page, reused = pooled
@@ -4348,9 +4600,11 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
                 headless,
             )
             _kill_stale_grafana_chromium(user_data)
-            context = p.chromium.launch_persistent_context(
+            context = _launch_persistent_context_with_channel(
+                p,
                 user_data,
                 headless=headless,
+                channel=channel,
                 viewport={"width": w, "height": h},
                 device_scale_factor=dsf,
                 args=launch_args,
@@ -4380,7 +4634,22 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
                 return out
             finally:
                 context.close()
-        browser = p.chromium.launch(headless=headless, args=launch_args)
+        try:
+            browser = p.chromium.launch(
+                headless=headless, channel=(channel or None), args=launch_args
+            )
+        except Exception as e:
+            if _channel_not_installed(e, channel):
+                log.error(
+                    "p0 graph screenshot: Chromium channel=%s not installed (%s) — falling back to "
+                    "bundled headless SHELL (panels may render BLACK). Run `playwright install "
+                    "chromium` on the box.",
+                    channel,
+                    e,
+                )
+                browser = p.chromium.launch(headless=headless, args=launch_args)
+            else:
+                raise
         try:
             page = browser.new_page(
                 viewport={"width": w, "height": h},
