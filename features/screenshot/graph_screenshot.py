@@ -3464,10 +3464,15 @@ def _cold_grid_ready_timeout_ms(nav_ms: int) -> int:
     """
     from p0_logic import config as _config
 
+    # Cap EACH cold grid-gate attempt so a stuck cold render reloads quickly (self-heal) instead of
+    # stalling the full content-ready budget (e.g. 90s) on a single attempt — the 90s stall reads as
+    # "frozen". A cold render that will succeed usually paints within ~15-20s; if not, a reload
+    # (warm second load) is faster than waiting longer.
+    cap = 25_000
     t = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
     if t <= 0:
-        t = max(nav_ms, 45_000)
-    return t
+        return max(min(nav_ms, cap), 15_000)
+    return min(t, cap)
 
 
 _GRID_AND_PAINT_READY_JS = r"""
