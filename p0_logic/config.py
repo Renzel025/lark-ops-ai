@@ -1471,6 +1471,20 @@ def get_p0_keyword_groq_gate() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_keyword_confirm_dm_enabled() -> bool:
+    """
+    ``P0_KEYWORD_CONFIRM_DM_ENABLED`` — when ``1``, a group ``p0`` mention that the AI/Groq triage
+    decides is **not** a fresh declaration (today silently ignored) instead DMs the duty a Yes/No
+    confirmation card ("P0 mentioned — create meeting?"). **Default ``0`` (off)** so prod is
+    unaffected until explicitly enabled. Recipients reuse ``P0_DM_INSTRUCTION_OPEN_IDS`` /
+    ``P0_DM_INSTRUCTION_OPEN_ID`` (see ``get_dm_instruction_open_ids``). Explicit regex
+    declarations still start a meeting immediately and are never routed through this card.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_CONFIRM_DM_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_keyword_ai_triage() -> bool:
     """
     ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and an AI key is set (``ANTHROPIC_API_KEY``,

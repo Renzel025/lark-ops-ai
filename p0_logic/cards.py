@@ -815,6 +815,103 @@ def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
     }
 
 
+def build_p0_keyword_confirm_dm_card(
+    nonce: str,
+    phrase: str,
+    source_chat_name: str = "",
+) -> Dict[str, Any]:
+    """
+    DM'd to duty when a group ``p0`` mention was NOT auto-declared (AI/Groq said not a fresh
+    declaration). Yes → start a P0 meeting in the original incident group; No → dismiss.
+    ``update_multi: true`` so the handler can PATCH this card in place after a click.
+    """
+    nonce = (nonce or "").strip()
+    grp = (source_chat_name or "").strip() or "an incident group"
+    quoted = (phrase or "").strip()
+    if len(quoted) > 300:
+        quoted = quoted[:300] + "…"
+    val_yes: Dict[str, Any] = {"action": "p0_keyword_confirm_yes"}
+    val_no: Dict[str, Any] = {"action": "p0_keyword_confirm_no"}
+    if nonce:
+        val_yes["kw_confirm_nonce"] = nonce
+        val_no["kw_confirm_nonce"] = nonce
+    body_lines = [
+        "**P0 is being mentioned** in **{}**.".format(grp),
+    ]
+    if quoted:
+        body_lines.append("> {}".format(quoted.replace("\n", " ")))
+    body_lines.append("The bot did not auto-declare this. Create a P0 meeting?")
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {
+            "template": "orange",
+            "title": {"tag": "plain_text", "content": "⚠️ P0 mentioned — create meeting?"},
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+                {"tag": "hr"},
+                {
+                    "tag": "column_set",
+                    "flex_mode": "none",
+                    "background_style": "default",
+                    "horizontal_spacing": "8px",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "Yes, create meeting"},
+                                    "type": "primary",
+                                    "value": val_yes,
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "text": {"tag": "plain_text", "content": "No, dismiss"},
+                                    "type": "default",
+                                    "value": val_no,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def build_p0_keyword_confirm_result_card(
+    text: str,
+    template: str = "grey",
+    title: str = "P0 mention confirmation",
+) -> Dict[str, Any]:
+    """Grey (or coloured) outcome card that PATCHes the Yes/No confirm DM after a click."""
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {
+            "template": (template or "grey").strip() or "grey",
+            "title": {"tag": "plain_text", "content": title},
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": (text or "").strip()}},
+            ]
+        },
+    }
+
+
 def _dm_scope_button_fields(
     *,
     target_chat: str = "",

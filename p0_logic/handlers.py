@@ -360,6 +360,27 @@ def _extract_card_action_open_message_id(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _patch_p0_keyword_confirm_result(
+    tenant_token: str,
+    card_message_id: str,
+    text: str,
+    template: str = "grey",
+) -> None:
+    """PATCH the P0 keyword confirm DM card in place with an outcome (expired/created/dismissed)."""
+    mid = (card_message_id or "").strip()
+    if not mid:
+        return
+    card = _cards.build_p0_keyword_confirm_result_card(text, template=template)
+    st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+    if st != 200:
+        log.warning(
+            "p0_keyword_confirm: patch card HTTP=%s mid_tail=%s body=%r",
+            st,
+            mid[-12:] if len(mid) > 12 else mid,
+            (body or "")[:200],
+        )
+
+
 def _extract_form_field(payload: Dict[str, Any], field: str) -> str:
     """Read a form field value, including empty string when the user cleared the field."""
     val_d = _card_action_value_dict(payload)
@@ -1085,6 +1106,60 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         "ℹ️ This P1 confirmation is out of date or was already answered.",
                     )
                 return
+            return
+
+        if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no"):
+            # DM Yes/No for a group ``p0`` mention that was NOT auto-declared
+            # (P0_KEYWORD_CONFIRM_DM_ENABLED). Pending state lives in lark_logic; consume the
+            # nonce once so a double-click / Lark redelivery cannot double-start a meeting.
+            from lark_logic import p0_keyword_confirm_consume
+
+            val = _card_action_value_dict(payload)
+            nonce = str(val.get("kw_confirm_nonce") or "").strip()
+            card_mid = _extract_card_action_open_message_id(payload)
+
+            if action_name == "p0_keyword_confirm_no":
+                entry = p0_keyword_confirm_consume(nonce)
+                if entry is None:
+                    _patch_p0_keyword_confirm_result(
+                        tenant_token, card_mid, "⌛ This confirmation expired or was already answered."
+                    )
+                    return
+                log.info("p0_keyword_confirm: dismissed nonce=%s", nonce)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "✅ Dismissed — no meeting created."
+                )
+                return
+
+            # p0_keyword_confirm_yes — consume BEFORE start_p0 (idempotent).
+            entry = p0_keyword_confirm_consume(nonce)
+            if entry is None:
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "⌛ This confirmation expired or was already answered."
+                )
+                return
+            src_chat = str(entry.get("source_incident_chat_id") or "").strip()
+            if _session.chat_has_active_session(src_chat):
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "ℹ️ A meeting is already active in that group."
+                )
+                return
+            log.info(
+                "p0_keyword_confirm: YES → start_p0 chat_tail=%s nonce=%s",
+                src_chat[-12:] if len(src_chat) > 12 else src_chat,
+                nonce,
+            )
+            _session.start_p0(
+                src_chat,
+                tenant_token,
+                str(entry.get("trigger_open_id") or "").strip(),
+                priority="P0",
+                source_chat_name=str(entry.get("source_chat_name") or "").strip(),
+                trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
+            )
+            _patch_p0_keyword_confirm_result(
+                tenant_token, card_mid, "✅ P0 meeting created.", template="green"
+            )
             return
 
         if not sender_open_id or not action_name:
