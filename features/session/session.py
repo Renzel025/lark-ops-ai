@@ -30,6 +30,35 @@ _P1_PROMPT_LOCK = threading.Lock()
 _LAST_ENDED_SNAPSHOT_BY_CHAT: Dict[str, Dict[str, str]] = {}
 _LAST_ENDED_SNAPSHOT_LOCK = threading.Lock()
 
+# Meetings just cancelled (keyed by meeting_no / meeting_id / reserve_id -> ts). A cancel already
+# ends the VC and posts a "cancelled" card, which makes Lark fire vc.meeting.meeting_ended_v1; this
+# registry lets the ended-event handlers skip so we don't ALSO post a redundant "ended" card.
+_CANCELLED_MEETINGS: Dict[str, float] = {}
+_CANCELLED_MEETINGS_LOCK = threading.Lock()
+_CANCELLED_MEETINGS_TTL_SEC = 300.0
+
+
+def _mark_meeting_cancelled(*keys: str) -> None:
+    now = time.time()
+    with _CANCELLED_MEETINGS_LOCK:
+        for k in keys:
+            k = (k or "").strip()
+            if k:
+                _CANCELLED_MEETINGS[k] = now
+        # prune
+        for k in [k for k, t in _CANCELLED_MEETINGS.items() if now - t > _CANCELLED_MEETINGS_TTL_SEC]:
+            _CANCELLED_MEETINGS.pop(k, None)
+
+
+def _meeting_recently_cancelled(*keys: str) -> bool:
+    now = time.time()
+    with _CANCELLED_MEETINGS_LOCK:
+        for k in keys:
+            k = (k or "").strip()
+            if k and (now - _CANCELLED_MEETINGS.get(k, 0.0)) <= _CANCELLED_MEETINGS_TTL_SEC:
+                return True
+    return False
+
 P0_COOLDOWN_SEC = _config.P0_COOLDOWN_SEC
 
 # Sentinel for DM overview queue items that are not tied to a live P0 session row.
@@ -1252,6 +1281,10 @@ def cancel_p0_session(
     meeting_id = str(sess.get("meeting_id") or "").strip()
     meeting_no = str(sess.get("meeting_no") or "").strip()
     vc_end_ok = True
+    # Mark BEFORE ending the VC: end_vc fires vc.meeting.meeting_ended_v1, whose handler would
+    # otherwise post a second "ended" card on top of this cancel's "cancelled" card.
+    if meeting_no or meeting_id or reserve_id:
+        _mark_meeting_cancelled(meeting_no, meeting_id, reserve_id)
     if token and sess:
         # End the LIVE meeting reliably: resolve the active meeting id from the reserve, then end it
         # (the stored meeting_id can be stale/misbound and yields 404). Only treat this as a failure
@@ -1341,6 +1374,9 @@ def cancel_p0_session(
 
 
 def end_p0_session_by_meeting_no(meeting_no: str, token: Optional[str] = None) -> None:
+    if _meeting_recently_cancelled(meeting_no):
+        log.info("end_p0_session_by_meeting_no: skip — meeting_no=%s was just cancelled (no ended card)", meeting_no)
+        return
     chat_id, _ = find_session_by_meeting_no(meeting_no)
     if not chat_id:
         log.warning("No active p0 session found for meeting_no=%s", meeting_no)
@@ -1356,6 +1392,12 @@ def end_p0_session_by_meeting_ref(
 ) -> None:
     """Resolve session by long ``meeting.id`` or stored ref; optional ``meeting_no`` if join never bound."""
     meeting_ref = (meeting_ref or "").strip()
+    if _meeting_recently_cancelled(meeting_ref, meeting_no_fallback):
+        log.info(
+            "end_p0_session_by_meeting_ref: skip — meeting was just cancelled (ref=%s no=%s), no ended card",
+            meeting_ref, meeting_no_fallback,
+        )
+        return
     chat_id, _ = find_session_by_meeting_ref(meeting_ref)
     if not chat_id and meeting_no_fallback:
         chat_id, _ = find_session_by_meeting_no(meeting_no_fallback.strip())
