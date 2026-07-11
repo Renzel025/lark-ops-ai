@@ -4115,6 +4115,10 @@ def _derive_grafana_render_url(dashboard_url: str) -> str:
     h = _config.get_p0_graph_screenshot_render_height()
     q.append(("width", str(w)))
     q.append(("height", str(h)))
+    # Kiosk = panels-only (no Grafana left nav / top chrome) so the render is full-width and sized
+    # like the old capture, not squished beside the sidebar. Honors P0_GRAPH_SCREENSHOT_KIOSK.
+    if _config.get_p0_graph_screenshot_append_kiosk() and not any(k.lower() == "kiosk" for k, _ in q):
+        q.append(("kiosk", "tv"))
     if not any(k.lower() == "tz" for k, _ in q):
         tz_name = (_config.get_p0_graph_screenshot_timezone_name() or "").strip()
         if tz_name:
