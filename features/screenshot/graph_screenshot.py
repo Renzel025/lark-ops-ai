@@ -3584,9 +3584,13 @@ def _ensure_dashboard_grid_ready_with_reload(
         ):
             log.warning("p0 graph screenshot: re-login during reload self-heal failed")
     if max_reloads > 0:
-        log.warning(
-            "p0 graph screenshot: dashboard grid still unpainted after %s reload(s) — "
-            "capturing anyway (likely blank last resort)",
+        # ERROR (not WARNING): a blank capture means the Grafana screenshot effectively did NOT send
+        # a usable image — surface it to the monitoring group in real time (min_level=ERROR cutoff).
+        # Usually means the Grafana session in the Playwright profile is dead (login page, not the
+        # dashboard) — re-seed with scripts/grafana_playwright_login_once.py.
+        log.error(
+            "p0 graph screenshot: dashboard grid still unpainted after %s reload(s) — capturing a "
+            "LIKELY-BLANK image (Grafana session likely dead / stuck on login — re-seed the profile)",
             max_reloads,
         )
     else:
