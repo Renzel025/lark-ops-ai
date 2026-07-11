@@ -1312,17 +1312,17 @@ def cancel_p0_session(
         prompt_cid = _session_prompt_chat_id(sess, chat_id)
         if not patched:
             # The original invite was a text_unfurl (now recalled) or couldn't be patched in place:
-            # post a fresh cancelled card. Land it in BOTH the group the invite was posted to
-            # (prompt_cid) AND the source incident group, so the incident group always reflects the
-            # cancel — not only the fan-out hub.
-            cancel_card = _cards.build_meeting_link_cancelled_card(
-                priority=priority,
-                duration_text=duration_text,
-                meeting_no=meeting_no,
-                reason=reason,
-                emergency_topic=em_topic,
-                update_multi=False,
-            )
+            # post a simple plain-text cancelled notice (not a card). Land it in BOTH the group the
+            # invite was posted to (prompt_cid) AND the source incident group, so the incident group
+            # always reflects the cancel — not only the fan-out hub.
+            parts = ["🔴 {} meeting cancelled.".format(priority or "P0")]
+            if meeting_no:
+                parts.append("Meeting ID: {}".format(meeting_no))
+            if duration_text:
+                parts.append("Duration: {}".format(duration_text))
+            if (reason or "").strip() and reason.strip().lower() != "unspecified":
+                parts.append("Reason: {}".format(reason.strip()))
+            cancel_text = " · ".join(parts)
             posted_to = set()
             for dest in (prompt_cid, chat_id):
                 dest = (dest or "").strip()
@@ -1330,9 +1330,9 @@ def cancel_p0_session(
                     continue
                 posted_to.add(dest)
                 try:
-                    _lark.post_card_to_chat(dest, token, cancel_card)
+                    _lark.post_text_to_chat(dest, token, cancel_text)
                 except Exception as e:
-                    log.error("Failed to post meeting cancelled card (fallback) dest_tail=%s err=%s", dest[-12:], e)
+                    log.error("Failed to post meeting cancelled text (fallback) dest_tail=%s err=%s", dest[-12:], e)
         _fanout_p0_meeting_cancelled(
             token,
             source_incident_chat_id=chat_id,
