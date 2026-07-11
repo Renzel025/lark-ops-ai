@@ -236,6 +236,15 @@ def _maybe_p0_keyword_confirm_dm(
     """
     if not get_p0_keyword_confirm_dm_enabled():
         return
+    # Never confirm for explicit negations ("this is not p0") or past/informational references
+    # ("the p0 last week") — those are genuinely not a current P0. Everything else (statements the
+    # AI called handoff, and questions like "are we going to declare this as p0?") is fair game.
+    if _is_explicit_p0_negation(text_raw) or _is_p0_informational_ask_or_past_reference(text_raw):
+        log.info(
+            "Incident group: P0 keyword confirm DM skipped (negation / past reference) chat_id=%s",
+            chat_id,
+        )
+        return
     if chat_has_active_session(chat_id):
         log.info(
             "Incident group: P0 keyword confirm DM skipped (session already active) chat_id=%s",
@@ -1596,6 +1605,18 @@ def process_message(
                     chat_id,
                     (text_raw or "")[-80:],
                 )
+                # Also offer the duty a Yes/No "create meeting?" DM (P0_KEYWORD_CONFIRM_DM_ENABLED):
+                # Issue Watch only auto-declares on multi-report/high-confidence, so a single p0
+                # mention would otherwise pass silently. Falls through to Issue Watch after.
+                _maybe_p0_keyword_confirm_dm(
+                    chat_id=chat_id,
+                    token=token,
+                    user_id=user_id,
+                    sender_lark_user_id=sender_lark_user_id,
+                    source_chat_name=source_chat_name,
+                    text_raw=text_raw,
+                    message_id=message_id,
+                )
             if _p0_kw_hit and not _p0_skip_for_issue_watch:
                 if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(
@@ -1613,6 +1634,15 @@ def process_message(
                     log.info(
                         "Incident group: P0 trigger ignored (question about priority) text=%r",
                         text_raw[:200],
+                    )
+                    _maybe_p0_keyword_confirm_dm(
+                        chat_id=chat_id,
+                        token=token,
+                        user_id=user_id,
+                        sender_lark_user_id=sender_lark_user_id,
+                        source_chat_name=source_chat_name,
+                        text_raw=text_raw,
+                        message_id=message_id,
                     )
                     return
                 if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
