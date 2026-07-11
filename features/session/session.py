@@ -1134,28 +1134,34 @@ def end_p0_session(
         em_topic = str(sess.get("emergency_topic") or "").strip()
         patched = _patch_meeting_invite_to_terminal(sess, token, kind="ended", duration_text=duration_text)
         if not patched:
-            # text_unfurl invite (link now recalled) or un-patchable message: post a fresh ended card
-            # so the group where the invite lived reflects the ended state instead of a dead link.
-            log.warning(
-                "end_p0_session: could not patch invite card to ended state chat_id=%s message_id=%s — posting fresh ended card",
-                chat_id,
-                str(sess.get("meeting_invite_message_id") or "")[:24],
-            )
+            # text_unfurl invite (link now recalled) or un-patchable message: post a simple plain-text
+            # ended notice (not a card) so the group reflects the ended state instead of a dead link.
             prompt_cid = _session_prompt_chat_id(sess, chat_id)
-            try:
-                _lark.post_card_to_chat(
-                    prompt_cid,
-                    token,
-                    _cards.build_meeting_link_ended_card(
-                        priority=priority,
-                        duration_text=duration_text,
-                        meeting_no=meeting_no,
-                        emergency_topic=em_topic,
-                        update_multi=False,
-                    ),
-                )
-            except Exception as e:
-                log.error("end_p0_session: failed to post ended card (fallback) dest_tail=%s err=%s", prompt_cid[-12:], e)
+            parts = ["{} meeting ended.".format(priority or "P0")]
+            if meeting_no:
+                parts.append("Meeting ID: {}".format(meeting_no))
+            if duration_text:
+                parts.append("Duration: {}".format(duration_text))
+            ended_text = " · ".join(parts)
+            posted_to = set()
+            # Recall the join link in every fan-out group (boss/hub) so no dead link lingers there.
+            for _fc in (sess.get("fanout_link_mids") or []):
+                fchat = str((_fc or ["", ""])[0] or "").strip()
+                fmid = str((_fc or ["", ""])[1] or "").strip()
+                if fmid:
+                    try:
+                        _lark.recall_im_message(token, fmid)
+                    except Exception as e:
+                        log.warning("end_p0_session: recall fan-out join link failed err=%s", e)
+            for dest in [prompt_cid, chat_id] + [str((x or ["", ""])[0] or "").strip() for x in (sess.get("fanout_link_mids") or [])]:
+                dest = (dest or "").strip()
+                if not dest or dest in posted_to:
+                    continue
+                posted_to.add(dest)
+                try:
+                    _lark.post_text_to_chat(dest, token, ended_text)
+                except Exception as e:
+                    log.error("end_p0_session: failed to post ended text dest_tail=%s err=%s", dest[-12:], e)
     if token and chat_id:
         s_end = P0_SESSIONS.get(chat_id)
         if s_end and s_end.get("dm_instruction_deferred"):
