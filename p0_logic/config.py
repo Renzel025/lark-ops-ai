@@ -655,15 +655,18 @@ def get_vc_recording_fanout_drive_perm() -> str:
     """
     Optional Drive API collaborator role for Minutes after VC ``set_permission`` (view-only).
 
-    ``VC_RECORDING_FANOUT_DRIVE_PERM``: ``edit`` or ``view`` to grant via Drive API; empty / ``0`` = skip.
+    ``VC_RECORDING_FANOUT_DRIVE_PERM``: ``view`` | ``edit`` | ``full_access`` (``manage`` alias = ``full_access``,
+    the UI "Can manage") to grant via Drive API; empty / ``0`` = skip.
 
-    Requires duty **user_access_token** with ``docs:permission.member:create`` (+ ``update`` for edit).
+    Requires duty **user_access_token** with ``docs:permission.member:create`` (+ ``update`` for edit/full_access).
     """
     reload_env_runtime()
     v = (os.getenv("VC_RECORDING_FANOUT_DRIVE_PERM") or "").strip().lower()
     if not v or v in ("0", "false", "no", "off"):
         return ""
-    if v in ("view", "edit"):
+    if v == "manage":
+        return "full_access"
+    if v in ("view", "edit", "full_access"):
         return v
     return ""
 
@@ -2320,6 +2323,34 @@ def get_p0_graph_screenshot_band_max_wait_ms() -> int:
     except ValueError:
         n = 30_000
     return max(5000, min(n, 120_000))
+
+
+def get_p0_graph_screenshot_blank_retry() -> bool:
+    """
+    Re-capture a screenshot band when the panel region comes out blank (top chrome painted but the
+    charts below did not). This is a **bug fix**, so it defaults **on**; the extra wait/re-capture is
+    only paid when a blank is actually detected AND the readiness gate timed out — the common good
+    path is unchanged. Disable with ``P0_GRAPH_SCREENSHOT_BLANK_RETRY=0``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BLANK_RETRY") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+def get_p0_graph_screenshot_blank_max_retries() -> int:
+    """
+    Extra band re-captures allowed when a blank panel region is detected (each with a longer panel
+    wait, bounded by ``PANEL_CONTENT_READY_TIMEOUT_MS``). Default **2**; capped at 5.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_BLANK_MAX_RETRIES") or "2").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 2
+    return max(0, min(n, 5))
 
 
 def get_p0_graph_screenshot_fast_capture() -> bool:
