@@ -564,14 +564,17 @@ def _patch_meeting_invite_to_terminal(
         return False
     if str((sess or {}).get("meeting_invite_notice_kind") or "") == "text_unfurl":
         # The invite was posted as a plain-text message whose VC link Lark unfurls into a preview.
-        # patch_interactive_card CANNOT rewrite a text message, and the unfurl preview does NOT flip
-        # to "ended/cancelled" when the meeting stops — the live-looking join link would linger in
-        # the incident group. Recall the original link message (best effort) so the stale link is
-        # removed, then return False so the caller posts a fresh terminal card IN THE SAME CHAT.
+        # On END: Lark's native VC card flips to "Ended" on its own — so do NOTHING (no recall, no
+        # extra prompt). Return True so the caller posts no terminal notice; the native card is enough.
+        if kind == "ended":
+            log.info("patch meeting invite kind=ended text_unfurl -> no-op (native VC card shows Ended) mid=%s", mid[:24])
+            return True
+        # On CANCEL: recall the link message so no live-looking join link lingers, then return False
+        # so the caller posts a plain-text "cancelled" notice.
         try:
             st_r, body_r = _lark.recall_im_message(token, mid)
             log.info(
-                "patch meeting invite kind=text_unfurl -> recalled link msg HTTP=%s mid=%s body=%s",
+                "patch meeting invite kind=cancelled text_unfurl -> recalled link msg HTTP=%s mid=%s body=%s",
                 st_r, mid[:24], (body_r or "")[:160],
             )
         except Exception as e:
