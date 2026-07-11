@@ -2112,9 +2112,22 @@ def start_p0(
         [x for x in dm_targets if (x or "").strip()],
     )
     dm_targets_list = [x for x in dm_targets if (x or "").strip()]
+
+    def _cancelled_midflight() -> bool:
+        # start_p0 can run in a background thread; if the operator cancelled the (accidental) meeting
+        # while it was still being created, the session is already popped. Skip the remaining
+        # declare-time side effects (Bitable, Grafana, overview DM) so a cancel truly sends nothing.
+        if session_key not in P0_SESSIONS:
+            log.info(
+                "start_p0: cancelled mid-creation — skipping bitable/grafana/overview session_key=%s",
+                session_key,
+            )
+            return True
+        return False
+
     # Run the Bitable adjustment notice FIRST, before scheduling the Grafana screenshot,
     # so a slow/hung Grafana path can never delay the Bitable ops/deploy cards.
-    if priority == "P0":
+    if priority == "P0" and not _cancelled_midflight():
         try:
             from features.overview import bitable_adjustments as _bitable_adj
 
@@ -2126,12 +2139,13 @@ def start_p0(
             )
         except Exception as e:
             log.warning("start_p0: adjustment bitable on declare failed: %s", e)
-    try:
-        from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
+    if not _cancelled_midflight():
+        try:
+            from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
 
-        schedule_p0_graph_screenshot(token, priority, chat_label)
-    except Exception as e:
-        log.warning("start_p0: graph screenshot hook failed: %s", e)
+            schedule_p0_graph_screenshot(token, priority, chat_label)
+        except Exception as e:
+            log.warning("start_p0: graph screenshot hook failed: %s", e)
     # Auto overview preview only when P0 is declared from Issue Watch DM (explicit alert_key).
     # Typed p0 / thread confirm always get the green Build overview card.
     issue_watch_key = (issue_watch_alert_key or "").strip()
@@ -2148,6 +2162,8 @@ def start_p0(
     for oid in dm_targets:
         if not oid:
             continue
+        if _cancelled_midflight():
+            break
         dm_item: Dict[str, Any] = {
             "chat_id": chat_id,
             "target_chat": target_chat,
