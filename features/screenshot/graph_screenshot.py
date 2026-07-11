@@ -2555,21 +2555,178 @@ def _grafana_login_form_visible(page) -> bool:
         return False
 
 
+def _grafana_login_page_detected(page) -> bool:
+    """
+    Robustly decide "are we NOT authenticated?" AFTER a goto — regardless of cookies.
+
+    A stale persistent-profile session makes Grafana serve ``/login`` (or a login form) even
+    though cookies exist, so we must NOT infer "cookies exist => logged in". We are on the login
+    page when ANY of these hold and the dashboard grid is NOT painted:
+      - URL path contains ``/login``, OR
+      - a password / username input exists in the DOM, OR
+      - a "Log in" / "Sign in" submit button exists.
+    This is deliberately looser than ``_grafana_login_form_visible`` (does not require the form to
+    be laid out to a min size) so a login page mid-mount is still detected instead of silently
+    skipped.
+    """
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                  // Painted dashboard grid => authenticated, definitely not the login page.
+                  const grid = document.querySelector(
+                    '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
+                  );
+                  if (grid) {
+                    const gr = grid.getBoundingClientRect();
+                    if (gr.width > 200 && gr.height > 120) return false;
+                  }
+                  const path = (window.location.pathname || '').toLowerCase();
+                  if (path.indexOf('/login') !== -1) return true;
+                  const pw = document.querySelector(
+                    'input[name="password"], input[type="password"], '
+                    + '[data-testid="data-testid Password input"]'
+                  );
+                  if (pw) return true;
+                  const user = document.querySelector(
+                    'input[name="user"], input[name="username"], #user-input, '
+                    + 'input[autocomplete="username"], [data-testid="data-testid Username input"]'
+                  );
+                  if (user) return true;
+                  const btns = Array.from(document.querySelectorAll('button, a[role="button"]'));
+                  if (btns.some((b) => /\\b(log ?in|sign ?in)\\b/i.test((b.textContent || '')))) {
+                    return true;
+                  }
+                  return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _grafana_local_login_fields_present(page) -> bool:
+    """
+    True when a **local** username/password form is present (as opposed to an SSO/OAuth-only
+    login page that offers just "Sign in with <provider>" buttons). Used to detect SSO so we can
+    stop guessing: username/password auto-login can't work against an OAuth flow.
+    """
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                  const pw = document.querySelector(
+                    'input[name="password"], input[type="password"], '
+                    + '[data-testid="data-testid Password input"]'
+                  );
+                  const user = document.querySelector(
+                    'input[name="user"], input[name="username"], #user-input, '
+                    + 'input[autocomplete="username"], [data-testid="data-testid Username input"]'
+                  );
+                  return !!(pw && user);
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _wait_for_grafana_auth_state(page, *, timeout_ms: int) -> None:
+    """
+    Bounded wait (post-goto) for the auth state to SETTLE: resolves as soon as EITHER the painted
+    dashboard grid OR a login form/redirect is present. Avoids the race where a synchronous login
+    check runs before Grafana's React login form has mounted (the observed "no login line, then
+    90s blank" failure). Warm sessions resolve on the first poll (grid already painted) so the good
+    path pays ~nothing.
+    """
+    if timeout_ms <= 0:
+        return
+    try:
+        page.wait_for_function(
+            """() => {
+              const grid = document.querySelector(
+                '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
+              );
+              if (grid) {
+                const gr = grid.getBoundingClientRect();
+                if (gr.width > 200 && gr.height > 120) return true;
+              }
+              const path = (window.location.pathname || '').toLowerCase();
+              if (path.indexOf('/login') !== -1) return true;
+              if (document.querySelector('input[name="password"], input[type="password"]')) {
+                return true;
+              }
+              if (document.querySelector(
+                    'input[name="user"], input[name="username"], #user-input'
+                  )) {
+                return true;
+              }
+              return false;
+            }""",
+            timeout=timeout_ms,
+            polling=250,
+        )
+    except Exception:
+        # Neither settled in time — fall through; callers re-check state explicitly.
+        pass
+
+
 def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto_wait: str) -> bool:
-    """Return True if logged in (or login not required). False if still on login form."""
+    """
+    Ensure the page is an authenticated Grafana dashboard, logging in with
+    ``P0_GRAPH_SCREENSHOT_USERNAME`` / ``P0_GRAPH_SCREENSHOT_PASSWORD`` if it is sitting on the
+    login page. Returns True when authenticated (or login not required), False when we are still
+    on the login page and cannot proceed (dead creds / SSO / stale session with no creds) — the
+    caller must then FAIL FAST rather than burn the cold grid-reload budget on a login page.
+
+    Detection is positive and cookie-independent: we wait briefly for the auth state to settle,
+    then decide from the DOM/URL — never from "cookies exist".
+    """
     from p0_logic import config as _config
 
     user = _config.get_p0_graph_screenshot_username()
     pwd = _config.get_p0_graph_screenshot_password()
+    login_ms = _config.get_p0_graph_screenshot_login_timeout_ms()
+
+    # Let the auth state settle so a login form mid-mount is not mistaken for "logged in".
+    _wait_for_grafana_auth_state(page, timeout_ms=login_ms)
+
+    if not _grafana_login_page_detected(page):
+        # Warm / valid session (grid present or no login form) — proceed immediately.
+        return True
+
+    # We are unauthenticated. Distinguish the failure modes clearly.
     if not user or not pwd:
-        return True
-    if not _grafana_login_form_visible(page):
-        return True
-    log.info(
-        "p0 graph screenshot: Grafana login page — auto-login user=%s (pwd_len=%s)",
-        user,
-        len(pwd),
-    )
+        log.error(
+            "grafana login: FAILED — on the login page but no P0_GRAPH_SCREENSHOT_USERNAME/"
+            "PASSWORD set (stale profile session). Re-seed with "
+            "features/screenshot/scripts/grafana_playwright_login_once.py — captures will be blank"
+        )
+        return False
+
+    # Give a slow-mounting React login form a brief, bounded chance to render its inputs before we
+    # decide "SSO" (no local form). Prevents a false SSO verdict on a still-loading /login page.
+    try:
+        page.wait_for_selector(
+            'input[name="password"], input[type="password"], '
+            'input[name="user"], input[name="username"]',
+            state="visible",
+            timeout=min(login_ms, 8000),
+        )
+    except Exception:
+        pass
+
+    if not _grafana_local_login_fields_present(page):
+        log.error(
+            "grafana login: FAILED — login page has NO local username/password form (SSO/OAuth "
+            "detected at %s). Username/password auto-login cannot work; seed an SSO session headed "
+            "with features/screenshot/scripts/grafana_playwright_login_once.py — captures will be "
+            "blank",
+            (page.url or "").split("?")[0],
+        )
+        return False
+
+    log.info("grafana login: submitting as %s (pwd_len=%s)", user, len(pwd))
     user_filled = False
     user_loc = None
     for sel in (
@@ -2592,7 +2749,10 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
         except Exception:
             continue
     if not user_filled:
-        log.warning("p0 graph screenshot: auto-login — username field not found")
+        log.error(
+            "grafana login: FAILED — username field not found on the login page "
+            "(unexpected form / SSO?) — captures will be blank"
+        )
         return False
     pwd_filled = False
     pwd_loc = None
@@ -2614,7 +2774,10 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
         except Exception:
             continue
     if not pwd_filled:
-        log.warning("p0 graph screenshot: auto-login — password field not found")
+        log.error(
+            "grafana login: FAILED — password field not found on the login page "
+            "(unexpected form / SSO?) — captures will be blank"
+        )
         return False
     clicked = False
     for sel in (
@@ -2640,10 +2803,14 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
                 page.keyboard.press("Enter")
         except Exception:
             pass
-    wait_ms = max(nav_ms, 45_000)
+    # Wait (bounded) for navigation OFF /login and the dashboard grid to appear. This is the
+    # authoritative success signal — not "the password box went away".
+    wait_ms = max(login_ms, 8000)
     try:
         page.wait_for_function(
             """() => {
+              const path = (window.location.pathname || '').toLowerCase();
+              if (path.indexOf('/login') !== -1) return false;
               const grid = document.querySelector(
                 '.react-grid-layout, [data-testid="dashboard-layout-grid"]'
               );
@@ -2651,45 +2818,41 @@ def _grafana_auto_login_if_needed(page, dashboard_url: str, *, nav_ms: int, goto
                 const r = grid.getBoundingClientRect();
                 if (r.width > 200 && r.height > 120) return true;
               }
-              const pw = document.querySelector('input[type="password"], input[name="password"]');
-              if (!pw) return true;
-              const r = pw.getBoundingClientRect();
-              const st = window.getComputedStyle(pw);
-              if (r.width < 40 || st.display === 'none' || st.visibility === 'hidden') return true;
-              return false;
+              // Off /login but grid not painted yet: accept absence of the password field as
+              // "auth accepted, dashboard loading".
+              return !document.querySelector('input[type="password"], input[name="password"]');
             }""",
             timeout=wait_ms,
-            polling=400,
+            polling=300,
         )
     except Exception as e:
-        log.warning("p0 graph screenshot: auto-login wait for dashboard: %s", e)
+        log.debug("grafana login: wait-for-dashboard timed out: %s", e)
     try:
         page.wait_for_load_state(
             goto_wait if goto_wait in ("load", "domcontentloaded", "networkidle") else "load",
             timeout=wait_ms,
         )
     except Exception as e:
-        log.debug("p0 graph screenshot: auto-login load_state: %s", e)
-    if _grafana_on_dashboard_page(page):
-        log.info("p0 graph screenshot: auto-login — dashboard grid visible")
-    elif _grafana_login_form_visible(page):
-        log.warning(
-            "p0 graph screenshot: auto-login failed — login form still visible "
-            "(pwd_len=%s — wrong password or use P0_GRAPH_SCREENSHOT_PLAYWRIGHT_USER_DATA_DIR)",
-            len(pwd),
+        log.debug("grafana login: post-login load_state: %s", e)
+
+    # If we are still on the login page, the credentials were rejected (or SSO intercepted).
+    # Fail FAST and LOUD so monitoring is alerted — do NOT let the caller burn the cold reload
+    # budget on a login page.
+    if _grafana_login_page_detected(page):
+        log.error(
+            "grafana login: FAILED (still on login / bad credentials?) — captures will be blank"
         )
         return False
-    else:
-        log.info(
-            "p0 graph screenshot: auto-login — no login form (dashboard may still be loading)"
-        )
+
+    # Authenticated. Re-navigate to the target dashboard if the login flow landed us elsewhere
+    # (e.g. Grafana home when there was no redirectTo).
     dash = (dashboard_url or "").strip()
     if dash and "/d/" in dash and dash not in (page.url or ""):
         try:
             page.goto(dash, wait_until=goto_wait, timeout=nav_ms)
         except Exception as e:
-            log.warning("p0 graph screenshot: auto-login redirect to dashboard failed: %s", e)
-    log.info("p0 graph screenshot: auto-login succeeded")
+            log.warning("grafana login: redirect to dashboard failed: %s", e)
+    log.info("grafana login: success (dashboard reached)")
     return True
 
 
@@ -3584,9 +3747,13 @@ def _ensure_dashboard_grid_ready_with_reload(
         ):
             log.warning("p0 graph screenshot: re-login during reload self-heal failed")
     if max_reloads > 0:
-        log.warning(
-            "p0 graph screenshot: dashboard grid still unpainted after %s reload(s) — "
-            "capturing anyway (likely blank last resort)",
+        # ERROR (not WARNING): a blank capture means the Grafana screenshot effectively did NOT send
+        # a usable image — surface it to the monitoring group in real time (min_level=ERROR cutoff).
+        # Usually means the Grafana session in the Playwright profile is dead (login page, not the
+        # dashboard) — re-seed with scripts/grafana_playwright_login_once.py.
+        log.error(
+            "p0 graph screenshot: dashboard grid still unpainted after %s reload(s) — capturing a "
+            "LIKELY-BLANK image (Grafana session likely dead / stuck on login — re-seed the profile)",
             max_reloads,
         )
     else:

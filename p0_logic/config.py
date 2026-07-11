@@ -2210,6 +2210,22 @@ def get_p0_graph_screenshot_password() -> str:
     return (os.getenv("P0_GRAPH_SCREENSHOT_PASSWORD") or os.getenv("GRAFANA_PASSWORD") or "").strip()
 
 
+def get_p0_graph_screenshot_login_timeout_ms() -> int:
+    """
+    Bounded budget for the Grafana Playwright auto-login: how long to wait for EITHER the
+    dashboard grid or the login form to settle after ``goto``, and how long to wait for the
+    dashboard to appear after submitting credentials. Kept short on purpose so a dead login
+    (bad creds / SSO) fails in seconds instead of stalling the cold grid gate.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_LOGIN_TIMEOUT_MS") or "20000").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 20000
+    return max(4000, min(n, 90_000))
+
+
 def get_p0_graph_screenshot_goto_wait_until() -> str:
     """
     Playwright ``page.goto(..., wait_until=...)``.
