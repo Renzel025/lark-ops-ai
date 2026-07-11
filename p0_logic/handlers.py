@@ -1108,27 +1108,52 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 return
             return
 
-        if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no"):
+        if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no", "p0_keyword_confirm_cancel"):
             # DM Yes/No for a group ``p0`` mention that was NOT auto-declared
             # (P0_KEYWORD_CONFIRM_DM_ENABLED). Pending state lives in lark_logic; consume the
             # nonce once so a double-click / Lark redelivery cannot double-start a meeting.
-            from lark_logic import p0_keyword_confirm_consume
+            from lark_logic import p0_keyword_confirm_consume, p0_keyword_confirm_lookup
 
             val = _card_action_value_dict(payload)
             nonce = str(val.get("kw_confirm_nonce") or "").strip()
             card_mid = _extract_card_action_open_message_id(payload)
 
+            if action_name == "p0_keyword_confirm_cancel":
+                # Undo an accidental create: end the VC, remove the invite link card, stop the
+                # session (no further interval screenshots / overview). Already-sent declare-time
+                # artifacts (bitable row, first screenshot) cannot be un-posted.
+                cancel_chat = str(val.get("cancel_chat_id") or "").strip()
+                log.info("p0_keyword_confirm: CANCEL chat_tail=%s", cancel_chat[-12:] if len(cancel_chat) > 12 else cancel_chat)
+                try:
+                    if cancel_chat:
+                        _session.cancel_p0_session(cancel_chat, tenant_token, reason="Dismissed via P0 mention confirm card")
+                except Exception as e:
+                    log.warning("p0_keyword_confirm: cancel_p0_session failed chat_tail=%s err=%s", cancel_chat[-12:], e)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "🗑 Meeting cancelled — link removed, session stopped."
+                )
+                return
+
             if action_name == "p0_keyword_confirm_no":
-                entry = p0_keyword_confirm_consume(nonce)
+                # Do NOT consume on dismiss — keep the pending alive so the dismissed card can
+                # still offer a "create the meeting after all" button (duty can change their mind).
+                entry = p0_keyword_confirm_lookup(nonce)
                 if entry is None:
                     _patch_p0_keyword_confirm_result(
                         tenant_token, card_mid, "⌛ This confirmation expired or was already answered."
                     )
                     return
-                log.info("p0_keyword_confirm: dismissed nonce=%s", nonce)
-                _patch_p0_keyword_confirm_result(
-                    tenant_token, card_mid, "✅ Dismissed — no meeting created."
-                )
+                log.info("p0_keyword_confirm: dismissed (kept for optional Yes) nonce=%s", nonce)
+                if card_mid:
+                    dcard = _cards.build_p0_keyword_confirm_dismissed_card(nonce)
+                    st, body = _lark.patch_interactive_card(tenant_token, card_mid, dcard)
+                    if st != 200:
+                        log.warning(
+                            "p0_keyword_confirm: patch dismissed card HTTP=%s mid_tail=%s body=%r",
+                            st,
+                            card_mid[-12:] if len(card_mid) > 12 else card_mid,
+                            (body or "")[:200],
+                        )
                 return
 
             # p0_keyword_confirm_yes — consume BEFORE start_p0 (idempotent).
@@ -1144,22 +1169,41 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     tenant_token, card_mid, "ℹ️ A meeting is already active in that group."
                 )
                 return
+            # Instant feedback: patch to a pending state BEFORE start_p0 (VC reserve + invite
+            # cards take a few seconds); otherwise the card looks frozen until it all finishes.
+            _patch_p0_keyword_confirm_result(
+                tenant_token, card_mid, "⏳ Creating P0 meeting…"
+            )
             log.info(
                 "p0_keyword_confirm: YES → start_p0 chat_tail=%s nonce=%s",
                 src_chat[-12:] if len(src_chat) > 12 else src_chat,
                 nonce,
             )
-            _session.start_p0(
-                src_chat,
-                tenant_token,
-                str(entry.get("trigger_open_id") or "").strip(),
-                priority="P0",
-                source_chat_name=str(entry.get("source_chat_name") or "").strip(),
-                trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
-            )
-            _patch_p0_keyword_confirm_result(
-                tenant_token, card_mid, "✅ P0 meeting created.", template="green"
-            )
+            try:
+                _session.start_p0(
+                    src_chat,
+                    tenant_token,
+                    str(entry.get("trigger_open_id") or "").strip(),
+                    priority="P0",
+                    source_chat_name=str(entry.get("source_chat_name") or "").strip(),
+                    trigger_lark_user_id=str(entry.get("trigger_lark_user_id") or "").strip(),
+                )
+            except Exception as e:
+                log.warning("p0_keyword_confirm: start_p0 failed nonce=%s err=%s", nonce, e)
+                _patch_p0_keyword_confirm_result(
+                    tenant_token, card_mid, "❌ Failed to create the P0 meeting — check logs."
+                )
+                return
+            if card_mid:
+                ccard = _cards.build_p0_keyword_confirm_created_card(src_chat)
+                st, body = _lark.patch_interactive_card(tenant_token, card_mid, ccard)
+                if st != 200:
+                    log.warning(
+                        "p0_keyword_confirm: patch created card HTTP=%s mid_tail=%s body=%r",
+                        st,
+                        card_mid[-12:] if len(card_mid) > 12 else card_mid,
+                        (body or "")[:200],
+                    )
             return
 
         if not sender_open_id or not action_name:

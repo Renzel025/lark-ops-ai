@@ -912,6 +912,71 @@ def build_p0_keyword_confirm_result_card(
     }
 
 
+def build_p0_keyword_confirm_dismissed_card(nonce: str) -> Dict[str, Any]:
+    """
+    Dismissed outcome that STILL offers a "create the meeting after all" button — the duty can
+    change their mind. The nonce stays alive (not consumed on dismiss) so Yes here still works.
+    """
+    nonce = (nonce or "").strip()
+    val_yes: Dict[str, Any] = {"action": "p0_keyword_confirm_yes"}
+    if nonce:
+        val_yes["kw_confirm_nonce"] = nonce
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {
+            "template": "grey",
+            "title": {"tag": "plain_text", "content": "P0 mention confirmation"},
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "✅ Dismissed — no meeting created."}},
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": "Changed your mind? You can still create it:"}},
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "🚨 Create the P0 meeting"},
+                    "type": "primary",
+                    "value": val_yes,
+                },
+            ]
+        },
+    }
+
+
+def build_p0_keyword_confirm_created_card(source_chat_id: str) -> Dict[str, Any]:
+    """
+    Shown after Yes creates the meeting. Keeps a "cancel this meeting" button so an accidental
+    create can be undone: ends the VC, removes the invite link card, and stops the session
+    (no further interval screenshots / overview). Carries the source chat_id so cancel can act.
+    """
+    src = (source_chat_id or "").strip()
+    val_cancel: Dict[str, Any] = {"action": "p0_keyword_confirm_cancel"}
+    if src:
+        val_cancel["cancel_chat_id"] = src
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True, "update_multi": True},
+        "header": {
+            "template": "green",
+            "title": {"tag": "plain_text", "content": "P0 mention confirmation"},
+        },
+        "body": {
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "✅ P0 meeting created."}},
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": "Created by accident? Cancel it (ends the meeting, removes the link, stops the session):"}},
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "🗑 Cancel this meeting"},
+                    "type": "danger",
+                    "value": val_cancel,
+                },
+            ]
+        },
+    }
+
+
 def _dm_scope_button_fields(
     *,
     target_chat: str = "",
