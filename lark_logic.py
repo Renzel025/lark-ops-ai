@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import secrets
 import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,13 +29,15 @@ from p0_logic.config import (
     get_p0_redeclare_supersedes_active,
     get_p0_multi_meeting_per_group,
     get_p0_issue_watch_enabled,
+    get_p0_keyword_confirm_dm_enabled,
+    get_dm_instruction_open_ids,
     HELP_RE,
     RING_CMD_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge, groq_thread_confirm_affirms_p0
 from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
-from p0_logic.cards import build_help_commands_card
-from p0_logic.lark_client import post_card_to_chat, post_text_to_chat
+from p0_logic.cards import build_help_commands_card, build_p0_keyword_confirm_dm_card
+from p0_logic.lark_client import post_card_to_chat, post_text_to_chat, post_card_to_open_id
 from features.screenshot.graph_screenshot_request import (
     try_handle_graph_screenshot_request,
     _strip_leading_mentions,
@@ -96,6 +99,159 @@ def _try_consume_keyword_trigger_dedupe(key: str) -> bool:
             return False
         _KEYWORD_TRIGGER_DEDUPE[key] = now
         return True
+
+
+# --- P0 keyword confirm DM (P0_KEYWORD_CONFIRM_DM_ENABLED) ---------------------------------------
+# When a group ``p0`` mention is NOT auto-declared (AI/Groq says it is not a fresh declaration),
+# instead of silently dropping it we DM the duty a Yes/No card. The pending entry is keyed by a
+# generated ``nonce`` and looked up / consumed when the duty clicks Yes or No (in handlers.py).
+_P0_KEYWORD_CONFIRM_LOCK = threading.RLock()
+# nonce -> { source_incident_chat_id, trigger_open_id, trigger_lark_user_id, source_chat_name,
+#            phrase, created_at (epoch float) }
+_P0_KEYWORD_CONFIRM_PENDING: Dict[str, Dict[str, Any]] = {}
+_P0_KEYWORD_CONFIRM_TTL_SEC = 3600.0  # prune entries older than 1h
+# Dedupe the DM itself: at most one confirm DM per source ``message_id`` (Lark redelivers events).
+_P0_KEYWORD_CONFIRM_DM_DEDUPE: Dict[str, float] = {}
+_P0_KEYWORD_CONFIRM_DM_DEDUPE_TTL_SEC = 600.0
+
+
+def _p0_keyword_confirm_prune_locked() -> None:
+    now = time.time()
+    for k, v in list(_P0_KEYWORD_CONFIRM_PENDING.items()):
+        if now - float(v.get("created_at") or 0) > _P0_KEYWORD_CONFIRM_TTL_SEC:
+            _P0_KEYWORD_CONFIRM_PENDING.pop(k, None)
+
+
+def _try_consume_p0_keyword_confirm_dm_dedupe(message_id: str) -> bool:
+    """True = first DM for this source message_id; False = duplicate webhook delivery (skip DM)."""
+    mid = (message_id or "").strip()
+    if not mid:
+        return True
+    now = time.monotonic()
+    with _P0_KEYWORD_CONFIRM_LOCK:
+        for k, t in list(_P0_KEYWORD_CONFIRM_DM_DEDUPE.items()):
+            if now - t > _P0_KEYWORD_CONFIRM_DM_DEDUPE_TTL_SEC:
+                del _P0_KEYWORD_CONFIRM_DM_DEDUPE[k]
+        if mid in _P0_KEYWORD_CONFIRM_DM_DEDUPE:
+            return False
+        _P0_KEYWORD_CONFIRM_DM_DEDUPE[mid] = now
+        return True
+
+
+def p0_keyword_confirm_lookup(nonce: str) -> Optional[Dict[str, Any]]:
+    """Return a copy of the pending entry (None if missing/expired). Does NOT consume it."""
+    key = (nonce or "").strip()
+    if not key:
+        return None
+    with _P0_KEYWORD_CONFIRM_LOCK:
+        _p0_keyword_confirm_prune_locked()
+        v = _P0_KEYWORD_CONFIRM_PENDING.get(key)
+        return dict(v) if v else None
+
+
+def p0_keyword_confirm_consume(nonce: str) -> Optional[Dict[str, Any]]:
+    """Atomically pop the pending entry (idempotent: a second Yes/No click returns None)."""
+    key = (nonce or "").strip()
+    if not key:
+        return None
+    with _P0_KEYWORD_CONFIRM_LOCK:
+        _p0_keyword_confirm_prune_locked()
+        v = _P0_KEYWORD_CONFIRM_PENDING.pop(key, None)
+        return dict(v) if v else None
+
+
+def _send_p0_keyword_confirm_dm(
+    *,
+    source_incident_chat_id: str,
+    trigger_open_id: str,
+    trigger_lark_user_id: str,
+    source_chat_name: str,
+    phrase: str,
+    token: str,
+    message_id: str,
+) -> None:
+    """
+    DM the duty a Yes/No "create a P0 meeting?" card for a ``p0`` mention that was NOT auto-declared.
+    Stores the pending entry keyed by a fresh nonce BEFORE sending; deduped per source ``message_id``.
+    """
+    if not _try_consume_p0_keyword_confirm_dm_dedupe(message_id):
+        log.info(
+            "Incident group: P0 keyword confirm DM skipped (duplicate Lark delivery) chat_id=%s message_id=%s",
+            source_incident_chat_id,
+            message_id,
+        )
+        return
+    recipients = [x for x in (get_dm_instruction_open_ids() or []) if x]
+    if not recipients:
+        log.warning(
+            "Incident group: P0 keyword confirm DM has no recipients (P0_DM_INSTRUCTION_OPEN_IDS unset) chat_id=%s",
+            source_incident_chat_id,
+        )
+        return
+    nonce = secrets.token_hex(16)
+    entry: Dict[str, Any] = {
+        "source_incident_chat_id": (source_incident_chat_id or "").strip(),
+        "trigger_open_id": (trigger_open_id or "").strip(),
+        "trigger_lark_user_id": (trigger_lark_user_id or "").strip(),
+        "source_chat_name": (source_chat_name or "").strip(),
+        "phrase": (phrase or "").strip()[:300],
+        "created_at": time.time(),
+    }
+    with _P0_KEYWORD_CONFIRM_LOCK:
+        _p0_keyword_confirm_prune_locked()
+        _P0_KEYWORD_CONFIRM_PENDING[nonce] = entry
+    card = build_p0_keyword_confirm_dm_card(nonce, entry["phrase"], entry["source_chat_name"])
+    tails: List[str] = []
+    for oid in recipients:
+        st, body, _mid = post_card_to_open_id(oid, token, card)
+        tails.append(oid[-8:] if len(oid) > 8 else oid)
+        if st != 200:
+            log.warning(
+                "Incident group: P0 keyword confirm DM post HTTP=%s oid_tail=%s body=%r",
+                st,
+                oid[-8:] if len(oid) > 8 else oid,
+                (body or "")[:200],
+            )
+    log.info(
+        "Incident group: P0 keyword confirm DM sent recipients=%s nonce=%s chat_id=%s",
+        tails,
+        nonce,
+        source_incident_chat_id,
+    )
+
+
+def _maybe_p0_keyword_confirm_dm(
+    *,
+    chat_id: str,
+    token: str,
+    user_id: str,
+    sender_lark_user_id: str,
+    source_chat_name: str,
+    text_raw: str,
+    message_id: str,
+) -> None:
+    """
+    Gate + guards for the not-auto-declared P0 mention DM. No-op unless the toggle is ON;
+    skipped when a meeting is already active in the source group.
+    """
+    if not get_p0_keyword_confirm_dm_enabled():
+        return
+    if chat_has_active_session(chat_id):
+        log.info(
+            "Incident group: P0 keyword confirm DM skipped (session already active) chat_id=%s",
+            chat_id,
+        )
+        return
+    _send_p0_keyword_confirm_dm(
+        source_incident_chat_id=chat_id,
+        trigger_open_id=user_id,
+        trigger_lark_user_id=sender_lark_user_id,
+        source_chat_name=source_chat_name,
+        phrase=text_raw,
+        token=token,
+        message_id=message_id,
+    )
+
 
 # Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0") — case-insensitive.
 # Questions ("is this p0?", "can this be a p1?") are ignored via _is_question_about_priority().
@@ -646,6 +802,15 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
             return True
         if re.search(
             r"(?is)\b(?:i|we)\s+tag(?:ged|ging)?\s+(?:this|that|it|the\s+issue|this\s+issue)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
+        # Passive / subjectless tag: "this issue tagged as p0", "tagged as p0", "marked as p0"
+        # (no I/we subject). These are real declarations the LLM triage keeps mislabeling as
+        # "handoff" — make them deterministic so a declaration never depends on the classifier.
+        # Modal questions ("should we tag … as p0") are already excluded by the guard above.
+        if re.search(
+            r"(?is)\b(?:tagged|treated|marked|flagged|classified|labell?ed)\s+as\s+(?:a\s+)?(?:p0|priority\s*0)\b",
             t,
         ):
             return True
@@ -1480,6 +1645,15 @@ def process_message(
                             ai.get("intent"),
                             kw_text[:200],
                         )
+                        _maybe_p0_keyword_confirm_dm(
+                            chat_id=chat_id,
+                            token=token,
+                            user_id=user_id,
+                            sender_lark_user_id=sender_lark_user_id,
+                            source_chat_name=source_chat_name,
+                            text_raw=text_raw,
+                            message_id=message_id,
+                        )
                         return
                 elif _legacy_p0_keyword_blocked(kw_text):
                     return
@@ -1496,6 +1670,15 @@ def process_message(
                                 "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
                                 "text_head=%r",
                                 text_raw[:200],
+                            )
+                            _maybe_p0_keyword_confirm_dm(
+                                chat_id=chat_id,
+                                token=token,
+                                user_id=user_id,
+                                sender_lark_user_id=sender_lark_user_id,
+                                source_chat_name=source_chat_name,
+                                text_raw=text_raw,
+                                message_id=message_id,
                             )
                             return
                         if gv is None:
