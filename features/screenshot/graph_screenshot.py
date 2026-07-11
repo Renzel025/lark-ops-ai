@@ -1993,15 +1993,16 @@ def _evaluate_band_panels_ready(page, doc_clip: Dict[str, int], *, bottom_zone_o
         return False
 
 
-def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
+def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> bool:
     """
     Wait until viewport panels are loaded: no spinners, no black blanks, and most panels show
-    chart / table / stable ``No data``.
+    chart / table / stable ``No data``. Returns ``True`` if panels became ready, ``False`` if the
+    wait timed out (caller uses this to decide whether a resulting blank frame is retryable).
     """
     if timeout_ms <= 0:
         timeout_ms = _band_panel_wait_timeout_ms()
     if timeout_ms <= 0:
-        return
+        return True
     ratio = _band_panel_ready_ratio()
     log.info(
         "p0 graph screenshot: waiting for band panels (max %ss, need %.0f%% ready, blank=0)…",
@@ -2019,11 +2020,13 @@ def _wait_for_charts_in_document_band(page, doc_clip: Dict[str, int], *, timeout
             "p0 graph screenshot: band viewport panels ready (waited up to %sms)",
             timeout_ms,
         )
+        return True
     except Exception as e:
         log.warning(
             "p0 graph screenshot: band panel wait timed out — may have blank panels: %s",
             e,
         )
+        return False
 
 
 def _band_stable_poll_settings() -> Tuple[int, int]:
@@ -2040,8 +2043,9 @@ def _band_stable_poll_settings() -> Tuple[int, int]:
     )
 
 
-def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> None:
-    """Require several consecutive ready checks so Grafana does not capture mid-paint."""
+def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: int = 0) -> bool:
+    """Require several consecutive ready checks so Grafana does not capture mid-paint. Returns
+    ``True`` when the required consecutive-ready streak was reached, ``False`` on timeout."""
     polls_need, poll_ms = _band_stable_poll_settings()
     if timeout_ms <= 0:
         timeout_ms = min(18_000, max(6000, polls_need * poll_ms * 4))
@@ -2052,7 +2056,7 @@ def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: 
             streak += 1
             if streak >= polls_need:
                 log.info("p0 graph screenshot: band panels stable (%s checks)", streak)
-                return
+                return True
         else:
             streak = 0
         page.wait_for_timeout(poll_ms)
@@ -2060,12 +2064,14 @@ def _wait_for_band_panels_stable(page, doc_clip: Dict[str, int], *, timeout_ms: 
         "p0 graph screenshot: band stability wait timed out (needed %s consecutive ready polls)",
         polls_need,
     )
+    return False
 
 
-def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeout_ms: int) -> None:
-    """Band 2: bottom row (Pulsar) loads last — same strict rules in the lower viewport."""
+def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeout_ms: int) -> bool:
+    """Band 2: bottom row (Pulsar) loads last — same strict rules in the lower viewport. Returns
+    ``True`` if the bottom row became ready, ``False`` on timeout."""
     if timeout_ms <= 0:
-        return
+        return True
     log.info(
         "p0 graph screenshot: waiting for bottom-row panels (max %ss)…",
         timeout_ms // 1000,
@@ -2078,8 +2084,10 @@ def _wait_for_viewport_bottom_row_ready(page, doc_clip: Dict[str, int], *, timeo
             polling=350,
         )
         log.info("p0 graph screenshot: bottom-row panels ready in viewport")
+        return True
     except Exception as e:
         log.warning("p0 graph screenshot: bottom-row wait: %s", e)
+        return False
 
 
 def _scroll_viewport_to_paint_lazy_panels(page, band_y: int) -> None:
@@ -2177,68 +2185,127 @@ def _screenshot_viewport_at_band_start(
             "height": vh,
         }
         _scroll_viewport_to_paint_lazy_panels(page, y)
-        band_ms = _band_panel_wait_timeout_ms()
-        _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
-        if _effective_fast_capture():
-            stable_ms = 8_000
-        else:
-            stable_ms = 22_000
-        _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable_ms)
-        if is_lower_band:
-            if _effective_fast_capture():
-                bottom_ms = min(band_ms, 12_000)
-                stable2_ms = 6_000
-            else:
-                bottom_ms = min(band_ms, 45_000)
-                stable2_ms = min(stable_ms, 16_000)
-            _wait_for_viewport_bottom_row_ready(
-                page,
-                {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
-                timeout_ms=bottom_ms,
+        base_band_ms = _band_panel_wait_timeout_ms()
+        content_cap = _config.get_p0_graph_screenshot_panel_content_ready_timeout_ms()
+        if content_cap <= 0:
+            content_cap = 90_000
+        content_cap = max(content_cap, base_band_ms)
+        blank_retry = _config.get_p0_graph_screenshot_blank_retry()
+        max_retries = _config.get_p0_graph_screenshot_blank_max_retries() if blank_retry else 0
+        band_label = "lower band (Pulsar)" if is_lower_band else "top band (KPI)"
+
+        def _run_readiness_gates(band_ms):
+            """Run the band readiness/stability waits. Returns False if any wait timed out."""
+            gate_ok = _wait_for_charts_in_document_band(page, vp_band, timeout_ms=band_ms)
+            stable_ms = 8_000 if _effective_fast_capture() else 22_000
+            if not _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable_ms):
+                gate_ok = False
+            if is_lower_band:
+                if _effective_fast_capture():
+                    bottom_ms = min(band_ms, 12_000)
+                    stable2_ms = 6_000
+                else:
+                    bottom_ms = min(band_ms, 45_000)
+                    stable2_ms = min(stable_ms, 16_000)
+                if not _wait_for_viewport_bottom_row_ready(
+                    page,
+                    {"x": vp_band["x"], "y": y, "width": vp_band["width"], "height": h},
+                    timeout_ms=bottom_ms,
+                ):
+                    gate_ok = False
+                if not _wait_for_band_panels_stable(page, vp_band, timeout_ms=stable2_ms):
+                    gate_ok = False
+                page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 8))", y)
+                page.wait_for_timeout(400 if _effective_fast_capture() else 700)
+            extra = _band_post_capture_settle_ms()
+            if extra > 0:
+                page.wait_for_timeout(extra)
+            return gate_ok
+
+        def _capture_band_png():
+            """Section-aligned full-height clip (fallback: single viewport). None if all-black."""
+            band_h = int(doc_clip.get("height") or 0)
+            band_y = int(doc_clip.get("y") or 0)
+            if _config.get_p0_graph_screenshot_band_full_height() and band_h > 200:
+                # Clip to the EXACT measured band box (section-aligned), whether the band is TALLER
+                # or SHORTER than the viewport. A plain viewport shot of a short band overflows into
+                # the next section (CPMS header bled into pic 1, 9280 into pic 2). Lazy panels were
+                # already warmed above (warm-scroll + _scroll_viewport_to_paint_lazy_panels).
+                page.evaluate("(yy) => window.scrollTo(0, Math.max(0, yy - 8))", band_y)
+                page.wait_for_timeout(300)
+                try:
+                    full = page.screenshot(
+                        full_page=True,
+                        type="png",
+                        clip={
+                            "x": int(vp_band["x"]),
+                            "y": band_y,
+                            "width": int(vp_band["width"]),
+                            "height": band_h,
+                        },
+                    )
+                except Exception as e_full:
+                    log.warning(
+                        "p0 graph screenshot: full-height band capture failed (%s) — viewport fallback",
+                        e_full,
+                    )
+                    full = b""
+                if full and not _png_bytes_uniformly_blank(full):
+                    log.info("p0 graph screenshot: full-height band PNG bytes=%s h=%s", len(full), band_h)
+                    return _normalize_screenshot_png(full)
+                log.info("p0 graph screenshot: full-height band blank/failed — falling back to single viewport")
+            raw = _dashboard_viewport_screenshot(page)
+            if raw and not _png_bytes_uniformly_blank(raw):
+                return _normalize_screenshot_png(raw)
+            return None
+
+        # Bounded blank-retry loop. The common case runs exactly ONE gate+capture and returns — the
+        # extra wait/re-capture is only paid when the readiness gate timed out AND the panel region
+        # actually came out blank, i.e. the exact failure that was posting empty dashboards.
+        attempt = 0
+        band_ms = base_band_ms
+        while True:
+            gate_ok = _run_readiness_gates(band_ms)
+            png = _capture_band_png()
+            # Region-blank is only consulted when the gate TIMED OUT: a gate that reports ready means
+            # the charts painted, so a legitimately dark dashboard is never second-guessed.
+            region_blank = (
+                png is not None
+                and blank_retry
+                and not gate_ok
+                and _png_panel_region_blank(png)
             )
-            _wait_for_band_panels_stable(
-                page,
-                vp_band,
-                timeout_ms=stable2_ms,
-            )
-            page.evaluate(
-                "(y) => window.scrollTo(0, Math.max(0, y - 8))",
-                y,
-            )
-            page.wait_for_timeout(400 if _effective_fast_capture() else 700)
-        extra = _band_post_capture_settle_ms()
-        if extra > 0:
-            page.wait_for_timeout(extra)
-        band_h = int(doc_clip.get("height") or 0)
-        band_y = int(doc_clip.get("y") or 0)
-        if _config.get_p0_graph_screenshot_band_full_height() and band_h > 200:
-            # Clip to the EXACT measured band box (section-aligned), whether the band is TALLER or
-            # SHORTER than the viewport. A plain viewport shot of a short band overflows into the
-            # next section (CPMS header bled into pic 1, 9280 into pic 2). Lazy panels were already
-            # warmed above (warm-scroll + _scroll_viewport_to_paint_lazy_panels).
-            page.evaluate("(yy) => window.scrollTo(0, Math.max(0, yy - 8))", band_y)
-            page.wait_for_timeout(300)
-            try:
-                full = page.screenshot(
-                    full_page=True,
-                    type="png",
-                    clip={
-                        "x": int(vp_band["x"]),
-                        "y": band_y,
-                        "width": int(vp_band["width"]),
-                        "height": band_h,
-                    },
+            is_blank = png is None or region_blank
+            if not is_blank:
+                return png
+            retryable = attempt < max_retries and (png is None or not gate_ok)
+            if retryable:
+                attempt += 1
+                band_ms = min(content_cap, int(band_ms * 1.8) + 4000)
+                log.warning(
+                    "p0 graph screenshot: %s blank capture detected — retrying "
+                    "(attempt %s/%s, band wait -> %sms, gate_ok=%s, cause=%s)",
+                    band_label,
+                    attempt,
+                    max_retries,
+                    band_ms,
+                    gate_ok,
+                    "all-black" if png is None else "unpainted-panel-region",
                 )
-            except Exception as e_full:
-                log.warning("p0 graph screenshot: full-height band capture failed (%s) — viewport fallback", e_full)
-                full = b""
-            if full and not _png_bytes_uniformly_blank(full):
-                log.info("p0 graph screenshot: full-height band PNG bytes=%s h=%s", len(full), band_h)
-                return _normalize_screenshot_png(full)
-            log.info("p0 graph screenshot: full-height band blank/failed — falling back to single viewport")
-        raw = _dashboard_viewport_screenshot(page)
-        if raw and not _png_bytes_uniformly_blank(raw):
-            return _normalize_screenshot_png(raw)
+                _scroll_viewport_to_paint_lazy_panels(page, y)
+                continue
+            if png is None:
+                # Every attempt produced a uniformly-black frame — let the caller fall back.
+                return None
+            log.warning(
+                "p0 graph screenshot: %s STILL blank after %s retr%s (gate_ok=%s) — "
+                "posting likely-blank image as last resort",
+                band_label,
+                attempt,
+                "y" if attempt == 1 else "ies",
+                gate_ok,
+            )
+            return png
     except Exception as e:
         log.warning("p0 graph screenshot: viewport-at-band failed: %s", e)
     return None
@@ -2895,6 +2962,52 @@ def _png_bytes_uniformly_blank(png: bytes) -> bool:
     if mean <= 8.0:
         return True
     if mean <= 18.0 and spread <= 12.0:
+        return True
+    return False
+
+
+def _png_panel_region_blank(png: bytes) -> bool:
+    """
+    Region heuristic for the INTERMITTENT blank capture: the Grafana top chrome
+    (Export/Share/Refresh toolbar + section title) paints fine, but the panel area *below* is an
+    unpainted, uniform background — no charts. ``_png_bytes_uniformly_blank`` misses this because
+    the painted header adds luminance + spread to the *whole-image* stats. Here we look ONLY at the
+    lower ~82% (the panel area) and flag it when a single background shade covers almost every
+    pixel, or the region has almost no luminance spread.
+
+    Why this won't false-positive on a legitimately dark dashboard: a real Grafana panel area —
+    even a dark one, even panels showing ``No data`` — always has chart lines / axes / gridlines /
+    legends / panel titles / text, so no single 8-wide luminance bucket dominates (>=95%) and the
+    standard deviation is well above ~4. Only a genuinely unpainted background is near-constant.
+    It is also only consulted when the readiness gate already timed out, so it can never discard a
+    capture the gate accepted.
+    """
+    try:
+        from PIL import Image
+        from PIL.ImageStat import Stat
+    except ImportError:
+        return False
+    try:
+        im = Image.open(BytesIO(png))
+        im.load()
+        im = im.convert("L")
+        w, h = im.size
+        if w < 8 or h < 48:
+            return False
+        top_cut = int(h * 0.18)  # drop the toolbar + section header (the part that DOES paint)
+        region = im.crop((0, top_cut, w, h))
+        region.thumbnail((240, 240))
+        hist = region.histogram()  # 256 luminance buckets ('L' mode)
+        total = float(sum(hist) or 1)
+        # 8-wide buckets tolerate PNG / anti-alias dithering of one otherwise-flat background shade.
+        buckets = [sum(hist[i:i + 8]) for i in range(0, 256, 8)]
+        dominant_frac = max(buckets) / total
+        stddev = float(Stat(region).stddev[0])
+    except Exception:
+        return False
+    if dominant_frac >= 0.95:
+        return True
+    if stddev <= 4.0 and dominant_frac >= 0.85:
         return True
     return False
 
