@@ -1343,7 +1343,11 @@ def cancel_p0_session(
     if token and chat_id:
         s_can = P0_SESSIONS.get(chat_id)
         if s_can and s_can.get("dm_instruction_deferred"):
-            _flush_deferred_dm_instruction_for_incident(chat_id)
+            # CANCEL != END: a cancelled meeting should NOT send the overview-builder DM. Drop the
+            # deferred instruction (clear the flag) instead of flushing it, so a cancel doesn't
+            # surprise the duty with an overview prompt for a meeting that was called off.
+            s_can["dm_instruction_deferred"] = False
+            log.info("cancel_p0_session: dropped deferred DM overview instruction (not sending) chat_id=%s", chat_id)
     P0_SESSIONS.pop(chat_id, None)
     _session_disk.delete_session(chat_id)
     if token:
