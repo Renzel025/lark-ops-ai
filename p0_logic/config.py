@@ -2322,6 +2322,34 @@ def get_p0_graph_screenshot_swiftshader() -> bool:
     return sys.platform.startswith("linux")
 
 
+def get_p0_graph_screenshot_chromium_channel() -> str:
+    """
+    Chromium **channel** for Playwright launches. This is the single most important lever for
+    Grafana panels painting under headless on a server.
+
+    Playwright's ``headless=True`` **without** a channel launches the stripped-down *chromium
+    headless shell*, which frequently renders uPlot/canvas/WebGL panels (time-series, KPI) as
+    solid **black** even when the same dashboard paints fine in a real browser. Setting
+    ``channel="chromium"`` launches the **full Chromium build in NEW headless mode** ("real Chrome"),
+    which composites canvas/WebGL like headed. See https://playwright.dev/python/docs/browsers
+    ("new headless mode" — activated via the ``chromium`` channel).
+
+    Requires the full build on the box: ``playwright install chromium`` (installs both the full
+    build and the headless shell). If you only ran ``--only-shell``, the channel launch will fail
+    and the code falls back to the bundled headless shell (black-panel risk).
+
+    * **Unset** → ``chromium`` on Linux (server default; new headless), empty on macOS/Windows
+      (bundled build is fine for headed dev).
+    * Set ``P0_GRAPH_SCREENSHOT_CHROMIUM_CHANNEL=`` (empty) to force the old bundled headless shell.
+    * Set to ``chrome``/``msedge`` to use a system-installed Chrome/Edge instead.
+    """
+    reload_env_runtime()
+    raw = os.getenv("P0_GRAPH_SCREENSHOT_CHROMIUM_CHANNEL")
+    if raw is not None:
+        return raw.strip()
+    return "chromium" if sys.platform.startswith("linux") else ""
+
+
 def get_p0_graph_screenshot_viewport_only() -> bool:
     """If ``1``, skip CSS clip and capture **viewport** only (``full_page=False``). Debugging / GPU issues."""
     reload_env_runtime()

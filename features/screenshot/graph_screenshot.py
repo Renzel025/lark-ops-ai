@@ -32,8 +32,11 @@ then a single full-page PNG.
 
 If Lark shows **solid gray / blank** PNGs, the first CSS match was often a **narrow** scroll strip
 (not the dashboard); the bot now skips those and tries the next selector (e.g. ``main``).
-**Solid black** on Linux headless is often missing GPU compositing — SwiftShader flags are enabled by
-default on Linux (see ``get_p0_graph_screenshot_swiftshader``); set ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` to force off.
+**Solid black** panels on Linux headless are almost always the bundled *headless shell* failing to
+composite uPlot/canvas/WebGL. Primary fix: launch the full Chromium build in NEW headless mode via
+``channel="chromium"`` (``get_p0_graph_screenshot_chromium_channel`` — on by default on Linux; needs
+``playwright install chromium``). SwiftShader software-GL flags are also enabled by default on Linux
+(see ``get_p0_graph_screenshot_swiftshader``); set ``P0_GRAPH_SCREENSHOT_SWIFTSHADER=0`` to force off.
 Install **Pillow** so uniformly-dark captures can trigger an automatic viewport-only retry.
 
 Logged-in runs should use a **fixed browser zoom** in the persistent Playwright profile (100 % is
@@ -3853,6 +3856,7 @@ def open_grafana_dashboard_for_inspection() -> int:
     dsf = _config.get_p0_graph_screenshot_device_scale_factor()
     zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
     launch_args = list(_config.get_p0_graph_screenshot_chromium_args())
+    channel = _config.get_p0_graph_screenshot_chromium_channel()
     top_bottom = _uses_top_and_bottom_framing()
     log.info(
         "p0 graph screenshot inspect: headed viewport=%sx%s zoom=%s%% top+bottom=%s",
@@ -3866,6 +3870,7 @@ def open_grafana_dashboard_for_inspection() -> int:
             context = p.chromium.launch_persistent_context(
                 user_data,
                 headless=False,
+                channel=(channel or None),
                 viewport={"width": w, "height": h},
                 device_scale_factor=dsf,
                 args=launch_args,
@@ -3881,7 +3886,9 @@ def open_grafana_dashboard_for_inspection() -> int:
             finally:
                 context.close()
         else:
-            browser = p.chromium.launch(headless=False, args=launch_args)
+            browser = p.chromium.launch(
+                headless=False, channel=(channel or None), args=launch_args
+            )
             try:
                 page = browser.new_page(
                     viewport={"width": w, "height": h},
@@ -3953,6 +3960,63 @@ def _kill_stale_grafana_chromium(user_data: str) -> None:
         log.warning("p0 graph screenshot: stale-chromium cleanup failed: %s", e)
 
 
+def _channel_not_installed(exc: Exception, channel: str) -> bool:
+    """
+    True when ``exc`` indicates the requested Chromium ``channel`` (full build for new headless)
+    is not installed on this box — i.e. only the headless *shell* was downloaded. In that case
+    the caller should retry WITHOUT a channel so captures keep working (bundled headless shell),
+    while logging that panels may render black until ``playwright install chromium`` is run.
+    """
+    if not channel:
+        return False
+    msg = str(exc).lower()
+    return (
+        "executable doesn't exist" in msg
+        or "is not found" in msg
+        or "please run the following command to download" in msg
+        or "looks like playwright" in msg
+    )
+
+
+def _launch_persistent_context_with_channel(
+    pw, user_data, *, headless, channel, viewport, device_scale_factor, args, timeout
+):
+    """
+    ``launch_persistent_context`` with the new-headless ``channel`` (default ``chromium`` on Linux),
+    falling back to the bundled headless shell if that full build is not installed. Fail loud, not
+    wedged: a missing full build logs a clear "run playwright install chromium" line and still
+    returns a (headless-shell) context rather than crashing the whole capture.
+    """
+    try:
+        return pw.chromium.launch_persistent_context(
+            user_data,
+            headless=headless,
+            channel=(channel or None),
+            viewport=viewport,
+            device_scale_factor=device_scale_factor,
+            args=args,
+            timeout=timeout,
+        )
+    except Exception as e:
+        if _channel_not_installed(e, channel):
+            log.error(
+                "p0 graph screenshot: Chromium channel=%s not installed (%s) — falling back to the "
+                "bundled headless SHELL, which may render Grafana panels BLACK. Fix: run "
+                "`playwright install chromium` (full build) on the box, then retry.",
+                channel,
+                e,
+            )
+            return pw.chromium.launch_persistent_context(
+                user_data,
+                headless=headless,
+                viewport=viewport,
+                device_scale_factor=device_scale_factor,
+                args=args,
+                timeout=timeout,
+            )
+        raise
+
+
 def _browser_pool_acquire(
     *,
     user_data: str,
@@ -3961,6 +4025,7 @@ def _browser_pool_acquire(
     dsf: float,
     launch_args: List[str],
     headless: bool,
+    channel: str = "",
 ) -> Optional[Tuple[Any, Any, Any, bool]]:
     """Return ``(playwright, context, page, reused)`` from warm pool, or ``None`` to cold-start."""
     from p0_logic import config as _config
@@ -3995,9 +4060,11 @@ def _browser_pool_acquire(
     try:
         _kill_stale_grafana_chromium(user_data)
         pw = sync_playwright().start()
-        context = pw.chromium.launch_persistent_context(
+        context = _launch_persistent_context_with_channel(
+            pw,
             user_data,
             headless=headless,
+            channel=channel,
             viewport={"width": w, "height": h},
             device_scale_factor=dsf,
             args=launch_args,
@@ -4296,6 +4363,12 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
         launch_args.extend([a for a in extra if a not in launch_args])
         log.info("p0 graph screenshot: SwiftShader (ANGLE) flags enabled for headless GL")
     headless = _config.get_p0_graph_screenshot_playwright_headless()
+    channel = _config.get_p0_graph_screenshot_chromium_channel()
+    if channel:
+        log.info(
+            "p0 graph screenshot: Chromium channel=%s (new headless mode — real GPU/canvas compositing)",
+            channel,
+        )
     snap_full = split_halves or full_page or bool(clip_selectors)
     dsf = _config.get_p0_graph_screenshot_device_scale_factor()
     zoom_pct = _config.get_p0_graph_screenshot_zoom_percent()
@@ -4312,6 +4385,7 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
         dsf=dsf,
         launch_args=launch_args,
         headless=headless,
+        channel=channel,
     )
     if pooled:
         _pw, _ctx, page, reused = pooled
@@ -4348,9 +4422,11 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
                 headless,
             )
             _kill_stale_grafana_chromium(user_data)
-            context = p.chromium.launch_persistent_context(
+            context = _launch_persistent_context_with_channel(
+                p,
                 user_data,
                 headless=headless,
+                channel=channel,
                 viewport={"width": w, "height": h},
                 device_scale_factor=dsf,
                 args=launch_args,
@@ -4380,7 +4456,22 @@ def _capture_png_payloads_once(capture_url: Optional[str] = None) -> Tuple[List[
                 return out
             finally:
                 context.close()
-        browser = p.chromium.launch(headless=headless, args=launch_args)
+        try:
+            browser = p.chromium.launch(
+                headless=headless, channel=(channel or None), args=launch_args
+            )
+        except Exception as e:
+            if _channel_not_installed(e, channel):
+                log.error(
+                    "p0 graph screenshot: Chromium channel=%s not installed (%s) — falling back to "
+                    "bundled headless SHELL (panels may render BLACK). Run `playwright install "
+                    "chromium` on the box.",
+                    channel,
+                    e,
+                )
+                browser = p.chromium.launch(headless=headless, args=launch_args)
+            else:
+                raise
         try:
             page = browser.new_page(
                 viewport={"width": w, "height": h},
