@@ -4131,6 +4131,52 @@ def _derive_grafana_render_url(dashboard_url: str) -> str:
     return urlunparse(parsed._replace(path=path, query=query))
 
 
+def _autocrop_render_vertical(png_bytes: bytes) -> bytes:
+    """
+    Trim the uniform page-background padding above/below the actual dashboard content.
+
+    We render deliberately TALL (see ``RENDER_HEIGHT`` default) so the whole dashboard is always
+    captured — this then removes the leftover black band at the bottom (and any top gap) so the
+    2-band split lands on real panels instead of empty space, without anyone tuning the height to
+    the dashboard's exact pixel size. Full width is preserved (never trims left/right, so panel
+    legends stay intact). No-ops if Pillow is missing or there's nothing meaningful to trim.
+    """
+    try:
+        from PIL import Image, ImageChops
+    except ImportError:
+        return png_bytes
+    try:
+        im = Image.open(BytesIO(png_bytes))
+        im.load()
+        rgb = im.convert("RGB")
+        bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
+        bbox = ImageChops.difference(rgb, bg).getbbox()
+    except Exception as e:
+        log.warning("p0 graph screenshot render: autocrop failed to inspect PNG: %s", e)
+        return png_bytes
+    if not bbox:
+        return png_bytes
+    _, top, _, bottom = bbox
+    margin = 12
+    top = max(0, top - margin)
+    bottom = min(im.height, bottom + margin)
+    if bottom - top >= im.height - 1:
+        return png_bytes  # content already fills the frame — nothing to trim
+    try:
+        cropped = im.crop((0, top, im.width, bottom))
+        buf = BytesIO()
+        cropped.save(buf, format="PNG", optimize=True)
+    except Exception as e:
+        log.warning("p0 graph screenshot render: autocrop encode failed, using full image: %s", e)
+        return png_bytes
+    log.info(
+        "p0 graph screenshot render: autocrop %spx -> %spx tall (trimmed background padding)",
+        im.height,
+        cropped.height,
+    )
+    return buf.getvalue()
+
+
 def _split_png_vertical_by_ratio(png_bytes: bytes, ratio: float) -> List[bytes]:
     """
     Split one tall PNG into a top band (height = ratio × total) and a bottom band.
@@ -4243,6 +4289,7 @@ def _capture_via_grafana_render_api(capture_url: Optional[str] = None) -> Tuple[
         return [], ""
 
     cap_time = _format_captured_at(datetime.now(tz))
+    body = _autocrop_render_vertical(body)
     parts = _split_png_vertical_by_ratio(body, _config.get_p0_graph_screenshot_render_split_ratio())
     log.info(
         "p0 graph screenshot render: OK size=%s bytes → %s image part(s) captured_at=%s",
