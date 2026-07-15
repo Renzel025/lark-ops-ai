@@ -1,4 +1,4 @@
-# Manual test commands
+ # Manual test commands
 
 Run from repo root:
 
@@ -9,6 +9,32 @@ export ENV_PATH=/root/lark-ops-ai-dev/.env   # optional, if not default
 ```
 
 Related: [ENV_FEATURES_TOGGLES.md](./ENV_FEATURES_TOGGLES.md) — which features are ON/OFF on prod vs dev.
+
+---
+
+## Universal card/prompt tester (every bot prompt)
+
+`scripts/post_card_once.py` renders **any** card or text prompt the bot sends. Use it to eyeball a
+single prompt without triggering the whole flow.
+
+```bash
+# list every testable prompt
+python3 scripts/post_card_once.py --list
+
+# dry-run: print the rendered JSON, send nothing
+python3 scripts/post_card_once.py --card meeting_ended
+
+# actually post — oc_ = group chat, ou_ = DM
+python3 scripts/post_card_once.py --card meeting_ended        --to oc_XXXX --post
+python3 scripts/post_card_once.py --card p1_meeting_confirm   --to ou_XXXX --post
+python3 scripts/post_card_once.py --card ongoing_dm_buzz_major --to ou_XXXX --post
+
+# override any builder kwarg
+python3 scripts/post_card_once.py --card meeting_cancelled --set priority=P1 --set reason="rolled back" --to oc_XXXX --post
+```
+
+Covers meeting create/link/ended/cancelled, recording, ongoing DM buzz (5/10-min), P1 confirm/escalate,
+keyword-confirm DM, overview/preview/edit, issue-watch alert, help, and monitoring cards.
 
 ---
 
