@@ -1819,15 +1819,17 @@ def get_p0_graph_screenshot_render_api_strict() -> bool:
 def get_p0_graph_screenshot_render_height() -> int:
     """
     ``P0_GRAPH_SCREENSHOT_RENDER_HEIGHT`` — pixel height requested from the Render API (``&height=``).
-    Tall enough to fit the whole dashboard in one image so the height-split yields two full bands.
-    Default **2400**; clamped 480–8000. Width reuses ``P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH`` (default 1920).
+    This is a **canvas/max**, not an exact size: render deliberately TALL so the whole dashboard is
+    always captured (no cut-off bottom panels), then the capture auto-crops the leftover background
+    padding before the 2-band split — so you never have to tune this to the dashboard's exact height.
+    Default **4000**; clamped 480–8000. Width reuses ``P0_GRAPH_SCREENSHOT_VIEWPORT_WIDTH`` (default 1920).
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_HEIGHT") or "2400").strip()
+    raw = (os.getenv("P0_GRAPH_SCREENSHOT_RENDER_HEIGHT") or "4000").strip()
     try:
         n = int(raw)
     except Exception:
-        n = 2400
+        n = 4000
     return max(480, min(n, 8000))
 
 
