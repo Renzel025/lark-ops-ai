@@ -364,21 +364,22 @@ def on_p0_session_ended_for_graph_screenshot() -> None:
 
 
 def _apply_kiosk_to_grafana_url(url: str, enable: bool, *, hide_time_picker: bool = True) -> str:
-    """Append ``kiosk=tv`` (+ optional hide dashboard chrome) when missing."""
+    """Append a bare ``kiosk`` param (+ optional hide dashboard chrome) when missing."""
     u = (url or "").strip()
     if not u or not enable:
         return u
     low = u.lower()
     parsed = urlparse(u)
     q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)]
-    if "kiosk" not in low:
-        q = [(k, v) for k, v in q if k.lower() != "kiosk"]
-        q.append(("kiosk", "tv"))
     if hide_time_picker and not any(k.lower() == "_dash.hidetimepicker" for k, _ in q):
         q.append(("_dash.hideTimePicker", "true"))
     if not any(k.lower() == "_dash.hidevariables" for k, _ in q):
         q.append(("_dash.hideVariables", "true"))
     new_query = urlencode(q)
+    # Grafana 11 dropped ``kiosk=tv`` (it left the nav dock/sidebar visible). The current form is a
+    # bare valueless ``kiosk`` param — append ``&kiosk`` (no ``=``) so the left nav is actually hidden.
+    if "kiosk" not in low:
+        new_query = (new_query + "&kiosk") if new_query else "kiosk"
     return urlunparse(parsed._replace(query=new_query))
 
 
@@ -4117,13 +4118,17 @@ def _derive_grafana_render_url(dashboard_url: str) -> str:
     q.append(("height", str(h)))
     # Kiosk = panels-only (no Grafana left nav / top chrome) so the render is full-width and sized
     # like the old capture, not squished beside the sidebar. Honors P0_GRAPH_SCREENSHOT_KIOSK.
-    if _config.get_p0_graph_screenshot_append_kiosk() and not any(k.lower() == "kiosk" for k, _ in q):
-        q.append(("kiosk", "tv"))
+    # Grafana 11 dropped ``kiosk=tv`` (the nav dock/sidebar stayed and leaked into the render); the
+    # current form is a bare valueless ``kiosk`` param, appended as ``&kiosk`` (no ``=``) below.
+    add_kiosk = _config.get_p0_graph_screenshot_append_kiosk() and not any(k.lower() == "kiosk" for k, _ in q)
     if not any(k.lower() == "tz" for k, _ in q):
         tz_name = (_config.get_p0_graph_screenshot_timezone_name() or "").strip()
         if tz_name:
             q.append(("tz", tz_name))
-    return urlunparse(parsed._replace(path=path, query=urlencode(q)))
+    query = urlencode(q)
+    if add_kiosk:
+        query = (query + "&kiosk") if query else "kiosk"
+    return urlunparse(parsed._replace(path=path, query=query))
 
 
 def _split_png_vertical_by_ratio(png_bytes: bytes, ratio: float) -> List[bytes]:
