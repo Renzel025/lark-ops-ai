@@ -4,7 +4,7 @@ import time
 import secrets
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
@@ -227,12 +227,13 @@ def _maybe_p0_keyword_confirm_dm(
     """
     if not get_p0_keyword_confirm_dm_enabled():
         return
-    # Never confirm for explicit negations ("this is not p0") or past/informational references
-    # ("the p0 last week") — those are genuinely not a current P0. Everything else (statements the
-    # AI called handoff, and questions like "are we going to declare this as p0?") is fair game.
-    if _is_explicit_p0_negation(text_raw) or _is_p0_informational_ask_or_past_reference(text_raw):
+    # Rule: anything that is NOT a firm auto-declaration must still ASK the duty — questions,
+    # hedges ("possible p0"), handoffs, and past/informational references ("the p0 yesterday",
+    # "may we ask ... p0") all get the Yes/No DM. Only an EXPLICIT negation ("this is not p0")
+    # stays silent, since asking "create a meeting?" right after "this is NOT p0" is nonsensical.
+    if _is_explicit_p0_negation(text_raw):
         log.info(
-            "Incident group: P0 keyword confirm DM skipped (negation / past reference) chat_id=%s",
+            "Incident group: P0 keyword confirm DM skipped (explicit negation) chat_id=%s",
             chat_id,
         )
         return
