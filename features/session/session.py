@@ -1768,9 +1768,12 @@ def handle_p1_meeting_confirm_yes(
     return ""
 
 
-def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str) -> str:
+def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str, reply_open_id: str = "") -> str:
     """
     Consume P1 prompt and skip VC. Returns ``""``, ``"session_active"``, or ``"stale"``.
+
+    ``reply_open_id`` (set when the prompt was DM'd via ``P0_P1_CONFIRM_DM``): the "no meeting"
+    acknowledgement is DM'd to that user instead of posted in the group.
     """
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
@@ -1781,11 +1784,12 @@ def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str) -> str:
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:
         return "stale"
-    _lark.post_text_to_chat(
-        chat_id,
-        token,
-        "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting.",
-    )
+    msg = "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting."
+    rid = (reply_open_id or "").strip()
+    if rid:
+        _lark.post_text_to_open_id(rid, token, msg)
+    else:
+        _lark.post_text_to_chat(chat_id, token, msg)
     return ""
 
 

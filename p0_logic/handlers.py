@@ -1095,13 +1095,15 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 return
             nonce = _extract_p1_confirm_nonce(payload)
-            err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce)
+            # When the prompt was DM'd (P0_P1_CONFIRM_DM), reply in the clicker's DM, not the group.
+            reply_dm = sender_open_id if (_config.p0_p1_confirm_dm_enabled() and sender_open_id) else ""
+            err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce, reply_open_id=reply_dm)
             if err == "session_active":
-                _lark.post_text_to_chat(
-                    chat_id,
-                    tenant_token,
-                    "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
-                )
+                busy_msg = "ℹ️ A meeting is already active in this chat."
+                if reply_dm:
+                    _lark.post_text_to_open_id(reply_dm, tenant_token, busy_msg)
+                else:
+                    _lark.post_text_to_chat(chat_id, tenant_token, busy_msg)
                 return
             if err == "stale":
                 if sender_open_id:
