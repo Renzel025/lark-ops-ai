@@ -1276,11 +1276,14 @@ def list_bitable_records(
     app_token: str,
     table_id: str,
     *,
-    page_size: int = 100,
-    max_pages: int = 10,
+    page_size: int = 500,
+    max_pages: int = 40,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     List all records in a Bitable table (paginated GET).
+
+    ``page_size`` is capped at the Lark max of 500; ``max_pages`` bounds total rows read
+    (default 500×40 = 20,000) before returning ``bitable list truncated (max_pages)``.
 
     Requires ``bitable:app:readonly`` (or ``bitable:app``) on the Lark app.
     """

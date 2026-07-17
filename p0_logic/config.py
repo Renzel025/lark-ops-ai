@@ -3292,6 +3292,22 @@ def get_p0_adjustment_bitable_ops_page_size() -> int:
         return 8
 
 
+def get_p0_adjustment_bitable_max_pages() -> int:
+    """
+    ``P0_ADJUSTMENT_BITABLE_MAX_PAGES`` — how many pages (of 500 records each) the deploy/ops fetch
+    will read before giving up with ``bitable list truncated (max_pages)``. The fetch reads the whole
+    table and filters by the time window in Python, so this must cover the table's total row count:
+    default **40** (= 20,000 rows). Raise it here (no redeploy needed) as the table grows.
+    Clamped 1–2000.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_MAX_PAGES") or "40").strip()
+    try:
+        return max(1, min(int(raw), 2000))
+    except ValueError:
+        return 40
+
+
 def p0_adjustment_bitable_also_send_to_group() -> bool:
     """
     ``P0_ADJUSTMENT_BITABLE_ALSO_SEND_TO_GROUP`` — legacy path only: after thread reply on
