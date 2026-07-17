@@ -332,6 +332,19 @@ def p0_single_incident_group_mode() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def p0_group_typed_meeting_commands_enabled() -> bool:
+    """
+    ``P0_GROUP_TYPED_MEETING_COMMANDS`` — when **off**, the typed *meeting-lifecycle* commands in the
+    incident group (``cancel`` / ``cancel meeting`` / ``cm`` and ``end meeting`` / ``em`` / ``pe`` /
+    ``p0 end`` …) are ignored, so a stray chat message can never cancel/end a live meeting. P0/P1
+    declaration still works (that's how a meeting opens), and the manual-overview DM commands are
+    unaffected. Default **on** (``1``) to preserve existing behavior; set ``0`` to disable.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_GROUP_TYPED_MEETING_COMMANDS") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_incident_overview_send_map() -> Dict[str, str]:
     """
     Parsed ``INCIDENT_OVERVIEW_SEND_MAP``: ``source_incident_oc=overview_destination_oc``.
