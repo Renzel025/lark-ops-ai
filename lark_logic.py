@@ -930,6 +930,55 @@ def _is_p0_thread_confirm_question(text: str) -> bool:
     return bool(P0_THREAD_CONFIRM_QUESTION_RE.search(t))
 
 
+def _strip_leading_at_mentions_for_confirm(
+    line: str, mention_names: Optional[List[str]] = None
+) -> str:
+    """
+    Lark text may use ``@_user_1`` (single token) or UI-style ``@CP OM Duty`` (spaces in the label).
+    Strip **longest** ``@displayName`` first using webhook ``mentions[].name``, then ``@\\S+`` tokens.
+    """
+    line = (line or "").strip()
+    while True:
+        changed = False
+        names = [n.strip() for n in (mention_names or []) if (n or "").strip()]
+        names.sort(key=len, reverse=True)
+        for n in names:
+            prefix = "@" + n
+            if line.startswith(prefix):
+                line = line[len(prefix) :].lstrip()
+                changed = True
+                break
+        if changed:
+            continue
+        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
+        if nxt != line:
+            line = nxt.strip()
+            continue
+        break
+    return line
+
+
+def _matches_p1_pending_create_reply(
+    text_raw: str, mention_names: Optional[List[str]] = None
+) -> bool:
+    """P1 card typed confirm: allow @mentions and short explanations after **yes** / **create meeting**."""
+    t = (text_raw or "").strip()
+    if not t:
+        return False
+    line = t.split("\n")[0].strip()
+    line = re.sub(r"<[^>]+>", "", line).strip()
+    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
+    s = line.strip()
+    if not s:
+        return False
+    if P1_PENDING_CREATE_RE.match(s):
+        return True
+    return bool(
+        re.match(r"^\s*(?:create\s+meeting|p1\s+create)\b", s, re.IGNORECASE)
+        or re.match(r"^\s*yes\b", s, re.IGNORECASE)
+    )
+
+
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
     out: List[str] = []
     if not raw_mentions:
