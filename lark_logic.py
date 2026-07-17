@@ -1719,6 +1719,18 @@ def process_message(
                         )
                         return
                 elif _legacy_p0_keyword_blocked(kw_text):
+                    # Rule: a P0 keyword must NEVER be dropped silently — the legacy regex/heuristic
+                    # path only blocks AUTO-declare, so still offer the duty a Yes/No confirm DM.
+                    # (_maybe_p0_keyword_confirm_dm self-skips explicit negations / past references.)
+                    _maybe_p0_keyword_confirm_dm(
+                        chat_id=chat_id,
+                        token=token,
+                        user_id=user_id,
+                        sender_lark_user_id=sender_lark_user_id,
+                        source_chat_name=source_chat_name,
+                        text_raw=text_raw,
+                        message_id=message_id,
+                    )
                     return
                 elif get_p0_keyword_groq_gate():
                     if _is_explicit_direct_p0_declaration(kw_text):
