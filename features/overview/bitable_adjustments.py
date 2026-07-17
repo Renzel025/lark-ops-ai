@@ -472,7 +472,13 @@ def _fetch_bitable_records(
     if not tenant_token or not app_token or not table_id:
         return [], "missing token or table id", "", 0, 0
     cutoff_ms, end_ms, window_label = _window_bounds_ms()
-    records, err = _lark.list_bitable_records(tenant_token, app_token, table_id)
+    records, err = _lark.list_bitable_records(
+        tenant_token,
+        app_token,
+        table_id,
+        page_size=500,
+        max_pages=_config.get_p0_adjustment_bitable_max_pages(),
+    )
     if err:
         return [], err, window_label, cutoff_ms, end_ms
     log.info(
