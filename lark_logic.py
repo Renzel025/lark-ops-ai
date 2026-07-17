@@ -316,28 +316,47 @@ _IF_OR_WHETHER_PRIORITY_CLAUSE_RE = re.compile(
     r"(?is)\b(?:if|whether)\s+.{1,220}?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
 )
 
+# Explicit **declaration** ("this is p0", "it's a p1", "declaring p0") — a real statement, not a
+# question — so a stray '?' from an *unrelated* sentence does not suppress a genuine P0 (e.g.
+# "This is P0. @cs is there players reaching out?"). The (?!\s*\?) lookahead keeps a directly
+# questioned "this is p0?" out (that stays a question). "is this p0" won't match (needs "this is").
+_EXPLICIT_PRIORITY_DECLARATION_RE = re.compile(
+    rf"(?is)"
+    rf"\b(?:this|that)\s+is\s+(?:now\s+|already\s+|indeed\s+|a\s+|an\s+)*{_PRIO01}\b(?!\s*\?)"
+    rf"|\bit'?s\s+(?:now\s+|already\s+|a\s+|an\s+)*{_PRIO01}\b(?!\s*\?)"
+    rf"|\b(?:declaring|declare|raising|raise)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?{_PRIO01}\b(?!\s*\?)"
+    rf"|\b{_PRIO01}\s+(?:confirmed|declared)\b(?!\s*\?)"
+)
+
 
 def _is_question_about_priority(text: str) -> bool:
     """
     True if the message looks like a question *about* P0/P1 rather than a declaration.
     Declarations like "this is p0" (statement) still trigger; "is this p0?" does not.
+    A stray '?' from an unrelated sentence no longer suppresses an explicit "this is p0" declaration.
     """
     t = (text or "").strip()
     if not t:
         return False
     if not (P0_KEYWORD_RE.search(t) or P1_KEYWORD_RE.search(t)):
         return False
-    # Phrases that arm **thread confirm** are never keyword declarations (e.g. "can we tag it as p0" without `?`).
+    # Explicit question forms always win (asking, not declaring) — checked before the declaration
+    # override and before the blanket '?' so a real "is this p0?" / "if this is p0" stays a question.
     if _is_p0_thread_confirm_question(t):
         return True
-    # Question mark: treat as non-declaration for incident keyword triggers.
-    if "?" in t:
+    if _QUESTION_PRIORITY_PHRASE_RE.search(t):
         return True
     if _BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE.search(t):
         return True
     if _IF_OR_WHETHER_PRIORITY_CLAUSE_RE.search(t):
         return True
-    return bool(_QUESTION_PRIORITY_PHRASE_RE.search(t))
+    # A clear declaration ("this is p0") is NOT a question even if a stray '?' appears elsewhere.
+    if _EXPLICIT_PRIORITY_DECLARATION_RE.search(t):
+        return False
+    # Bare '?' with a priority keyword and none of the above → treat as a question.
+    if "?" in t:
+        return True
+    return False
 
 
 # Polite asks often omit ``?`` on Lark (e.g. "may we know what are the findings of p0 last tuesday").
@@ -597,10 +616,12 @@ def _regex_priority_keyword_intent_override(text_raw: str) -> Optional[str]:
         return "question"
     if _is_p0_thread_confirm_question(t):
         return "question"
-    if _is_question_about_priority(t):
-        return "question"
     if _is_explicit_direct_p0_declaration(t):
         return "declare_p0"
+    # NOTE: the softer _is_question_about_priority (is-this-p0?, a stray '?') is deliberately NOT a
+    # hard override here. When P0_KEYWORD_AI_TRIAGE is on we want the LLM to classify these — not
+    # pre-label them "question" and skip the model. (Explicit negation / thread-confirm / explicit
+    # declaration stay deterministic above; the legacy no-AI path still uses the regex directly.)
     return None
 
 
@@ -1639,7 +1660,10 @@ def process_message(
                         text_raw[:200],
                     )
                     return
-                if _is_question_about_priority(text_raw):
+                # When AI triage is ON, do NOT pre-ignore on the blunt regex — let the message reach
+                # the LLM below so Claude decides declare-vs-question. Only the no-AI legacy path
+                # short-circuits here. (Explicit negation is already handled hard, above.)
+                if not get_p0_keyword_ai_triage() and _is_question_about_priority(text_raw):
                     log.info(
                         "Incident group: P0 trigger ignored (question about priority) text=%r",
                         text_raw[:200],
