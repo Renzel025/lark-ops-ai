@@ -382,6 +382,27 @@ def _patch_p0_keyword_confirm_result(
         )
 
 
+def _patch_p1_confirm_result(
+    tenant_token: str,
+    card_message_id: str,
+    text: str,
+    template: str = "grey",
+) -> None:
+    """PATCH the P1 'create meeting?' confirm card in place with the chosen outcome (created / declined)."""
+    mid = (card_message_id or "").strip()
+    if not mid:
+        return
+    card = _cards.build_p0_keyword_confirm_result_card(text, template=template, title="⚠️ P1 mentioned")
+    st, body = _lark.patch_interactive_card(tenant_token, mid, card)
+    if st != 200:
+        log.warning(
+            "p1_confirm: patch card HTTP=%s mid_tail=%s body=%r",
+            st,
+            mid[-12:] if len(mid) > 12 else mid,
+            (body or "")[:200],
+        )
+
+
 def _extract_form_field(payload: Dict[str, Any], field: str) -> str:
     """Read a form field value, including empty string when the user cleared the field."""
     val_d = _card_action_value_dict(payload)
@@ -1074,19 +1095,20 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                 log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
                 return
             nonce = _extract_p1_confirm_nonce(payload)
+            card_mid = _extract_card_action_open_message_id(payload)
             err = _session.handle_p1_meeting_confirm_yes(chat_id, tenant_token, sender_open_id, nonce)
             if err == "session_active":
-                if sender_open_id:
-                    _lark.post_text_to_open_id(sender_open_id, tenant_token, "ℹ️ A meeting session is already active.")
+                _patch_p1_confirm_result(tenant_token, card_mid, "ℹ️ A meeting session is already active.")
                 return
             if err == "stale":
-                if sender_open_id:
-                    _lark.post_text_to_open_id(
-                        sender_open_id,
-                        tenant_token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
+                _patch_p1_confirm_result(
+                    tenant_token, card_mid, "⌛ This P1 confirmation is out of date or was already answered."
+                )
                 return
+            # Updates the confirm card in place (works whether it's in the group or a DM).
+            _patch_p1_confirm_result(
+                tenant_token, card_mid, "✅ **Meeting created** — the invite is posted in the group.", template="green"
+            )
             return
 
         if action_name == "p1_confirm_meeting_no":
@@ -1095,24 +1117,23 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             if not chat_id:
                 return
             nonce = _extract_p1_confirm_nonce(payload)
-            # When the prompt was DM'd (P0_P1_CONFIRM_DM), reply in the clicker's DM, not the group.
-            reply_dm = sender_open_id if (_config.p0_p1_confirm_dm_enabled() and sender_open_id) else ""
-            err = _session.handle_p1_meeting_confirm_no(chat_id, tenant_token, nonce, reply_open_id=reply_dm)
+            card_mid = _extract_card_action_open_message_id(payload)
+            # The card patch below is the acknowledgement — suppress the separate text reply when we
+            # have a card to update (always true for a button click).
+            err = _session.handle_p1_meeting_confirm_no(
+                chat_id, tenant_token, nonce, suppress_reply=bool(card_mid)
+            )
             if err == "session_active":
-                busy_msg = "ℹ️ A meeting is already active in this chat."
-                if reply_dm:
-                    _lark.post_text_to_open_id(reply_dm, tenant_token, busy_msg)
-                else:
-                    _lark.post_text_to_chat(chat_id, tenant_token, busy_msg)
+                _patch_p1_confirm_result(tenant_token, card_mid, "ℹ️ A meeting is already active in this chat.")
                 return
             if err == "stale":
-                if sender_open_id:
-                    _lark.post_text_to_open_id(
-                        sender_open_id,
-                        tenant_token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
+                _patch_p1_confirm_result(
+                    tenant_token, card_mid, "⌛ This P1 confirmation is out of date or was already answered."
+                )
                 return
+            _patch_p1_confirm_result(
+                tenant_token, card_mid, "🚫 **No meeting created.** Type **p1** in the group again when you need one."
+            )
             return
 
         if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no", "p0_keyword_confirm_cancel"):
