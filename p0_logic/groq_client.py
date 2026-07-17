@@ -193,48 +193,6 @@ def _parse_json_object(raw: str) -> Optional[dict]:
             return None
 
 
-def groq_thread_confirm_affirms_p0(question_text: str, reply_text: str) -> Optional[bool]:
-    """
-    Classify whether **reply_text** affirms P0 escalation in context of **question_text**.
-
-    Returns:
-        ``True`` / ``False`` when JSON is parsed; ``None`` on missing key/API/parse failure
-        (caller must **not** start P0 on ``None`` — conservative).
-    """
-    if not GROQ_API_KEY:
-        return None
-    q = (question_text or "").strip()
-    r = (reply_text or "").strip()
-    if not q or not r:
-        return None
-    q = q[:4500]
-    r = r[:4500]
-    system_prompt = (
-        "You classify on-call chat messages about incident severity.\n"
-        "QUESTION is the earlier message that asked whether an issue is P0 (or whether to tag/escalate as P0).\n"
-        "REPLY is a newer message that might be an answer OR might be yet another question.\n\n"
-        "Set affirms_p0=true ONLY if REPLY **clearly answers** and **agrees** that the situation should be "
-        "handled as P0 (e.g. yes, agreed, it is P0, tag it as P0 as decided, we consider it P0, go ahead as P0).\n"
-        "Set affirms_p0=false if REPLY:\n"
-        "- is itself asking permission or repeating a question (e.g. \"can we tag as P0?\", "
-        "\"is this P0?\", \"may we…\", \"should we tag…\") — even if it mentions P0;\n"
-        "- declines, says not P0 / only P1, is unsure without approving, only requests more logs, or is unrelated.\n\n"
-        "Output ONLY valid JSON: {\"affirms_p0\": true} or {\"affirms_p0\": false}"
-    )
-    user_prompt = f"QUESTION:\n{q}\n\nREPLY:\n{r}"
-    raw = groq_chat_once(system_prompt, user_prompt, max_tokens=120)
-    obj = _parse_json_object(raw or "")
-    if not obj:
-        log.warning("groq_thread_confirm: JSON parse failed head=%s", (raw or "")[:200])
-        return None
-    v = obj.get("affirms_p0")
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, str):
-        return v.strip().lower() in ("true", "1", "yes")
-    return None
-
-
 def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
     """
     Classify whether **message_text** is a **real P0 declaration** for the *current* incident/workflow
