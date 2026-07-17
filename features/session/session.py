@@ -1634,8 +1634,32 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     if not nonce:
         log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
         return False
+    card = _cards.build_p1_meeting_confirm_card(nonce, source_chat_id=chat_id)
+    # P0_P1_CONFIRM_DM: send the prompt to the duty DM(s) instead of the group. The buttons carry the
+    # source chat id, so a click from the DM still creates/declines the P1 for this group.
+    if _config.p0_p1_confirm_dm_enabled():
+        recipients = [x for x in (_config.get_dm_instruction_open_ids() or []) if x]
+        if recipients:
+            ok_any = False
+            for oid in recipients:
+                st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
+                if st == 200:
+                    ok_any = True
+                else:
+                    log.warning(
+                        "request_p1_meeting_confirmation DM failed oid_tail=%s HTTP=%s body=%s",
+                        oid[-8:] if len(oid) > 8 else oid, st, (body or "")[:300],
+                    )
+            if ok_any:
+                return True
+            log.warning("request_p1_meeting_confirmation: all DM posts failed — falling back to group post")
+        else:
+            log.info(
+                "request_p1_meeting_confirmation: P0_P1_CONFIRM_DM on but P0_DM_INSTRUCTION_OPEN_IDS "
+                "is empty — posting the P1 prompt to the group instead"
+            )
     prompt_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
-    st, body, _ = _lark.post_card_to_chat(prompt_chat, token, _cards.build_p1_meeting_confirm_card(nonce))
+    st, body, _ = _lark.post_card_to_chat(prompt_chat, token, card)
     if st != 200:
         log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
         return False

@@ -754,14 +754,19 @@ def build_meeting_cancelled_card(
     }
 
 
-def build_p1_meeting_confirm_card(confirm_nonce: str) -> Dict[str, Any]:
+def build_p1_meeting_confirm_card(confirm_nonce: str, source_chat_id: str = "") -> Dict[str, Any]:
     """Shown when someone says P1 — **Create meeting** or **Don't need** (typed ``create meeting`` still works)."""
     nonce = (confirm_nonce or "").strip()
+    src = (source_chat_id or "").strip()
     val_yes: Dict[str, Any] = {"action": "p1_confirm_meeting_yes"}
     val_no: Dict[str, Any] = {"action": "p1_confirm_meeting_no"}
     if nonce:
         val_yes["p1_nonce"] = nonce
         val_no["p1_nonce"] = nonce
+    if src:
+        # Carried so a click from a DM (P0_P1_CONFIRM_DM) still resolves the source incident group.
+        val_yes["source_chat_id"] = src
+        val_no["source_chat_id"] = src
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},

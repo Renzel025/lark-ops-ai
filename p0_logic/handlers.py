@@ -1066,7 +1066,10 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
         _maybe_merge_dm_scope_from_card(sender_open_id, payload)
 
         if action_name == "p1_confirm_meeting_yes":
-            chat_id = _extract_card_action_open_chat_id(payload)
+            # Prefer the source group carried in the button value (set when the card is DM'd via
+            # P0_P1_CONFIRM_DM); fall back to the click's chat for the in-group card.
+            chat_id = str(_card_action_value_dict(payload).get("source_chat_id") or "").strip() \
+                or _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
                 return
@@ -1087,7 +1090,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             return
 
         if action_name == "p1_confirm_meeting_no":
-            chat_id = _extract_card_action_open_chat_id(payload)
+            chat_id = str(_card_action_value_dict(payload).get("source_chat_id") or "").strip() \
+                or _extract_card_action_open_chat_id(payload)
             if not chat_id:
                 return
             nonce = _extract_p1_confirm_nonce(payload)
