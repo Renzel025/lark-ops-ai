@@ -1768,12 +1768,15 @@ def handle_p1_meeting_confirm_yes(
     return ""
 
 
-def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str, reply_open_id: str = "") -> str:
+def handle_p1_meeting_confirm_no(
+    chat_id: str, token: str, nonce: str, reply_open_id: str = "", suppress_reply: bool = False
+) -> str:
     """
     Consume P1 prompt and skip VC. Returns ``""``, ``"session_active"``, or ``"stale"``.
 
-    ``reply_open_id`` (set when the prompt was DM'd via ``P0_P1_CONFIRM_DM``): the "no meeting"
-    acknowledgement is DM'd to that user instead of posted in the group.
+    ``suppress_reply``: skip the text acknowledgement entirely — used by the card-button path, which
+    PATCHes the confirm card in place instead. ``reply_open_id`` (typed/legacy path): DM the "no
+    meeting" note to that user instead of posting it in the group.
     """
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
@@ -1784,6 +1787,8 @@ def handle_p1_meeting_confirm_no(chat_id: str, token: str, nonce: str, reply_ope
     pending = consume_p1_prompt_for_confirm(chat_id, nonce)
     if not pending:
         return "stale"
+    if suppress_reply:
+        return ""
     msg = "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting."
     rid = (reply_open_id or "").strip()
     if rid:
