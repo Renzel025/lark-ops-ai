@@ -150,7 +150,7 @@ def anthropic_chat_once(
         headers = _apply_oauth_headers(headers)
     payload = {
         "model": _effective_model(auth_mode, model),
-        "max_tokens": max(64, min(int(max_tokens), 1024)),
+        "max_tokens": max(64, min(int(max_tokens), 4096)),
         "system": system,
         "messages": [{"role": "user", "content": user_text}],
     }
