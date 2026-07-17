@@ -345,6 +345,19 @@ def p0_group_typed_meeting_commands_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def p0_p1_confirm_dm_enabled() -> bool:
+    """
+    ``P0_P1_CONFIRM_DM`` — when on, the "⚠️ P1 mentioned — create meeting?" prompt is sent to the duty
+    DM(s) (``P0_DM_INSTRUCTION_OPEN_IDS``) instead of being posted in the incident group. The
+    **Create meeting** / **Don't need** buttons still create/decline the P1 for the source group (the
+    card carries the source chat id). Falls back to a group post if no DM recipients are configured.
+    Default **off** (``0``) — posts in the group as before.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_P1_CONFIRM_DM") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_incident_overview_send_map() -> Dict[str, str]:
     """
     Parsed ``INCIDENT_OVERVIEW_SEND_MAP``: ``source_incident_oc=overview_destination_oc``.
