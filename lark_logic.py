@@ -828,8 +828,11 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
 
 # Cancel commands: optional free-text reason after the phrase (e.g. "cancel meeting no need yet")
 # Order: longer prefixes first so "cancel meeting" wins over "cancel".
+# The keyword must be a WHOLE word — the ``(?=\s|$)`` lookahead stops arbitrary letters gluing onto
+# the short ``cm`` / ``cancel`` triggers (e.g. a screenshot caption ``cmsdb`` must NOT cancel the P0
+# meeting; only ``cm``, ``cm <reason>``, ``cancel``, ``cancel meeting <reason>`` should).
 CANCEL_WITH_OPTIONAL_REASON_RE = re.compile(
-    r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel|cm)\s*(.*)$",
+    r"^\s*(cancel\s+meeting|cancel\s+p0|cancel\s+p1|cancel|cm)(?=\s|$)\s*(.*)$",
     re.IGNORECASE,
 )
 
