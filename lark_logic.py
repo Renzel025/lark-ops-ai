@@ -31,6 +31,7 @@ from p0_logic.config import (
     get_p0_issue_watch_enabled,
     get_p0_keyword_confirm_dm_enabled,
     get_dm_instruction_open_ids,
+    p0_group_typed_meeting_commands_enabled,
     HELP_RE,
     RING_CMD_RE,
 )
@@ -1519,7 +1520,7 @@ def process_message(
         ):
             return
 
-        if _matches_typed_end_meeting_command(text_raw):
+        if p0_group_typed_meeting_commands_enabled() and _matches_typed_end_meeting_command(text_raw):
             if chat_has_active_session(session_source):
                 sess = P0_SESSIONS.get(session_source) or {}
                 priority = str(sess.get("priority") or "P0").strip().upper()
@@ -1544,8 +1545,13 @@ def process_message(
                     )
             return
 
-        # Cancel command (optional reason after the keyword phrase)
-        cancel_m = CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
+        # Cancel command (optional reason after the keyword phrase).
+        # Gated by P0_GROUP_TYPED_MEETING_COMMANDS so typed cancel can be turned off in the group.
+        cancel_m = (
+            CANCEL_WITH_OPTIONAL_REASON_RE.match(text_raw)
+            if p0_group_typed_meeting_commands_enabled()
+            else None
+        )
         if cancel_m:
             tail = (cancel_m.group(2) or "").strip()
             cancel_reason = tail if tail else "Unspecified"
