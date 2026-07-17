@@ -20,7 +20,9 @@ from p0_logic import text_processing as _text
 
 log = logging.getLogger("lark-ops-ai")
 
-_OVERVIEW_MAX_TOKENS = 520
+# Bilingual one-shot (issue_en + zh_issue + zh_impact). Chinese is token-heavy, so 520 truncated the
+# JSON mid-field (parse failed → no overview). 1200 leaves ample headroom for all three fields.
+_OVERVIEW_MAX_TOKENS = 1200
 
 # Cache English→Chinese translations: same text → same result, so repeated edits/saves/regenerates
 # of the same issue/impact skip the (slower, all-Claude) LLM call. Bounded in-memory.

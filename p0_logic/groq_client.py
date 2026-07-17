@@ -437,9 +437,32 @@ def build_overview_oneshot_prompts(issue_source: str, impact_en: str) -> Optiona
     return system_prompt, user_prompt
 
 
+def _salvage_overview_fields(raw: str) -> dict:
+    """
+    Recover ``issue_en`` / ``zh_issue`` / ``zh_impact`` from a truncated or slightly malformed reply
+    by regex — each is a complete quoted string even when the JSON is cut off before its closing brace
+    (``issue_en`` comes first, so it usually survives). Returns {} if issue_en can't be recovered.
+    """
+    out: dict = {}
+    for key in ("issue_en", "zh_issue", "zh_impact"):
+        m = re.search(r'"' + key + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', raw or "")
+        if not m:
+            continue
+        try:
+            out[key] = json.loads('"' + m.group(1) + '"')  # unescape \n, \" etc.
+        except Exception:
+            out[key] = m.group(1)
+    return out if str(out.get("issue_en") or "").strip() else {}
+
+
 def parse_overview_oneshot(raw: str) -> Optional[Tuple[str, str, str]]:
     """Parse ``issue_en`` / ``zh_issue`` / ``zh_impact`` from a model reply; ``None`` on failure."""
     obj = _parse_json_object(raw or "")
+    if not obj:
+        # Response may be truncated mid-JSON (token limit) — try to salvage the quoted fields.
+        obj = _salvage_overview_fields(raw or "")
+        if obj:
+            log.info("overview one-shot: salvaged fields from truncated/partial JSON")
     if not obj:
         log.warning("overview one-shot: JSON parse failed head=%s", (raw or "")[:200])
         return None
@@ -465,7 +488,7 @@ def groq_overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> O
     system_prompt, user_prompt = prompts
     t0 = time.perf_counter()
     try:
-        raw = groq_chat_once(system_prompt, user_prompt, max_tokens=520)
+        raw = groq_chat_once(system_prompt, user_prompt, max_tokens=1200)
         return parse_overview_oneshot(raw)
     finally:
         perf_log("groq_overview_issue_zh_one_shot", t0)

@@ -157,20 +157,26 @@ def _add_image_to_draft(
 ) -> Tuple[Dict[str, Any], str]:
     draft = _ensure_draft(sender_open_id, target_chat)
     img = b""
-    err1 = None
-    err2 = None
-    try:
-        img = _lark.download_image_bytes(tenant_token, image_key)
-    except Exception as e:
-        err1 = e
-        log.warning("im/v1/images failed (maybe user screenshot). err=%s", e)
-    if (not img) and message_id:
+    err_resource = None
+    err_images = None
+    # User *message* images (img_v3_...) must come from the message-resource endpoint;
+    # im/v1/images only serves images the APP itself uploaded and returns 234001 ("Invalid request
+    # param") otherwise. So try the resource endpoint FIRST when we have the message_id (this avoids
+    # 4 noisy 234001 warnings per screenshot), and fall back to im/v1/images only if needed.
+    if message_id:
         try:
             img = _lark.download_message_resource_bytes(tenant_token, message_id, image_key)
         except Exception as e:
-            err2 = e
+            err_resource = e
     if not img:
-        raise RuntimeError(str(err2 or err1 or "download failed"))
+        try:
+            img = _lark.download_image_bytes(tenant_token, image_key)
+        except Exception as e:
+            err_images = e
+            if not message_id:
+                log.warning("image download failed (no message_id for resource fallback). err=%s", e)
+    if not img:
+        raise RuntimeError(str(err_resource or err_images or "download failed"))
     ocr_text = _groq.groq_vision_ocr(img)
     if not ocr_text.strip():
         raise RuntimeError("OCR returned empty")
