@@ -29,3 +29,7 @@ logs/
 
 # Slack Huddle Playwright (scripts/) — persistent browser profile
 puppeteer/
+
+# Duty roster spreadsheets — local samples with real names/phones/schedules.
+# Never commit (repo promotes to prod; the team reads the git log). Read live via the Sheets API.
+*.xlsx

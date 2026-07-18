@@ -209,6 +209,14 @@ def handle_ring_command(
         targets = [oid] if oid else []
         label = f"duty SRE {team}"
         unset_hint = f"the duty roster for {team}"
+    elif _duty.is_roster_command(c):
+        # fe / fpms: read the team roster sheet live -> today's duty name(s) -> directory -> open_id.
+        targets, _unresolved = _duty.resolve_duty_open_ids(c, tok)
+        label = f"{c.upper()} duty"
+        unset_hint = (
+            f"DUTY_ROSTER_{c.upper()}_SHEET_TOKEN/_SHEET_ID and the duty directory "
+            f"(DUTY_DIRECTORY_SHEET_TOKEN)"
+        )
     else:
         return
 
