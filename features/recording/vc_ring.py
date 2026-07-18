@@ -249,7 +249,12 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
-    _lark.post_text_to_chat(notify_chat, token, msg)
+    sess = _session.P0_SESSIONS.get(session_source) or {}
+    mid = str(sess.get("meeting_invite_message_id") or "").strip()
+    if mid:
+        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
+    else:
+        _lark.post_text_to_chat(notify_chat, token, msg)
 
 
 def _filter_ring_targets(
@@ -467,11 +472,22 @@ def _try_ring_session(
             (detail or "")[:200],
         )
         if tenant_token:
-            _lark.post_text_to_open_id(
-                declarer,
-                tenant_token,
-                "Calling the check persons for major P0 issues.",
-            )
+            meeting_invite_message_id = str(
+                sess.get("meeting_invite_message_id") or ""
+            ).strip()
+            if meeting_invite_message_id:
+                _lark.post_text_reply_to_message(
+                    meeting_invite_message_id,
+                    tenant_token,
+                    "Calling the check persons for major P0 issues.",
+                    reply_in_thread=True,
+                )
+            else:
+                _lark.post_text_to_chat(
+                    chat_id,
+                    tenant_token,
+                    "Calling the check persons for major P0 issues.",
+                )
         return True
 
     log.warning(

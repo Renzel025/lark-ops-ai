@@ -146,7 +146,11 @@ def maybe_prompt_major_check_person_joined(
     prompted = list(sess.get("major_check_person_join_prompted") or [])
     if dedupe_key in prompted:
         return
-    src_mid = str(sess.get("issue_watch_concern_message_id") or "").strip()
+    src_mid = str(
+        sess.get("meeting_invite_message_id")
+        or sess.get("issue_watch_concern_message_id")
+        or ""
+    ).strip()
     if not src_mid:
         return
     name = (participant_name or "").strip() or "Check person"
