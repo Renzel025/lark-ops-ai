@@ -221,6 +221,11 @@ def handle_ring_command(
             )
         return
 
+    if c == "m":
+        # Register the major check persons on the session so the VC-join "joined" prompt fires for
+        # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
+        _register_major_check_persons_for_join_prompt(session_source, targets)
+
     status = invite_open_ids_into_active_meeting(
         session_source,
         targets,
@@ -334,6 +339,36 @@ def _major_check_person_ring_open_ids(
             if resolved:
                 out.append(resolved)
     return out
+
+
+def _register_major_check_persons_for_join_prompt(
+    session_source: str, ring_open_ids: List[str]
+) -> None:
+    """
+    Populate ``major_check_person_open_ids`` / ``_user_ids`` on the session so the VC-join "joined"
+    prompt (``maybe_prompt_major_check_person_joined``) fires for the manual ``@bot m`` flow too.
+    Merges with any existing (Issue Watch) registration and preserves the ``join_prompted`` dedupe.
+    """
+    sess = _session.P0_SESSIONS.get(session_source)
+    if not sess:
+        return
+    recipients = _config.get_p0_major_check_person_recipients()
+    oids = {oid for oid, _uid in recipients if oid}
+    oids.update(x for x in (ring_open_ids or []) if x)
+    uids = {uid for _oid, uid in recipients if uid}
+    existing_oids = set(sess.get("major_check_person_open_ids") or [])
+    existing_uids = set(sess.get("major_check_person_user_ids") or [])
+    merged_oids = existing_oids | oids
+    merged_uids = existing_uids | uids
+    if merged_oids == existing_oids and merged_uids == existing_uids:
+        return  # nothing new to register
+    sess["major_check_person_open_ids"] = sorted(merged_oids)
+    sess["major_check_person_user_ids"] = sorted(merged_uids)
+    if "major_check_person_join_prompted" not in sess:
+        sess["major_check_person_join_prompted"] = []
+    _session.P0_SESSIONS[session_source] = sess
+    if _session._session_disk.enabled():
+        _session._session_disk.save_session(session_source, sess)
 
 
 def resolve_declare_ring_targets(
