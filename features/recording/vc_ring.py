@@ -236,6 +236,7 @@ def handle_ring_command(
     )
     if not token:
         return
+    is_ring_announcement = False
     if status == "disabled":
         msg = "⚠️ VC ring is disabled (set P0_VC_RING_ENABLED=1)."
     elif status == "no_session":
@@ -249,8 +250,18 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
+        is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = str(sess.get("meeting_invite_message_id") or "").strip()
+    # Dedupe the major-check-person "calling" announcement: auto-ring-on-join (_try_ring_session)
+    # and this `@bot m` command both announce the same thing. Post it only once per meeting.
+    if c == "m" and is_ring_announcement:
+        if sess.get("check_persons_ring_announced"):
+            return
+        sess["check_persons_ring_announced"] = True
+        _session.P0_SESSIONS[session_source] = sess
+        if _session._session_disk.enabled():
+            _session._session_disk.save_session(session_source, sess)
     if mid:
         _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
     else:
@@ -471,7 +482,13 @@ def _try_ring_session(
             declarer[-8:],
             (detail or "")[:200],
         )
-        if tenant_token:
+        # Announce the "calling check persons" notice only once per meeting — the `@bot m`
+        # command (handle_ring_command) announces the same thing, so guard against a double.
+        if tenant_token and not sess.get("check_persons_ring_announced"):
+            sess["check_persons_ring_announced"] = True
+            _session.P0_SESSIONS[chat_id] = sess
+            if _session._session_disk.enabled():
+                _session._session_disk.save_session(chat_id, sess)
             meeting_invite_message_id = str(
                 sess.get("meeting_invite_message_id") or ""
             ).strip()
