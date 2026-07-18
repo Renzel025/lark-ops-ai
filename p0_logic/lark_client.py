@@ -1467,19 +1467,26 @@ def get_tenant_user_id_by_open_id(tenant_token: str, open_id: str) -> str:
         return ""
 
 
-def batch_get_id_by_mobile(tenant_token: str, mobiles: List[str]) -> Dict[str, str]:
-    """Resolve Lark ``open_id`` for each mobile via ``contact/v3/users/batch_get_id``.
+def _batch_get_open_id(
+    tenant_token: str,
+    *,
+    mobiles: Optional[List[str]] = None,
+    emails: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Resolve Lark ``open_id`` for mobiles and/or emails via ``contact/v3/users/batch_get_id``.
 
-    Returns ``{mobile: open_id}`` only for mobiles that matched a Lark account. This is the
-    name -> phone (from the duty sheet) -> open_id bridge: the sheet has names + phones but no
-    open_ids, and Lark's id-resolution API takes mobiles/emails, not names.
+    Returns ``{mobile_or_email: open_id}`` only for the ones that matched a Lark account. This is
+    the name -> contact -> open_id bridge: the duty sheet has names + phones (accounts may instead
+    be registered by EMAIL) but no open_ids, and Lark's id-resolution API takes mobiles/emails, not
+    names. The contact (phone/email) is only a lookup key — the invite + ring use the open_id.
 
     Requires the ``contact:user.id:readonly`` scope + a published contact data range (else 41050).
-    Mobiles should be E.164 (``+60162000168``); Lark matches the account's registered mobile exactly.
+    Mobiles should be E.164 (``+60162000168``); emails must match the account exactly.
     """
     out: Dict[str, str] = {}
-    nums = [m.strip() for m in (mobiles or []) if (m or "").strip()]
-    if not tenant_token or not nums:
+    mobs = [m.strip() for m in (mobiles or []) if (m or "").strip()]
+    mails = [e.strip() for e in (emails or []) if (e or "").strip()]
+    if not tenant_token or (not mobs and not mails):
         return out
     headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
     url = f"{LARK_BASE}/contact/v3/users/batch_get_id"
@@ -1488,24 +1495,34 @@ def batch_get_id_by_mobile(tenant_token: str, mobiles: List[str]) -> Dict[str, s
             url,
             headers=headers,
             params={"user_id_type": "open_id"},
-            json={"mobiles": nums, "emails": []},
+            json={"mobiles": mobs, "emails": mails},
             **_timeout_kw(),
         )
         if r.status_code != 200:
-            log.warning("batch_get_id_by_mobile HTTP=%s body=%s", r.status_code, (r.text or "")[:300])
+            log.warning("batch_get_open_id HTTP=%s body=%s", r.status_code, (r.text or "")[:300])
             return out
         j = r.json() if r.text else {}
         if j.get("code") != 0:
-            log.warning("batch_get_id_by_mobile code=%s msg=%s", j.get("code"), j.get("msg"))
+            log.warning("batch_get_open_id code=%s msg=%s", j.get("code"), j.get("msg"))
             return out
         for u in ((j.get("data") or {}).get("user_list") or []):
             if not isinstance(u, dict):
                 continue
-            mob = str(u.get("mobile") or "").strip()
+            key = str(u.get("mobile") or u.get("email") or "").strip()
             # user_id holds the open_id when user_id_type=open_id; keep open_id as a fallback field.
             oid = str(u.get("user_id") or u.get("open_id") or "").strip()
-            if mob and oid:
-                out[mob] = oid
+            if key and oid:
+                out[key] = oid
     except Exception as e:
-        log.warning("batch_get_id_by_mobile failed: %s", e)
+        log.warning("batch_get_open_id failed: %s", e)
     return out
+
+
+def batch_get_id_by_mobile(tenant_token: str, mobiles: List[str]) -> Dict[str, str]:
+    """``{mobile: open_id}`` via batch_get_id. See ``_batch_get_open_id``."""
+    return _batch_get_open_id(tenant_token, mobiles=mobiles)
+
+
+def batch_get_id_by_email(tenant_token: str, emails: List[str]) -> Dict[str, str]:
+    """``{email: open_id}`` via batch_get_id — use when Lark accounts are registered by email."""
+    return _batch_get_open_id(tenant_token, emails=emails)
