@@ -1278,6 +1278,7 @@ def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str 
         return ""
     headers = {"Authorization": f"Bearer {tenant_token}"}
     want = (sheet_name or "").strip()
+    last = ""
     for base in _config.SHEETS_BASES:
         url = f"{base}/sheets/v3/spreadsheets/{spreadsheet_token}/sheets/query"
         try:
@@ -1291,8 +1292,18 @@ def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str 
                             if isinstance(s, dict) and str(s.get("title") or "").strip() == want:
                                 return str(s.get("sheet_id") or "").strip()
                     return str((sheets[0] or {}).get("sheet_id") or "").strip()
+                last = f"{base} code=0 but no sheets in response"
+            else:
+                last = f"{base} HTTP={r.status_code} code={j.get('code')} msg={j.get('msg')}"
         except Exception as e:
-            log.warning("resolve_sheet_id failed base=%s: %s", base, e)
+            last = f"{base} exception={e}"
+    if last:
+        # Surface WHY: a 403 / permission code == bot not shared on the sheet or missing sheets scope.
+        log.warning(
+            "resolve_sheet_id could not resolve token_tail=%s: %s",
+            spreadsheet_token[-8:] if len(spreadsheet_token) > 8 else spreadsheet_token,
+            last,
+        )
     return ""
 
 
