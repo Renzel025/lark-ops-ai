@@ -1271,6 +1271,31 @@ def read_sheets_values_batch(tenant_token: str, spreadsheet_token: str, range_st
     return [], last or "values_batch_get failed"
 
 
+def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str = "") -> str:
+    """Sheet_id for a spreadsheet via ``sheets/v3 .../sheets/query`` — match ``sheet_name`` (title)
+    else the FIRST sheet. Use when the URL has no ``?sheet=`` (single-tab sheets)."""
+    if not tenant_token or not spreadsheet_token:
+        return ""
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    want = (sheet_name or "").strip()
+    for base in _config.SHEETS_BASES:
+        url = f"{base}/sheets/v3/spreadsheets/{spreadsheet_token}/sheets/query"
+        try:
+            r = _lark_http().get(url, headers=headers, **_timeout_kw())
+            j = r.json() if r.text else {}
+            if r.status_code == 200 and j.get("code") == 0:
+                sheets = (j.get("data") or {}).get("sheets") or []
+                if isinstance(sheets, list) and sheets:
+                    if want:
+                        for s in sheets:
+                            if isinstance(s, dict) and str(s.get("title") or "").strip() == want:
+                                return str(s.get("sheet_id") or "").strip()
+                    return str((sheets[0] or {}).get("sheet_id") or "").strip()
+        except Exception as e:
+            log.warning("resolve_sheet_id failed base=%s: %s", base, e)
+    return ""
+
+
 def list_bitable_records(
     tenant_token: str,
     app_token: str,

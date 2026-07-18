@@ -173,12 +173,13 @@ def is_roster_command(cmd: str) -> bool:
     return (cmd or "").strip().lower() in _ROSTER
 
 
-def _roster_env(prefix: str) -> Tuple[str, str, str]:
+def _roster_env(prefix: str) -> Tuple[str, str, str, str]:
     _config.reload_env_runtime()
     token = (os.getenv(f"{prefix}_SHEET_TOKEN") or "").strip()
     sheet_id = (os.getenv(f"{prefix}_SHEET_ID") or "").strip()
+    sheet_name = (os.getenv(f"{prefix}_SHEET_NAME") or "").strip()
     rng = (os.getenv(f"{prefix}_RANGE") or "A:AF").strip()
-    return token, sheet_id, rng
+    return token, sheet_id, sheet_name, rng
 
 
 def resolve_duty_names(cmd: str, tenant_token: str) -> List[str]:
@@ -191,10 +192,16 @@ def resolve_duty_names(cmd: str, tenant_token: str) -> List[str]:
     if not reg:
         return []
     prefix, parser = reg
-    token, sheet_id, rng = _roster_env(prefix)
-    if not token or not sheet_id:
-        log.warning("duty_roster: %s_SHEET_TOKEN/_SHEET_ID not set", prefix)
+    token, sheet_id, sheet_name, rng = _roster_env(prefix)
+    if not token:
+        log.warning("duty_roster: %s_SHEET_TOKEN not set", prefix)
         return []
+    if not sheet_id:
+        # Single-tab sheet: URL has no ?sheet= — resolve the sheet_id (by name, else first sheet).
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            log.warning("duty_roster: %s could not resolve sheet_id (token/share/permission?)", prefix)
+            return []
     rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
     if err or not rows:
         log.warning("duty_roster: %s read failed err=%s rows=%s", c, err, len(rows or []))

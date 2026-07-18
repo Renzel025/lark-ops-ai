@@ -45,12 +45,13 @@ def normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
 
-def _cfg() -> Tuple[str, str, str]:
+def _cfg() -> Tuple[str, str, str, str]:
     _config.reload_env_runtime()
     token = (os.getenv("DUTY_DIRECTORY_SHEET_TOKEN") or "").strip()
     sheet_id = (os.getenv("DUTY_DIRECTORY_SHEET_ID") or "").strip()
+    sheet_name = (os.getenv("DUTY_DIRECTORY_SHEET_NAME") or "").strip()
     rng = (os.getenv("DUTY_DIRECTORY_RANGE") or "A:C").strip()
-    return token, sheet_id, rng
+    return token, sheet_id, sheet_name, rng
 
 
 def _col_index(header: list, *names: str) -> int:
@@ -62,10 +63,16 @@ def _col_index(header: list, *names: str) -> int:
 
 
 def _fetch_directory(tenant_token: str) -> Dict[str, str]:
-    token, sheet_id, rng = _cfg()
-    if not token or not sheet_id:
-        log.warning("duty_directory: DUTY_DIRECTORY_SHEET_TOKEN / _SHEET_ID not set")
+    token, sheet_id, sheet_name, rng = _cfg()
+    if not token:
+        log.warning("duty_directory: DUTY_DIRECTORY_SHEET_TOKEN not set")
         return {}
+    if not sheet_id:
+        # Single-tab sheet: URL has no ?sheet= — resolve the sheet_id (by name, else first sheet).
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            log.warning("duty_directory: could not resolve sheet_id (token/share/permission?)")
+            return {}
     rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
     if err or not rows:
         log.warning("duty_directory: read failed err=%s rows=%s", err, len(rows or []))
