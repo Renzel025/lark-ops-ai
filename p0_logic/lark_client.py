@@ -1465,3 +1465,47 @@ def get_tenant_user_id_by_open_id(tenant_token: str, open_id: str) -> str:
         return str(user.get("user_id") or "").strip()
     except Exception:
         return ""
+
+
+def batch_get_id_by_mobile(tenant_token: str, mobiles: List[str]) -> Dict[str, str]:
+    """Resolve Lark ``open_id`` for each mobile via ``contact/v3/users/batch_get_id``.
+
+    Returns ``{mobile: open_id}`` only for mobiles that matched a Lark account. This is the
+    name -> phone (from the duty sheet) -> open_id bridge: the sheet has names + phones but no
+    open_ids, and Lark's id-resolution API takes mobiles/emails, not names.
+
+    Requires the ``contact:user.id:readonly`` scope + a published contact data range (else 41050).
+    Mobiles should be E.164 (``+60162000168``); Lark matches the account's registered mobile exactly.
+    """
+    out: Dict[str, str] = {}
+    nums = [m.strip() for m in (mobiles or []) if (m or "").strip()]
+    if not tenant_token or not nums:
+        return out
+    headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
+    url = f"{LARK_BASE}/contact/v3/users/batch_get_id"
+    try:
+        r = _lark_http().post(
+            url,
+            headers=headers,
+            params={"user_id_type": "open_id"},
+            json={"mobiles": nums, "emails": []},
+            **_timeout_kw(),
+        )
+        if r.status_code != 200:
+            log.warning("batch_get_id_by_mobile HTTP=%s body=%s", r.status_code, (r.text or "")[:300])
+            return out
+        j = r.json() if r.text else {}
+        if j.get("code") != 0:
+            log.warning("batch_get_id_by_mobile code=%s msg=%s", j.get("code"), j.get("msg"))
+            return out
+        for u in ((j.get("data") or {}).get("user_list") or []):
+            if not isinstance(u, dict):
+                continue
+            mob = str(u.get("mobile") or "").strip()
+            # user_id holds the open_id when user_id_type=open_id; keep open_id as a fallback field.
+            oid = str(u.get("user_id") or u.get("open_id") or "").strip()
+            if mob and oid:
+                out[mob] = oid
+    except Exception as e:
+        log.warning("batch_get_id_by_mobile failed: %s", e)
+    return out
