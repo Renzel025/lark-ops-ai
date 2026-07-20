@@ -1307,6 +1307,52 @@ def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str 
     return ""
 
 
+def list_chat_members(tenant_token: str, chat_id: str) -> List[Tuple[str, str]]:
+    """List a group's members as ``(name, open_id)`` via ``im/v1/chats/{chat_id}/members``.
+
+    Handy for bulk-building the duty directory: dump a group that has all the duty people, then
+    paste name -> open_id. The bot must be IN the chat and have an im chat-read scope.
+    """
+    out: List[Tuple[str, str]] = []
+    cid = (chat_id or "").strip()
+    if not tenant_token or not cid:
+        return out
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    page_token = ""
+    for _ in range(50):  # safety cap on pagination
+        params: Dict[str, Any] = {"member_id_type": "open_id", "page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        url = f"{LARK_BASE}/im/v1/chats/{quote(cid, safe='')}/members"
+        try:
+            r = _lark_http().get(url, headers=headers, params=params, **_timeout_kw())
+            j = r.json() if r.text else {}
+            if r.status_code != 200 or j.get("code") != 0:
+                log.warning(
+                    "list_chat_members HTTP=%s code=%s msg=%s (bot in chat? im scope?)",
+                    r.status_code,
+                    j.get("code"),
+                    j.get("msg"),
+                )
+                break
+            data = j.get("data") or {}
+            for it in (data.get("items") or []):
+                if not isinstance(it, dict):
+                    continue
+                oid = str(it.get("member_id") or "").strip()
+                name = str(it.get("name") or "").strip()
+                if oid.startswith("ou_"):
+                    out.append((name, oid))
+            if data.get("has_more") and data.get("page_token"):
+                page_token = str(data.get("page_token") or "").strip()
+            else:
+                break
+        except Exception as e:
+            log.warning("list_chat_members failed: %s", e)
+            break
+    return out
+
+
 def list_bitable_records(
     tenant_token: str,
     app_token: str,
