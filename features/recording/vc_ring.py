@@ -218,6 +218,13 @@ def handle_ring_command(
             f"(DUTY_DIRECTORY_SHEET_TOKEN)"
         )
     else:
+        # Recognized by RING_CMD_RE (e.g. cpms / pms) but no roster parser/config wired yet.
+        if token:
+            _lark.post_text_to_chat(
+                notify_chat,
+                token,
+                f"⚠️ '/{c}' is not wired up yet — its roster parser/sheet config is still pending.",
+            )
         return
 
     if not targets:
