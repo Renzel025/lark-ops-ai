@@ -2061,9 +2061,13 @@ def start_p0(
         # Seed ring targets: whatever the caller passed (Issue Watch mentions / major check
         # persons) PLUS the fixed P0_VC_AUTO_INVITE_OPEN_IDS — those are invited into EVERY new
         # meeting the moment it's created (rung when the declarer joins + is OAuth-authorized).
+        _auto_invite_ids = [
+            o for o in _config.get_p0_vc_auto_invite_open_ids()
+            if o and o != trigger_open_id
+        ]
         _ring_seed: List[str] = list(vc_ring_target_open_ids or [])
-        for _auto_oid in _config.get_p0_vc_auto_invite_open_ids():
-            if _auto_oid and _auto_oid != trigger_open_id and _auto_oid not in _ring_seed:
+        for _auto_oid in _auto_invite_ids:
+            if _auto_oid not in _ring_seed:
                 _ring_seed.append(_auto_oid)
         P0_SESSIONS[session_key] = {
             "priority": priority,
@@ -2084,6 +2088,10 @@ def start_p0(
             "vc_ring_target_open_ids": _ring_seed,
             "vc_ring_invited_open_ids": [],
             "vc_ring_done": False,
+            # Auto-invited users get a "joined the meeting" thread reply when they join VC
+            # (same join-watch mechanism as major check persons).
+            "major_check_person_open_ids": list(_auto_invite_ids),
+            "major_check_person_join_prompted": [],
         }
         if trigger_open_id:
             try:
