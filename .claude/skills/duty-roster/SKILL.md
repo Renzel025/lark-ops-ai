@@ -16,10 +16,17 @@ the user is deciding on a data-driven "Duty Command Registry" sheet rather than 
 |---|---|---|
 | `m` | major-P0 check persons | `P0_MAJOR_CHECK_PERSON_IDS` (config) |
 | `e` | escalation contacts | `P0_VC_RING_ESCALATION_OPEN_IDS` (config) |
-| `fe` / `fpms` | **team** duty | live roster sheet → parser → directory → open_id ✅ **built** |
-| `scpms` / `sfpms` / `sfe` / `spms` | **SRE** duty (CPMS/FPMS/FE/PMS) | env stub `P0_VC_RING_DUTY_<TEAM>_OPEN_ID` — real source is the OSE "SRE PLATFORM" section (parser TODO) |
-| `cpms` / `pms` | CPMS / PMS team duty | TODO (PMS/CPMS sheets) |
+| `fe` / `fpms` / `pms` | **team** duty | live roster sheet → parser → directory → open_id ✅ **built** (pms = PMS Support, weekly First Level by [Start,End]) |
+| `scpms` / `sfpms` / `sfe` / `spms` | **SRE** duty (CPMS/FPMS/FE/PMS) | ✅ **built** — SRE handler tab (`Name\|Handler`) → team match → directory → open_id; OPTIONAL on-shift filter via `DUTY_SRE_SHIFT_SHEET_TOKEN` (env stub `P0_VC_RING_DUTY_<TEAM>_OPEN_ID` = last-resort fallback) |
+| `cpms` | CPMS team duty | TODO (CPMS sheet) |
 | `dba` | DBA team duty | TODO (needs the DBA roster sheet) |
+
+**SRE resolution** (`duty_roster.resolve_sre_duty_open_ids`): the SRE handler tab is a 2nd tab on the
+directory sheet (`Name | Handler`, `?sheet=KMPx2p`); Handler is split on `/` and matched EXACTLY
+(`PMS` must not substring-match `CPMS`/`FPMS`). With `DUTY_SRE_SHIFT_SHEET_TOKEN` unset (test posture,
+all-"OSE" tab) every team handler rings; set it to also intersect with today's on-shift set from the
+OSE & SRE Duty Shift "SRE PLATFORM" section (checkbox 1/0, column = `1 + day_of_year`, continuous
+daily timeline from A1=Jan 1).
 
 All 9 are recognized by `RING_CMD_RE`; the TODO ones reply "not wired up yet" until a parser + sheet
 env are added. There is a dedicated **`duty-roster-expert` agent** (`.claude/agents/`) for this work.
