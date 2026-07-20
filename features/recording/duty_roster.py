@@ -32,6 +32,7 @@ COMMAND_TEAM = {
     "scpms": "CPMS",
     "sfpms": "FPMS",
     "sfe": "FE",
+    "spms": "PMS",
 }
 
 
