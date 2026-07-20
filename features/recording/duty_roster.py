@@ -207,6 +207,9 @@ def resolve_duty_names(cmd: str, tenant_token: str) -> List[str]:
         log.warning("duty_roster: %s read failed err=%s rows=%s", c, err, len(rows or []))
         return []
     today = datetime.date.today()
+    # Debug: show what the values API actually returned so a []-result parse can be diagnosed.
+    head = [[str(x)[:10] for x in (r or [])[:14]] for r in rows[:6]]
+    log.info("duty_roster: %s read rows=%s head=%r", c, len(rows), head)
     names = parser(rows, today)
     log.info("duty_roster: %s date=%s duty_names=%s", c, today.isoformat(), names)
     return names
