@@ -212,12 +212,21 @@ def handle_ring_command(
         targets = _config.get_p0_vc_ring_escalation_open_ids()
         label = "escalation contacts"
         unset_hint = "P0_VC_RING_ESCALATION_OPEN_IDS"
-    elif c in _duty.COMMAND_TEAM:
+    elif _duty.is_sre_command(c):
+        # SRE duty: SRE handler tab (Name|Handler) -> names whose Handler covers this team ->
+        # directory -> open_id. When DUTY_SRE_SHIFT_SHEET_TOKEN is set, also intersect with today's
+        # on-shift duty shift. Falls back to the P0_VC_RING_DUTY_<TEAM>_OPEN_ID env stub if empty.
+        targets, _unresolved = _duty.resolve_sre_duty_open_ids(c, tok)
         team = _duty.COMMAND_TEAM[c]
-        oid = _duty.get_duty_open_id(team)
-        targets = [oid] if oid else []
+        if not targets:
+            oid = _duty.get_duty_open_id(team)
+            if oid:
+                targets = [oid]
         label = f"duty SRE {team}"
-        unset_hint = f"the duty roster for {team}"
+        unset_hint = (
+            f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
+            f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback"
+        )
     elif _duty.is_roster_command(c):
         # fe / fpms: read the team roster sheet live -> today's duty name(s) -> directory -> open_id.
         targets, _unresolved = _duty.resolve_duty_open_ids(c, tok)
@@ -249,9 +258,9 @@ def handle_ring_command(
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
         _register_major_check_persons_for_join_prompt(session_source, targets)
-    elif _duty.is_roster_command(c) or c == "c":
-        # Watch today's fe/fpms duty (or the /c tagged people) so their VC-join posts a "joined"
-        # reply in the meeting thread.
+    elif _duty.is_roster_command(c) or _duty.is_sre_command(c) or c == "c":
+        # Watch today's fe/fpms/pms/SRE duty (or the /c tagged people) so their VC-join posts a
+        # "joined" reply in the meeting thread.
         _register_join_watch_open_ids(session_source, targets)
 
     status = invite_open_ids_into_active_meeting(
@@ -283,10 +292,10 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
-        # Tag the target(s) by name for fe/fpms + /c — <at user_id> auto-renders the display name.
-        if targets and (c == "c" or _duty.is_roster_command(c)):
+        # Tag the target(s) by name for fe/fpms/pms/SRE + /c — <at user_id> auto-renders the name.
+        if targets and (c == "c" or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
             ats = " ".join(f'<at user_id="{oid}"></at>' for oid in targets)
-            when = "today " if _duty.is_roster_command(c) else ""
+            when = "today " if (_duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
             msg = f"📞 Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
