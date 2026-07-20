@@ -2965,6 +2965,18 @@ def get_p0_vc_ring_escalation_open_ids() -> List[str]:
     return _parse_ou_id_csv(os.getenv("P0_VC_RING_ESCALATION_OPEN_IDS") or "")
 
 
+def get_p0_vc_auto_invite_open_ids() -> List[str]:
+    """``P0_VC_AUTO_INVITE_OPEN_IDS`` — fixed ``ou_...`` list auto-rung into EVERY new P0/P1 VC.
+
+    Seeded onto the session's ring targets in ``start_p0``, so these users are invited the
+    moment a meeting is created (independent of ``P0_MAJOR_CHECK_PERSON_IDS`` / duty rosters).
+    Like all VC ring, the invite fires as soon as the declarer joins the VC + is OAuth-authorized
+    (needs ``P0_VC_RING_ENABLED=1``). Empty (default) = no auto-invite, no behavior change.
+    """
+    reload_env_runtime()
+    return _parse_ou_id_csv(os.getenv("P0_VC_AUTO_INVITE_OPEN_IDS") or "")
+
+
 def get_p0_vc_oauth_public_base_url() -> str:
     reload_env_runtime()
     return (os.getenv("P0_VC_OAUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/")

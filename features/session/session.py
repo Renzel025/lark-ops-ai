@@ -2058,6 +2058,13 @@ def start_p0(
         session_key = chat_id
         if multi and chat_id in P0_SESSIONS and _mtg_no_key:
             session_key = f"{chat_id}#{_mtg_no_key}"
+        # Seed ring targets: whatever the caller passed (Issue Watch mentions / major check
+        # persons) PLUS the fixed P0_VC_AUTO_INVITE_OPEN_IDS — those are invited into EVERY new
+        # meeting the moment it's created (rung when the declarer joins + is OAuth-authorized).
+        _ring_seed: List[str] = list(vc_ring_target_open_ids or [])
+        for _auto_oid in _config.get_p0_vc_auto_invite_open_ids():
+            if _auto_oid and _auto_oid != trigger_open_id and _auto_oid not in _ring_seed:
+                _ring_seed.append(_auto_oid)
         P0_SESSIONS[session_key] = {
             "priority": priority,
             "start_epoch": now,
@@ -2074,7 +2081,7 @@ def start_p0(
             "participants": [],
             "affected_players": affected_players,
             "vc_external_join_count": 0,
-            "vc_ring_target_open_ids": list(vc_ring_target_open_ids or []),
+            "vc_ring_target_open_ids": _ring_seed,
             "vc_ring_invited_open_ids": [],
             "vc_ring_done": False,
         }
