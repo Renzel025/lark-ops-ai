@@ -27,7 +27,7 @@ import os
 import re
 import threading
 import time
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -38,6 +38,11 @@ _DIR_CACHE: Dict[str, str] = {}
 _DIR_CACHE_TS = 0.0
 _DIR_LOCK = threading.RLock()
 _DIR_TTL_SEC = 300.0
+
+# SRE handler tab (Name | Handler): {normalized_name: {team_token, ...}}, TTL-cached like the directory.
+_SRE_CACHE: Dict[str, Set[str]] = {}
+_SRE_CACHE_TS = 0.0
+_SRE_LOCK = threading.RLock()
 
 
 def normalize_name(name: str) -> str:
@@ -146,3 +151,77 @@ def resolve_open_ids_for_names(tenant_token: str, names) -> Dict[str, str]:
         if oid:
             out[nm] = oid
     return out
+
+
+# --------------------------------------------------------------------------------------------------
+# SRE handler tab (Name | Handler) — which SRE person covers which team(s)
+# --------------------------------------------------------------------------------------------------
+def _norm_team_token(tok: str) -> str:
+    """Space-collapsed, uppercased team token so 'Front End' -> 'FRONTEND', 'cpms' -> 'CPMS'."""
+    return re.sub(r"\s+", "", (tok or "")).upper()
+
+
+def _sre_cfg() -> Tuple[str, str, str, str]:
+    _config.reload_env_runtime()
+    # Reuses the directory spreadsheet token; the SRE tab is a different ?sheet= (e.g. KMPx2p).
+    token = (os.getenv("DUTY_DIRECTORY_SHEET_TOKEN") or "").strip()
+    sheet_id = (os.getenv("DUTY_DIRECTORY_SRE_SHEET_ID") or "").strip()
+    sheet_name = (os.getenv("DUTY_DIRECTORY_SRE_SHEET_NAME") or "").strip()
+    rng = (os.getenv("DUTY_DIRECTORY_SRE_RANGE") or "A:B").strip()
+    return token, sheet_id, sheet_name, rng
+
+
+def _fetch_sre_handler_map(tenant_token: str) -> Dict[str, Set[str]]:
+    token, sheet_id, sheet_name, rng = _sre_cfg()
+    if not token:
+        log.warning("duty_directory: DUTY_DIRECTORY_SHEET_TOKEN not set (SRE handler tab)")
+        return {}
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            log.warning("duty_directory: could not resolve SRE handler sheet_id (share/permission?)")
+            return {}
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        log.warning("duty_directory: SRE handler read failed err=%s rows=%s", err, len(rows or []))
+        return {}
+    header = list(rows[0] or [])
+    ci_name = _col_index(header, "name")
+    ci_handler = _col_index(header, "handler", "team", "teams")
+    if ci_name < 0 or ci_handler < 0:
+        log.warning(
+            "duty_directory: SRE handler tab needs 'Name' + 'Handler' columns; header=%r",
+            [str(h) for h in header],
+        )
+        return {}
+    out: Dict[str, Set[str]] = {}
+    for r in rows[1:]:
+        cells = [str(c or "").strip() for c in (r or [])]
+
+        def g(i: int) -> str:
+            return cells[i] if 0 <= i < len(cells) else ""
+
+        nm = normalize_name(g(ci_name))
+        if not nm:
+            continue
+        tokens = {_norm_team_token(t) for t in g(ci_handler).split("/") if t.strip()}
+        if not tokens:
+            continue
+        out.setdefault(nm, set()).update(tokens)  # merge if a name appears more than once
+    log.info("duty_directory: loaded %s SRE handler name->team entries", len(out))
+    return out
+
+
+def get_sre_handler_map(tenant_token: str) -> Dict[str, Set[str]]:
+    """``{normalized_name: {team_token, ...}}`` for the SRE handler tab, TTL-cached."""
+    global _SRE_CACHE, _SRE_CACHE_TS
+    now = time.time()
+    with _SRE_LOCK:
+        if _SRE_CACHE and (now - _SRE_CACHE_TS) < _DIR_TTL_SEC:
+            return {k: set(v) for k, v in _SRE_CACHE.items()}
+    mp = _fetch_sre_handler_map(tenant_token)
+    with _SRE_LOCK:
+        if mp:
+            _SRE_CACHE = mp
+            _SRE_CACHE_TS = now
+        return {k: set(v) for k, v in _SRE_CACHE.items()}

@@ -20,19 +20,31 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-from typing import Any, Callable, Dict, List, Tuple
+import re
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
 
 log = logging.getLogger("lark-ops-ai")
 
-# Ring-command keyword -> team code (SRE duty family).
+# Ring-command keyword -> team code (SRE duty family). Used for the env-stub fallback
+# (P0_VC_RING_DUTY_<TEAM>_OPEN_ID) when the live SRE resolver yields nothing.
 COMMAND_TEAM = {
     "scpms": "CPMS",
     "sfpms": "FPMS",
     "sfe": "FE",
     "spms": "PMS",
+}
+
+# SRE ring-command -> the Handler token(s) that mean "this person covers this team", matched as an
+# EXACT token against the SRE-tab Handler cell split on "/". Tokens are space-collapsed + uppercased
+# so "Front End" -> "FRONTEND". PMS must NOT substring-match CPMS/FPMS, hence exact-token matching.
+SRE_COMMAND_TEAM_TOKENS: Dict[str, Set[str]] = {
+    "scpms": {"CPMS"},
+    "sfpms": {"FPMS"},
+    "sfe": {"FRONTEND", "FE"},
+    "spms": {"PMS"},
 }
 
 
@@ -157,11 +169,221 @@ def parse_fpms_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
 
 
 # --------------------------------------------------------------------------------------------------
-# Live-read resolver for the fe/fpms family
+# SRE duty-shift parser (OSE & SRE Duty Shift, "SRE PLATFORM" section)
+# --------------------------------------------------------------------------------------------------
+def _norm_name(name: str) -> str:
+    """Case/space-insensitive key (mirrors duty_directory.normalize_name) so names join cleanly."""
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def _checkbox_on(cell: Any) -> bool:
+    """True when a checkbox / duty cell means 'on shift'. The values API returns 1/0 (int) for
+    Lark checkboxes; also tolerate '1'/'true'/'yes'/'✓'."""
+    if cell is None:
+        return False
+    if isinstance(cell, bool):
+        return cell
+    s = str(cell).strip().lower()
+    if not s:
+        return False
+    if s in ("1", "true", "yes", "checked", "✓", "y"):
+        return True
+    try:
+        return int(float(s)) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _clean_person_name(cell: Any) -> str:
+    """Clean roster name = the text before the first ' (' (strips the '(+phone)' / '[note]')."""
+    s = str(cell if cell is not None else "").strip()
+    if not s:
+        return ""
+    i = s.find("(")
+    if i > 0:
+        s = s[:i]
+    # also drop a trailing bracket note e.g. "Adrian [call if ...]"
+    j = s.find("[")
+    if j > 0:
+        s = s[:j]
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _is_sre_section_end(col_a: str) -> bool:
+    """True when col A is the legend/section header that ends the SRE PLATFORM person list.
+
+    Below the SRE PLATFORM people the sheet has 'BACKEND TEAM ...' / 'FRONTEND TEAM ...' legend rows,
+    then a separate DBA section (with its OWN checkboxes) and 'SRE Game' blocks. We must stop before
+    those or /scpms would wrongly page DBA duty.
+    """
+    t = re.sub(r"\s+", " ", (col_a or "").strip()).upper()
+    if not t:
+        return False
+    if "BACKEND TEAM" in t or "FRONTEND TEAM" in t or "SRE GAME" in t or "SRE PLATFORM" in t:
+        return True
+    if t == "DBA" or t.startswith("DBA ") or t.startswith("DBA\n") or t.startswith("DBA("):
+        return True
+    return False
+
+
+def parse_sre_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
+    """Clean names of everyone ON SHIFT TODAY in the OSE & SRE Duty Shift 'SRE PLATFORM' section.
+
+    Layout: a continuous daily timeline where col B (index 1) = Jan 1 and each next column is +1 day,
+    so today's 0-based column index = ``today.timetuple().tm_yday`` (col A = index 0). Do NOT read the
+    day-number row (it is a live formula). Under the 'SRE PLATFORM' header each person is
+    ``Name (+phone)`` in col A with a checkbox (1/0) per day; return the clean names whose today cell
+    reads 1. The section ends at the BACKEND/FRONTEND TEAM legend (see ``_is_sre_section_end``).
+
+    ASSUMES the range starts at column A (env default does).
+    """
+    header_idx = -1
+    for i, row in enumerate(rows):
+        col_a = re.sub(r"\s+", " ", str((row[0] if row else "") or "")).upper()
+        if "SRE PLATFORM" in col_a:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+    day_idx = today.timetuple().tm_yday  # 0-based col index (col B == Jan 1 == index 1)
+    names: List[str] = []
+    seen: Set[str] = set()
+    blanks = 0
+    for row in rows[header_idx + 1:]:
+        col_a = str((row[0] if row else "") or "").strip()
+        if not col_a:
+            blanks += 1
+            if blanks >= 5:  # a wide run of blank rows -> section clearly ended
+                break
+            continue
+        blanks = 0
+        if _is_sre_section_end(col_a):
+            break
+        cell = row[day_idx] if day_idx < len(row) else None
+        if _checkbox_on(cell):
+            nm = _clean_person_name(col_a)
+            key = _norm_name(nm)
+            if nm and key not in seen:
+                seen.add(key)
+                names.append(nm)
+    return names
+
+
+# --------------------------------------------------------------------------------------------------
+# PMS Support weekly roster parser
+# --------------------------------------------------------------------------------------------------
+def _parse_month_day(cell: Any) -> Tuple[int, int]:
+    """Return ``(month, day)`` from a date-ish cell, else ``(0, 0)``.
+
+    Handles: datetime/date objects (openpyxl), the live values API's ``'20-Jul'`` day-month strings,
+    ISO / slash dates, and Excel serial numbers. The YEAR is ignored (the PMS sheet is day-month).
+    """
+    if cell is None:
+        return (0, 0)
+    if isinstance(cell, datetime.datetime):
+        return (cell.month, cell.day)
+    if isinstance(cell, datetime.date):
+        return (cell.month, cell.day)
+    if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+        try:
+            d = datetime.date(1899, 12, 30) + datetime.timedelta(days=int(cell))
+            return (d.month, d.day)
+        except (ValueError, OverflowError):
+            return (0, 0)
+    s = str(cell).strip()
+    if not s:
+        return (0, 0)
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        try:
+            d = datetime.date(1899, 12, 30) + datetime.timedelta(days=int(float(s)))
+            return (d.month, d.day)
+        except (ValueError, OverflowError):
+            return (0, 0)
+    for fmt in (
+        "%d-%b", "%d-%B", "%b-%d", "%B-%d", "%d %b", "%b %d",
+        "%Y-%m-%d", "%d-%b-%Y", "%d/%m/%Y", "%Y/%m/%d",
+    ):
+        try:
+            dt = datetime.datetime.strptime(s, fmt)
+            return (dt.month, dt.day)
+        except ValueError:
+            continue
+    m = re.search(r"(\d{1,2})\D+([A-Za-z]{3,})", s)
+    if m:
+        mon = _MONTH_NUM.get(m.group(2)[:3].lower(), 0)
+        if mon:
+            return (mon, int(m.group(1)))
+    m = re.search(r"([A-Za-z]{3,})\D+(\d{1,2})", s)
+    if m:
+        mon = _MONTH_NUM.get(m.group(1)[:3].lower(), 0)
+        if mon:
+            return (mon, int(m.group(2)))
+    return (0, 0)
+
+
+def _pms_week_contains(today: datetime.date, start_cell: Any, end_cell: Any) -> bool:
+    """True when ``today`` falls in [start, end], reading both as day-month in the current year and
+    handling the Dec->Jan year wrap (end < start => end rolls to next year; also try start in the
+    previous year so an early-January date matches a late-December week)."""
+    sm, sd = _parse_month_day(start_cell)
+    em, ed = _parse_month_day(end_cell)
+    if not sm or not em:
+        return False
+    for sy in (today.year, today.year - 1):
+        try:
+            start = datetime.date(sy, sm, sd)
+            end = datetime.date(sy, em, ed)
+        except ValueError:
+            continue
+        if end < start:
+            try:
+                end = datetime.date(sy + 1, em, ed)
+            except ValueError:
+                continue
+        if start <= today <= end:
+            return True
+    return False
+
+
+def parse_pms_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
+    """PMS Support weekly roster: find the header row (Start / End / First Level columns), then the
+    week whose [Start, End] contains today, and return the First-Level name."""
+    hdr_idx = -1
+    ci_start = ci_end = ci_first = -1
+    for i, row in enumerate(rows):
+        low = [re.sub(r"\s+", " ", str(c or "").strip().lower()) for c in (row or [])]
+        cs = ce = cf = -1
+        for j, v in enumerate(low):
+            if v == "start" and cs < 0:
+                cs = j
+            elif v == "end" and ce < 0:
+                ce = j
+            elif v.startswith("first level") and cf < 0:
+                cf = j
+        if cs >= 0 and ce >= 0 and cf >= 0:
+            hdr_idx, ci_start, ci_end, ci_first = i, cs, ce, cf
+            break
+    if hdr_idx < 0:
+        return []
+    for row in rows[hdr_idx + 1:]:
+        def g(idx: int) -> Any:
+            return row[idx] if 0 <= idx < len(row) else None
+
+        first = str(g(ci_first) or "").strip()
+        if not first:
+            continue
+        if _pms_week_contains(today, g(ci_start), g(ci_end)):
+            return [first]
+    return []
+
+
+# --------------------------------------------------------------------------------------------------
+# Live-read resolver for the fe/fpms/pms family
 # --------------------------------------------------------------------------------------------------
 _ROSTER: Dict[str, Tuple[str, Callable[[List[List[Any]], datetime.date], List[str]]]] = {
     "fe": ("DUTY_ROSTER_FE", parse_frontend_duty),
     "fpms": ("DUTY_ROSTER_FPMS", parse_fpms_duty),
+    "pms": ("DUTY_ROSTER_PMS", parse_pms_duty),
 }
 
 
@@ -230,4 +452,101 @@ def resolve_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], List[
             unresolved.append(nm)
     if unresolved:
         log.warning("duty_roster: %s names not in directory: %s", cmd, unresolved)
+    return open_ids, unresolved
+
+
+# --------------------------------------------------------------------------------------------------
+# SRE duty resolver (scpms / sfpms / sfe / spms)
+# --------------------------------------------------------------------------------------------------
+# PRIMARY source = the SRE handler tab (Name | Handler): pick names whose Handler covers the team.
+# The OSE & SRE duty-shift "on-shift today" filter is applied ONLY when DUTY_SRE_SHIFT_SHEET_TOKEN is
+# configured; otherwise every team handler is rung (the all-"OSE" test placeholder case).
+def is_sre_command(cmd: str) -> bool:
+    return (cmd or "").strip().lower() in SRE_COMMAND_TEAM_TOKENS
+
+
+def _sre_shift_env() -> Tuple[str, str, str, str]:
+    _config.reload_env_runtime()
+    token = (os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
+    sheet_id = (os.getenv("DUTY_SRE_SHIFT_SHEET_ID") or "").strip()
+    sheet_name = (os.getenv("DUTY_SRE_SHIFT_SHEET_NAME") or "").strip()
+    # Default reaches ~col 370 (NF) so any day of the year resolves (HZ would stop mid-August).
+    rng = (os.getenv("DUTY_SRE_SHIFT_RANGE") or "A1:NF110").strip()
+    return token, sheet_id, sheet_name, rng
+
+
+def resolve_sre_shift_names(tenant_token: str) -> List[str]:
+    """Clean names on shift TODAY in the OSE & SRE duty-shift 'SRE PLATFORM' section, read live.
+
+    Returns [] (and the caller then skips the filter) when the shift sheet is not configured.
+    """
+    token, sheet_id, sheet_name, rng = _sre_shift_env()
+    if not token:
+        return []
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            log.warning("duty_roster: SRE shift could not resolve sheet_id (token/share/permission?)")
+            return []
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        log.warning("duty_roster: SRE shift read failed err=%s rows=%s", err, len(rows or []))
+        return []
+    today = datetime.date.today()
+    names = parse_sre_shift_on_duty(rows, today)
+    log.info("duty_roster: SRE shift date=%s on_shift=%s", today.isoformat(), names)
+    return names
+
+
+def sre_team_names(
+    cmd: str,
+    handler_map: Dict[str, Set[str]],
+    on_shift_norm: Optional[Set[str]] = None,
+) -> List[str]:
+    """Normalized SRE-tab names whose Handler covers ``cmd``'s team (EXACT token match). When
+    ``on_shift_norm`` is not None, keep only names also on shift today. Pure — unit-testable."""
+    want = SRE_COMMAND_TEAM_TOKENS.get((cmd or "").strip().lower())
+    if not want:
+        return []
+    out: List[str] = []
+    for nm, toks in handler_map.items():
+        if not (toks & want):
+            continue
+        if on_shift_norm is not None and nm not in on_shift_norm:
+            continue
+        out.append(nm)
+    return out
+
+
+def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], List[str]]:
+    """``(open_ids, unresolved_names)`` for an SRE command: SRE-tab handlers for the team, optionally
+    intersected with today's duty shift, then name -> open_id via the OpenID directory tab."""
+    from features.recording import duty_directory as _dir
+
+    c = (cmd or "").strip().lower()
+    if not is_sre_command(c):
+        return [], []
+    handler_map = _dir.get_sre_handler_map(tenant_token)
+    on_shift_norm = None
+    shift_token = (os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
+    if shift_token:
+        on_shift_norm = {_norm_name(n) for n in resolve_sre_shift_names(tenant_token)}
+    names = sre_team_names(c, handler_map, on_shift_norm)
+    open_ids: List[str] = []
+    unresolved: List[str] = []
+    seen: Set[str] = set()
+    for nm in names:
+        oid = _dir.resolve_open_id_for_name(tenant_token, nm)
+        if oid:
+            if oid not in seen:
+                seen.add(oid)
+                open_ids.append(oid)
+        else:
+            unresolved.append(nm)
+    if unresolved:
+        log.warning("duty_roster: SRE %s names not in directory: %s", c, unresolved)
+    log.info(
+        "duty_roster: SRE %s handlers=%s shift_filter=%s team_names=%s open_ids=%s",
+        c, len(handler_map), bool(shift_token), names, len(open_ids),
+    )
     return open_ids, unresolved
