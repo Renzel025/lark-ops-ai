@@ -554,29 +554,8 @@ def _try_ring_session(
             declarer[-8:],
             (detail or "")[:200],
         )
-        # Announce the "calling check persons" notice only once per meeting — the `@bot m`
-        # command (handle_ring_command) announces the same thing, so guard against a double.
-        if tenant_token and not sess.get("check_persons_ring_announced"):
-            sess["check_persons_ring_announced"] = True
-            _session.P0_SESSIONS[chat_id] = sess
-            if _session._session_disk.enabled():
-                _session._session_disk.save_session(chat_id, sess)
-            meeting_invite_message_id = str(
-                sess.get("meeting_invite_message_id") or ""
-            ).strip()
-            if meeting_invite_message_id:
-                _lark.post_text_reply_to_message(
-                    meeting_invite_message_id,
-                    tenant_token,
-                    "Calling the check persons for major P0 issues.",
-                    reply_in_thread=True,
-                )
-            else:
-                _lark.post_text_to_chat(
-                    chat_id,
-                    tenant_token,
-                    "Calling the check persons for major P0 issues.",
-                )
+        # Auto-ring on VC join invites the targets SILENTLY — the "calling check persons" chat
+        # notice is posted only by the explicit `@bot m` command (actual major P0 check persons).
         return True
 
     log.warning(
