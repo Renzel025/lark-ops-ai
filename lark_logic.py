@@ -1094,6 +1094,31 @@ def process_message(
         _ring_raw = _strip_leading_mentions(text_raw, mention_names).strip()
         _ring_is_slash = _ring_raw.startswith("/")
         _ring_cmd = _ring_raw.lstrip("/").strip().lower()
+        _ring_first = _ring_cmd.split()[0] if _ring_cmd.split() else ""
+
+        # /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the
+        # message @mentions (open_id from the mention) — no sheet/directory needed.
+        if _ring_first == "c" and (_ring_is_slash or _mentions_our_bot(mention_names)):
+            _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
+            log.info(
+                "direct ring /c slash=%s tagged=%s chat_tail=%s",
+                _ring_is_slash,
+                len(_direct),
+                chat_id[-8:] if chat_id else "",
+            )
+            from features.recording.vc_ring import handle_ring_command
+
+            handle_ring_command(
+                "c",
+                session_source,
+                notify_chat,
+                token,
+                operator_open_id=user_id,
+                tenant_token=tenant_token or token,
+                direct_open_ids=_direct,
+            )
+            return
+
         if RING_CMD_RE.match(_ring_cmd):
             _bot_mentioned = _mentions_our_bot(mention_names)
             log.info(

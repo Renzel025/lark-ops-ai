@@ -182,18 +182,25 @@ def handle_ring_command(
     *,
     operator_open_id: str = "",
     tenant_token: str = "",
+    direct_open_ids: Optional[List[str]] = None,
 ) -> None:
-    """Handle an ``@bot`` ring command (m / e / scpms / sfpms / sfe).
+    """Handle a ring command (m / e / scpms / sfpms / sfe / fe / fpms, or ``c`` for a direct tag-ring).
 
     Pages the resolved people into the already-active meeting for ``session_source`` and
-    posts a status reply to ``notify_chat``. Anyone in the group may run these.
+    posts a status reply to ``notify_chat``. Anyone in the group may run these. For ``c`` the
+    targets come from ``direct_open_ids`` (the message @mentions) — no sheet/directory needed.
     """
     from features.recording import duty_roster as _duty
 
     c = (cmd or "").strip().lower()
     tok = (tenant_token or token or "").strip()
 
-    if c == "m":
+    if c == "c":
+        # Model A — direct tag-ring: invite the tagged people (filters out the bot + operator).
+        targets = _filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id)
+        label = "the tagged people"
+        unset_hint = "tag at least one person, e.g. /c @Name"
+    elif c == "m":
         # Reuse the existing major-P0 check-person list (P0_MAJOR_CHECK_PERSON_IDS),
         # resolved to open_ids (also handles user_id entries).
         targets = _major_check_person_ring_open_ids(tok)
@@ -240,8 +247,9 @@ def handle_ring_command(
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
         _register_major_check_persons_for_join_prompt(session_source, targets)
-    elif _duty.is_roster_command(c):
-        # Watch today's fe/fpms duty so their VC-join posts a "joined" reply in the meeting thread.
+    elif _duty.is_roster_command(c) or c == "c":
+        # Watch today's fe/fpms duty (or the /c tagged people) so their VC-join posts a "joined"
+        # reply in the meeting thread.
         _register_join_watch_open_ids(session_source, targets)
 
     status = invite_open_ids_into_active_meeting(
@@ -273,10 +281,11 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
-        # Tag today's duty person(s) by name for fe/fpms — <at user_id> auto-renders the display name.
-        if _duty.is_roster_command(c) and targets:
+        # Tag the target(s) by name for fe/fpms + /c — <at user_id> auto-renders the display name.
+        if targets and (c == "c" or _duty.is_roster_command(c)):
             ats = " ".join(f'<at user_id="{oid}"></at>' for oid in targets)
-            msg = f"📞 Calling {label} today into the meeting now… {ats}"
+            when = "today " if _duty.is_roster_command(c) else ""
+            msg = f"📞 Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = str(sess.get("meeting_invite_message_id") or "").strip()
