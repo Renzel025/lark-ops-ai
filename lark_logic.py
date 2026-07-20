@@ -1087,22 +1087,25 @@ def process_message(
                     log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
-        # @bot ring commands (m / e / scpms / sfpms / sfe): page duty/escalation into the
-        # already-active meeting. Require the bot to actually be @mentioned so bare single
-        # letters like "m"/"e" in normal chat can't trigger a page. Checked before the
-        # screenshot handler so these short commands aren't swallowed.
-        _ring_cmd = _strip_leading_mentions(text_raw, mention_names).strip().lower()
+        # Ring commands page duty/escalation into the already-active meeting. Trigger via a leading
+        # slash (/m /e /fe /fpms /cpms /pms /scpms …) OR by @mentioning the bot (@bot m). A bare
+        # "m"/"e" with NEITHER must not trigger, so stray single letters in normal chat can't page.
+        # Checked before the screenshot handler so these short commands aren't swallowed.
+        _ring_raw = _strip_leading_mentions(text_raw, mention_names).strip()
+        _ring_is_slash = _ring_raw.startswith("/")
+        _ring_cmd = _ring_raw.lstrip("/").strip().lower()
         if RING_CMD_RE.match(_ring_cmd):
             _bot_mentioned = _mentions_our_bot(mention_names)
             log.info(
-                "ring cmd detected cmd=%r bot_mentioned=%s mentions=%s chat_tail=%s session_source_tail=%s",
+                "ring cmd detected cmd=%r slash=%s bot_mentioned=%s mentions=%s chat_tail=%s session_source_tail=%s",
                 _ring_cmd,
+                _ring_is_slash,
                 _bot_mentioned,
                 mention_names,
                 chat_id[-8:] if chat_id else "",
                 session_source[-8:] if session_source else "",
             )
-            if _bot_mentioned:
+            if _ring_is_slash or _bot_mentioned:
                 from features.recording.vc_ring import handle_ring_command
 
                 handle_ring_command(
