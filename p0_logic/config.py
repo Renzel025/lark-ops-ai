@@ -2965,6 +2965,18 @@ def get_p0_vc_ring_escalation_open_ids() -> List[str]:
     return _parse_ou_id_csv(os.getenv("P0_VC_RING_ESCALATION_OPEN_IDS") or "")
 
 
+def get_p0_vc_ring_inviter_open_id() -> str:
+    """``P0_VC_RING_INVITER_OPEN_ID`` — the ONE fixed account that rings/invites for ALL P0s.
+
+    Anyone may declare a P0, but only this account's OAuth token performs VC invites — decoupling
+    the ring from whoever declared. The ring fires when THIS account joins the VC (Lark requires
+    the inviter be a meeting participant). Empty (default) = legacy behavior: the declarer's own
+    token invites, fired on the declarer's join.
+    """
+    reload_env_runtime()
+    return (os.getenv("P0_VC_RING_INVITER_OPEN_ID") or "").strip()
+
+
 def get_p0_vc_auto_invite_open_ids() -> List[str]:
     """``P0_VC_AUTO_INVITE_OPEN_IDS`` — fixed ``ou_...`` list auto-rung into EVERY new P0/P1 VC.
 
