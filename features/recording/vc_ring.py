@@ -233,6 +233,9 @@ def handle_ring_command(
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
         _register_major_check_persons_for_join_prompt(session_source, targets)
+    elif _duty.is_roster_command(c):
+        # Watch today's fe/fpms duty so their VC-join posts a "joined" reply in the meeting thread.
+        _register_join_watch_open_ids(session_source, targets)
 
     status = invite_open_ids_into_active_meeting(
         session_source,
@@ -263,6 +266,10 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
+        # Tag today's duty person(s) by name for fe/fpms — <at user_id> auto-renders the display name.
+        if _duty.is_roster_command(c) and targets:
+            ats = " ".join(f'<at user_id="{oid}"></at>' for oid in targets)
+            msg = f"📞 Calling {label} today into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = str(sess.get("meeting_invite_message_id") or "").strip()
@@ -372,6 +379,28 @@ def _register_major_check_persons_for_join_prompt(
         return  # nothing new to register
     sess["major_check_person_open_ids"] = sorted(merged_oids)
     sess["major_check_person_user_ids"] = sorted(merged_uids)
+    if "major_check_person_join_prompted" not in sess:
+        sess["major_check_person_join_prompted"] = []
+    _session.P0_SESSIONS[session_source] = sess
+    if _session._session_disk.enabled():
+        _session._session_disk.save_session(session_source, sess)
+
+
+def _register_join_watch_open_ids(session_source: str, open_ids: List[str]) -> None:
+    """Add ``open_ids`` to the session join-watch set so ``maybe_prompt_major_check_person_joined``
+    posts a "joined" thread reply when any of them joins the VC. Used by the fe/fpms duty ring
+    (open_id only — resolved from the roster directory). Preserves the ``join_prompted`` dedupe."""
+    sess = _session.P0_SESSIONS.get(session_source)
+    if not sess:
+        return
+    add = {x for x in (open_ids or []) if x}
+    if not add:
+        return
+    existing = set(sess.get("major_check_person_open_ids") or [])
+    merged = existing | add
+    if merged == existing:
+        return
+    sess["major_check_person_open_ids"] = sorted(merged)
     if "major_check_person_join_prompted" not in sess:
         sess["major_check_person_join_prompted"] = []
     _session.P0_SESSIONS[session_source] = sess

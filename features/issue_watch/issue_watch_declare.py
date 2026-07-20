@@ -154,7 +154,9 @@ def maybe_prompt_major_check_person_joined(
     if not src_mid:
         return
     name = (participant_name or "").strip() or "Check person"
-    text = _config.get_p0_major_check_person_join_thread_text().replace("{name}", name)
+    # Tag the joiner: <at user_id> renders as an @mention (falls back to the plain name if no open_id).
+    who = f'<at user_id="{jo}"></at>' if jo else name
+    text = _config.get_p0_major_check_person_join_thread_text().replace("{name}", who)
     st, body = _lark.post_text_reply_to_message(src_mid, tok, text, reply_in_thread=True)
     ok, code, msg = _lark.lark_im_message_create_ok(body)
     if st != 200 or not ok:
