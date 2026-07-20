@@ -319,6 +319,10 @@ def _extract_mention_open_ids(msg: Dict[str, Any]) -> List[str]:
         for m in mentions:
             if not isinstance(m, dict):
                 continue
+            # A @mentioned BOT is never a ring target (e.g. "@bot /c @user") — skip it so the bot
+            # doesn't invite/tag itself.
+            if str(m.get("mentioned_type") or "").strip().lower() == "bot":
+                continue
             oid = _mention_field_to_open_id(m.get("id")) or _mention_field_to_open_id(m.get("open_id"))
             if oid.startswith("ou_"):
                 out.append(oid)
