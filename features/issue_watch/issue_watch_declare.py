@@ -36,9 +36,10 @@ def _stash_major_check_person_session(
     recipients: List[Tuple[str, str]],
 ) -> None:
     oids, uids = _major_check_person_id_sets(recipients)
-    sess["major_check_person_open_ids"] = sorted(oids)
-    sess["major_check_person_user_ids"] = sorted(uids)
-    sess["major_check_person_join_prompted"] = []
+    # Merge — don't clobber any join-watch ids start_p0 already seeded (e.g. P0_VC_AUTO_INVITE_OPEN_IDS).
+    sess["major_check_person_open_ids"] = sorted(set(sess.get("major_check_person_open_ids") or []) | oids)
+    sess["major_check_person_user_ids"] = sorted(set(sess.get("major_check_person_user_ids") or []) | uids)
+    sess.setdefault("major_check_person_join_prompted", [])
     mid = (concern_message_id or "").strip()
     if mid:
         sess["issue_watch_concern_message_id"] = mid
