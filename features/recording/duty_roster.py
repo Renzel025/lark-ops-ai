@@ -90,8 +90,9 @@ def _header_month(text: str) -> int:
 
 
 def parse_frontend_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
-    """Frontend 'Latest Duty List' (single current month): stacked 10-day blocks — a date row,
-    then the duty name row directly below it (an optional partner row may follow). [primary, (partner)]."""
+    """Frontend 'Latest Duty List' (single current month): stacked 10-day blocks — a date row, then
+    the duty name row directly below it. Returns the PRIMARY duty person for today (the row right
+    under the date). The partner/backup row below it is intentionally NOT rung — use /e to escalate."""
     day = today.day
     for i, row in enumerate(rows):
         if not _is_date_row(row):
@@ -99,17 +100,11 @@ def parse_frontend_duty(rows: List[List[Any]], today: datetime.date) -> List[str
         for c, cell in enumerate(row):
             if _as_day(cell) != day:
                 continue
-            names: List[str] = []
             if i + 1 < len(rows) and c < len(rows[i + 1]):
                 primary = str(rows[i + 1][c] or "").strip()
                 if primary:
-                    names.append(primary)
-            # optional partner on the next row (skip if that row is itself the next date block)
-            if i + 2 < len(rows) and not _is_date_row(rows[i + 2]) and c < len(rows[i + 2]):
-                partner = str(rows[i + 2][c] or "").strip()
-                if partner and _as_day(partner) == 0:
-                    names.append(partner)
-            return names
+                    return [primary]
+            return []
     return []
 
 
