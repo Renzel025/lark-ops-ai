@@ -475,23 +475,30 @@ def _sre_shift_env() -> Tuple[str, str, str, str]:
     return token, sheet_id, sheet_name, rng
 
 
-def resolve_sre_shift_names(tenant_token: str) -> List[str]:
+def resolve_sre_shift_names(tenant_token: str) -> Optional[List[str]]:
     """Clean names on shift TODAY in the OSE & SRE duty-shift 'SRE PLATFORM' section, read live.
 
-    Returns [] (and the caller then skips the filter) when the shift sheet is not configured.
+    Returns ``None`` when the on-shift filter should be SKIPPED — either the shift sheet is not
+    configured, or its read failed (403/not shared/etc.). The caller then FAILS OPEN (rings all team
+    handlers) instead of ringing nobody. Returns a list (possibly empty) only on a successful read.
     """
     token, sheet_id, sheet_name, rng = _sre_shift_env()
     if not token:
-        return []
+        return None
     if not sheet_id:
         sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
         if not sheet_id:
-            log.warning("duty_roster: SRE shift could not resolve sheet_id (token/share/permission?)")
-            return []
+            log.warning("duty_roster: SRE shift could not resolve sheet_id — skipping on-shift filter")
+            return None
     rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
     if err or not rows:
-        log.warning("duty_roster: SRE shift read failed err=%s rows=%s", err, len(rows or []))
-        return []
+        log.warning(
+            "duty_roster: SRE shift read failed (share the bot on the sheet?) err=%s rows=%s "
+            "— skipping on-shift filter (fail-open)",
+            err,
+            len(rows or []),
+        )
+        return None
     today = datetime.date.today()
     names = parse_sre_shift_on_duty(rows, today)
     log.info("duty_roster: SRE shift date=%s on_shift=%s", today.isoformat(), names)
@@ -527,10 +534,9 @@ def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], L
     if not is_sre_command(c):
         return [], []
     handler_map = _dir.get_sre_handler_map(tenant_token)
-    on_shift_norm = None
-    shift_token = (os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
-    if shift_token:
-        on_shift_norm = {_norm_name(n) for n in resolve_sre_shift_names(tenant_token)}
+    # None => skip the filter (not configured OR read failed => fail-open, ring all team handlers).
+    shift_names = resolve_sre_shift_names(tenant_token)
+    on_shift_norm = None if shift_names is None else {_norm_name(n) for n in shift_names}
     names = sre_team_names(c, handler_map, on_shift_norm)
     open_ids: List[str] = []
     unresolved: List[str] = []
@@ -547,6 +553,6 @@ def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], L
         log.warning("duty_roster: SRE %s names not in directory: %s", c, unresolved)
     log.info(
         "duty_roster: SRE %s handlers=%s shift_filter=%s team_names=%s open_ids=%s",
-        c, len(handler_map), bool(shift_token), names, len(open_ids),
+        c, len(handler_map), on_shift_norm is not None, names, len(open_ids),
     )
     return open_ids, unresolved
