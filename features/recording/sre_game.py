@@ -151,29 +151,23 @@ def _ordinal(n: int) -> str:
     return f"{n}{suf}"
 
 
-_ESCALATE_WORDS = {"no", "n", "hindi", "di", "wala", "next", "escalate", "cant", "cannot", "x", "0"}
-_REACHED_WORDS = {"yes", "y", "oo", "reached", "ok", "okay", "done", "nakontak", "nareach", "1", "stop"}
+# Escalation is answered with a simple /n (escalate to next) or /y (reached, stop). Kept strict — an
+# EXACT y/yes or n/no (leading slash optional) — so ordinary thread chatter never advances/stops it.
+_ESCALATE_WORDS = {"n", "no"}
+_REACHED_WORDS = {"y", "yes"}
 
 
 def _norm_reply(text: str) -> str:
-    return re.sub(r"[^a-z0-9 ]", "", (text or "").strip().lower()).strip()
+    """Lowercase, drop a single leading '/', keep only a-z0-9 so '/n', 'n', 'no' all normalize cleanly."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").strip().lower().lstrip("/"))
 
 
 def _is_escalate(text: str) -> bool:
-    t = _norm_reply(text)
-    return (
-        t in _ESCALATE_WORDS
-        or t.startswith("no ")
-        or t.startswith("hindi")
-        or t.startswith("wala")
-        or t.startswith("cant")
-        or t.startswith("cannot")
-    )
+    return _norm_reply(text) in _ESCALATE_WORDS
 
 
 def _is_reached(text: str) -> bool:
-    t = _norm_reply(text)
-    return t in _REACHED_WORDS or t.startswith("yes") or t.startswith("oo ")
+    return _norm_reply(text) in _REACHED_WORDS
 
 
 def _reply(mid: str, token: str, text: str) -> None:
@@ -205,9 +199,9 @@ def _prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx:
         head = f"📞 Calling {who} ({_ordinal(idx + 1)}/{total} — {label}) into the meeting now…"
     if idx + 1 < total:
         nxt = pairs[idx + 1][0]
-        tail = f"\nNa-reach? Reply **no** to escalate → {nxt} ({_ordinal(idx + 2)}), or **yes** if reached."
+        tail = f"\nReply **/n** to escalate → {nxt} ({_ordinal(idx + 2)}), or **/y** if reached."
     else:
-        tail = "\n(Last contact — no further escalation.)"
+        tail = "\n(Last contact — reply **/y** to close; no further escalation.)"
     _reply(mid, token, head + tail)
 
 
