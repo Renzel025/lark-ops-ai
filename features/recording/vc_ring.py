@@ -238,7 +238,15 @@ def handle_ring_command(
         targets, _unresolved = _duty.resolve_dba_duty_open_ids(tok)
         label = "DBA duty"
         unset_hint = (
-            "DUTY_DBA_SHEET_TOKEN (or DUTY_SRE_SHIFT_SHEET_TOKEN) + the duty directory "
+            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
+            "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
+        )
+    elif c == "sosm":
+        # Liveslot SRE: today's on-shift people from the 'Liveslot' section of the OSE & SRE Duty Shift sheet.
+        targets, _unresolved = _duty.resolve_liveslot_duty_open_ids(tok)
+        label = "liveslot SRE duty"
+        unset_hint = (
+            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
             "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
         )
     elif _duty.is_roster_command(c):
@@ -272,9 +280,9 @@ def handle_ring_command(
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
         _register_major_check_persons_for_join_prompt(session_source, targets)
-    elif _duty.is_roster_command(c) or _duty.is_sre_command(c) or c in ("c", "dba"):
-        # Watch today's fe/fpms/pms/SRE/DBA duty (or the /c tagged people) so their VC-join posts a
-        # "joined" reply in the meeting thread.
+    elif _duty.is_roster_command(c) or _duty.is_sre_command(c) or c in ("c", "dba", "sosm"):
+        # Watch today's fe/fpms/pms/SRE/DBA/liveslot duty (or the /c tagged people) so their VC-join
+        # posts a "joined" reply in the meeting thread.
         _register_join_watch_open_ids(session_source, targets)
 
     status = invite_open_ids_into_active_meeting(
@@ -306,10 +314,10 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
-        # Tag the target(s) by name for fe/fpms/pms/SRE/DBA + /c — <at user_id> auto-renders the name.
-        if targets and (c in ("c", "dba") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
+        # Tag the target(s) by name for fe/fpms/pms/SRE/DBA/liveslot + /c — <at user_id> auto-renders it.
+        if targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
             ats = " ".join(f'<at user_id="{oid}"></at>' for oid in targets)
-            when = "today " if (c == "dba" or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
+            when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
             msg = f"📞 Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}

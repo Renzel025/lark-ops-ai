@@ -209,38 +209,68 @@ def _clean_person_name(cell: Any) -> str:
     return re.sub(r"\s+", " ", s[:cut]).strip()
 
 
-def _is_sre_section_end(col_a: str) -> bool:
-    """True when col A is the legend/section header that ends the SRE PLATFORM person list.
+# Section headers in the OSE & SRE Duty Shift sheet, uppercased + space-collapsed. Any of these in
+# col A marks the END of the section currently being read (minus the section's OWN keyword, so a
+# section never stops on itself). ``DBA`` is matched EXACTLY below — it is short and may appear as a
+# word inside a legend/other cell.
+_SHIFT_SECTION_ENDS = (
+    "SRE PLATFORM",
+    "BACKEND TEAM",
+    "FRONTEND TEAM",
+    "SRE GAME",
+    "DBA",
+    "LIVESLOT",
+    "EGAME",
+    "IT TEAM",
+)
 
-    Below the SRE PLATFORM people the sheet has 'BACKEND TEAM ...' / 'FRONTEND TEAM ...' legend rows,
-    then a separate DBA section (with its OWN checkboxes) and 'SRE Game' blocks. We must stop before
-    those or /scpms would wrongly page DBA duty.
-    """
-    t = re.sub(r"\s+", " ", (col_a or "").strip()).upper()
-    if not t:
+
+def _shift_col_a_up(row: List[Any]) -> str:
+    """Col A of a shift-sheet row, space-collapsed + uppercased (for header/boundary tests)."""
+    return re.sub(r"\s+", " ", str((row[0] if row else "") or "").strip()).upper()
+
+
+def _is_shift_boundary(up: str, own_kw: str) -> bool:
+    """True when col-A ``up`` (already space-collapsed + uppercased) is ANOTHER section's header,
+    i.e. the end of the section being read. ``own_kw`` is excluded so a section never stops on itself.
+    ``DBA`` is matched EXACTLY (``== 'DBA'`` / ``startswith('DBA ')``) — it is short and may appear as
+    a word inside another section's legend; every other boundary is a distinctive substring match."""
+    if not up:
         return False
-    if "BACKEND TEAM" in t or "FRONTEND TEAM" in t or "SRE GAME" in t or "SRE PLATFORM" in t:
-        return True
-    if t == "DBA" or t.startswith("DBA ") or t.startswith("DBA\n") or t.startswith("DBA("):
-        return True
+    for kw in _SHIFT_SECTION_ENDS:
+        if kw == own_kw:
+            continue
+        if kw == "DBA":
+            if up == "DBA" or up.startswith("DBA "):
+                return True
+        elif kw in up:
+            return True
     return False
 
 
-def parse_sre_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
-    """Clean names of everyone ON SHIFT TODAY in the OSE & SRE Duty Shift 'SRE PLATFORM' section.
+def _parse_shift_section(
+    rows: List[List[Any]],
+    today: datetime.date,
+    header_matches: Callable[[str], bool],
+    own_kw: str,
+) -> List[str]:
+    """Clean names ON SHIFT TODAY in ONE checkbox section of the OSE & SRE Duty Shift sheet.
 
-    Layout: a continuous daily timeline where col B (index 1) = Jan 1 and each next column is +1 day,
+    The sheet is a continuous daily timeline: col B (index 1) = Jan 1 and each next column is +1 day,
     so today's 0-based column index = ``today.timetuple().tm_yday`` (col A = index 0). Do NOT read the
-    day-number row (it is a live formula). Under the 'SRE PLATFORM' header each person is
-    ``Name (+phone)`` in col A with a checkbox (1/0) per day; return the clean names whose today cell
-    reads 1. The section ends at the BACKEND/FRONTEND TEAM legend (see ``_is_sre_section_end``).
+    day-number row (it is a live formula). Steps:
 
-    ASSUMES the range starts at column A (env default does).
+      1. find the FIRST row whose col A (space-collapsed + uppercased) satisfies ``header_matches``;
+      2. read the person rows below — each ``Name (+phone)`` in col A with a per-day checkbox (1/0) —
+         collecting the clean names whose today cell reads 1;
+      3. stop at the next section header (``_is_shift_boundary``, minus ``own_kw``) or after >=5
+         consecutive blank col-A rows.
+
+    Pure / unit-testable. ASSUMES the range starts at column A (env default does).
     """
     header_idx = -1
     for i, row in enumerate(rows):
-        col_a = re.sub(r"\s+", " ", str((row[0] if row else "") or "")).upper()
-        if "SRE PLATFORM" in col_a:
+        if header_matches(_shift_col_a_up(row)):
             header_idx = i
             break
     if header_idx < 0:
@@ -257,7 +287,7 @@ def parse_sre_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List
                 break
             continue
         blanks = 0
-        if _is_sre_section_end(col_a):
+        if _is_shift_boundary(re.sub(r"\s+", " ", col_a).upper(), own_kw):
             break
         cell = row[day_idx] if day_idx < len(row) else None
         if _checkbox_on(cell):
@@ -267,47 +297,32 @@ def parse_sre_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List
                 seen.add(key)
                 names.append(nm)
     return names
+
+
+def parse_sre_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
+    """Clean names ON SHIFT TODAY in the OSE & SRE Duty Shift 'SRE PLATFORM' section (~r82). Ends at
+    the BACKEND TEAM / FRONTEND TEAM legend. See ``_parse_shift_section``."""
+    return _parse_shift_section(
+        rows, today, header_matches=lambda up: "SRE PLATFORM" in up, own_kw="SRE PLATFORM"
+    )
 
 
 def parse_dba_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
-    """Clean names ON SHIFT TODAY in the OSE & SRE Duty Shift 'DBA' section (below SRE PLATFORM).
+    """Clean names ON SHIFT TODAY in the OSE & SRE Duty Shift 'DBA' section (~r115). The header col A
+    is EXACTLY ``DBA`` (matched exactly so it does not trip on 'DBA' as a word in a legend); the block
+    ends at 'SRE Game'. The DBA people ARE the duty — there is no handler tab. See ``_parse_shift_section``."""
+    return _parse_shift_section(
+        rows, today, header_matches=lambda up: up == "DBA" or up.startswith("DBA "), own_kw="DBA"
+    )
 
-    Same continuous-daily-timeline column logic as ``parse_sre_shift_on_duty`` (today's 0-based col =
-    ``today.tm_yday``). Finds the exact ``DBA`` header in col A, reads person rows (``Name (+phone)``)
-    with a per-day checkbox (1/0), and stops at the next section header (``SRE Game`` etc.). The DBA
-    people ARE the duty — there is no handler tab.
-    """
-    header_idx = -1
-    for i, row in enumerate(rows):
-        col_a = re.sub(r"\s+", " ", str((row[0] if row else "") or "")).strip().upper()
-        if col_a == "DBA" or col_a.startswith("DBA "):
-            header_idx = i
-            break
-    if header_idx < 0:
-        return []
-    day_idx = today.timetuple().tm_yday
-    names: List[str] = []
-    seen: Set[str] = set()
-    blanks = 0
-    for row in rows[header_idx + 1:]:
-        col_a = str((row[0] if row else "") or "").strip()
-        if not col_a:
-            blanks += 1
-            if blanks >= 5:
-                break
-            continue
-        blanks = 0
-        up = re.sub(r"\s+", " ", col_a).upper()
-        if "SRE GAME" in up or "SRE PLATFORM" in up or "BACKEND TEAM" in up or "FRONTEND TEAM" in up:
-            break  # next section -> DBA block ended
-        cell = row[day_idx] if day_idx < len(row) else None
-        if _checkbox_on(cell):
-            nm = _clean_person_name(col_a)
-            key = _norm_name(nm)
-            if nm and key not in seen:
-                seen.add(key)
-                names.append(nm)
-    return names
+
+def parse_liveslot_shift_on_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
+    """Clean names ON SHIFT TODAY in the OSE & SRE Duty Shift 'Liveslot' section (~r179), driving
+    ``/sosm``. Ends at 'EGAME'. The 'If can't contact…' note row has no checkbox so it is naturally
+    skipped. See ``_parse_shift_section``."""
+    return _parse_shift_section(
+        rows, today, header_matches=lambda up: "LIVESLOT" in up, own_kw="LIVESLOT"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -506,40 +521,87 @@ def is_sre_command(cmd: str) -> bool:
     return (cmd or "").strip().lower() in SRE_COMMAND_TEAM_TOKENS
 
 
-def _sre_shift_env() -> Tuple[str, str, str, str]:
+def _shift_sheet_env() -> Tuple[str, str, str, str]:
+    """The ONE OSE & SRE Duty Shift sheet (SRE PLATFORM + DBA + Liveslot checkbox sections).
+
+    Reads the NEW unified ``DUTY_SHIFT_*`` vars, falling back to the legacy ``DUTY_SRE_SHIFT_*`` then
+    ``DUTY_DBA_*`` names (backward-compat). The default range MUST reach the Liveslot section (~r184)
+    and a full year of daily columns (NF ~= col 370); the old NF130 stopped short of Liveslot.
+    """
     _config.reload_env_runtime()
-    token = (os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
-    sheet_id = (os.getenv("DUTY_SRE_SHIFT_SHEET_ID") or "").strip()
-    sheet_name = (os.getenv("DUTY_SRE_SHIFT_SHEET_NAME") or "").strip()
-    # Default reaches ~col 370 (NF) so any day of the year resolves (HZ would stop mid-August); rows
-    # to 130 give headroom below the SRE PLATFORM section (now ~r82-110 after OTE/TEAM blocks moved it down).
-    rng = (os.getenv("DUTY_SRE_SHIFT_RANGE") or "A1:NF130").strip()
+    token = (
+        os.getenv("DUTY_SHIFT_SHEET_TOKEN")
+        or os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN")
+        or os.getenv("DUTY_DBA_SHEET_TOKEN")
+        or ""
+    ).strip()
+    sheet_id = (
+        os.getenv("DUTY_SHIFT_SHEET_ID")
+        or os.getenv("DUTY_SRE_SHIFT_SHEET_ID")
+        or os.getenv("DUTY_DBA_SHEET_ID")
+        or ""
+    ).strip()
+    sheet_name = (
+        os.getenv("DUTY_SHIFT_SHEET_NAME")
+        or os.getenv("DUTY_SRE_SHIFT_SHEET_NAME")
+        or os.getenv("DUTY_DBA_SHEET_NAME")
+        or ""
+    ).strip()
+    rng = (
+        os.getenv("DUTY_SHIFT_RANGE")
+        or os.getenv("DUTY_SRE_SHIFT_RANGE")
+        or os.getenv("DUTY_DBA_RANGE")
+        or "A1:NF210"
+    ).strip()
     return token, sheet_id, sheet_name, rng
+
+
+def _read_shift_rows(tenant_token: str) -> List[List[Any]]:
+    """Read the unified OSE & SRE Duty Shift sheet rows (resolve the sheet_id by NAME when unset).
+
+    Returns ``[]`` on ANY failure — missing token, unresolved sheet_id, or a read/permission error.
+    Callers decide what an empty result means (fail-open for the SRE filter; ring nobody for DBA/
+    liveslot). Shared by the SRE / DBA / liveslot resolvers so they read the same sheet the same way.
+    """
+    token, sheet_id, sheet_name, rng = _shift_sheet_env()
+    if not token:
+        log.warning(
+            "duty_roster: shift sheet token not set "
+            "(DUTY_SHIFT_SHEET_TOKEN / DUTY_SRE_SHIFT_SHEET_TOKEN / DUTY_DBA_SHEET_TOKEN)"
+        )
+        return []
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            log.warning("duty_roster: shift sheet could not resolve sheet_id (token/share/permission?)")
+            return []
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        log.warning("duty_roster: shift sheet read failed (share the bot?) err=%s rows=%s", err, len(rows or []))
+        return []
+    return rows
+
+
+def _sre_onshift_filter_enabled() -> bool:
+    """The SRE on-shift filter is DECOUPLED from the shift-sheet token (which /dba and /sosm also need)
+    and gated on its own flag ``DUTY_SRE_ONSHIFT_FILTER`` (truthy 1/true/yes/on; default OFF)."""
+    _config.reload_env_runtime()
+    v = (os.getenv("DUTY_SRE_ONSHIFT_FILTER") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def resolve_sre_shift_names(tenant_token: str) -> Optional[List[str]]:
     """Clean names on shift TODAY in the OSE & SRE duty-shift 'SRE PLATFORM' section, read live.
 
-    Returns ``None`` when the on-shift filter should be SKIPPED — either the shift sheet is not
-    configured, or its read failed (403/not shared/etc.). The caller then FAILS OPEN (rings all team
-    handlers) instead of ringing nobody. Returns a list (possibly empty) only on a successful read.
+    Returns ``None`` when the on-shift filter should be SKIPPED — either the ``DUTY_SRE_ONSHIFT_FILTER``
+    flag is off (default), or the shift sheet read failed (403/not shared/etc.). The caller then FAILS
+    OPEN (rings all team handlers) instead of ringing nobody. Returns a list (possibly empty) only when
+    the flag is on AND the read succeeded.
     """
-    token, sheet_id, sheet_name, rng = _sre_shift_env()
-    if not token:
+    if not _sre_onshift_filter_enabled():
         return None
-    if not sheet_id:
-        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
-        if not sheet_id:
-            log.warning("duty_roster: SRE shift could not resolve sheet_id — skipping on-shift filter")
-            return None
-    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
-    if err or not rows:
-        log.warning(
-            "duty_roster: SRE shift read failed (share the bot on the sheet?) err=%s rows=%s "
-            "— skipping on-shift filter (fail-open)",
-            err,
-            len(rows or []),
-        )
+    rows = _read_shift_rows(tenant_token)
+    if not rows:  # not configured / read failed -> skip the filter (fail-open)
         return None
     today = datetime.date.today()
     names = parse_sre_shift_on_duty(rows, today)
@@ -601,38 +663,22 @@ def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], L
 
 
 # --------------------------------------------------------------------------------------------------
-# DBA duty resolver (/dba) — the 'DBA' section of the OSE & SRE Duty Shift sheet
+# Checkbox-section resolvers (/dba, /sosm) — sections of the ONE OSE & SRE Duty Shift sheet
 # --------------------------------------------------------------------------------------------------
-def _dba_env() -> Tuple[str, str, str, str]:
-    """DBA reads the SAME OSE & SRE Duty Shift sheet as the SRE shift; DUTY_DBA_* overrides it so
-    /dba can be enabled WITHOUT turning on the SRE on-shift filter (which keys off DUTY_SRE_SHIFT_*)."""
-    _config.reload_env_runtime()
-    token = (os.getenv("DUTY_DBA_SHEET_TOKEN") or os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
-    sheet_id = (os.getenv("DUTY_DBA_SHEET_ID") or os.getenv("DUTY_SRE_SHIFT_SHEET_ID") or "").strip()
-    sheet_name = (os.getenv("DUTY_DBA_SHEET_NAME") or os.getenv("DUTY_SRE_SHIFT_SHEET_NAME") or "").strip()
-    rng = (os.getenv("DUTY_DBA_RANGE") or os.getenv("DUTY_SRE_SHIFT_RANGE") or "A1:NF130").strip()
-    return token, sheet_id, sheet_name, rng
-
-
-def resolve_dba_duty_open_ids(tenant_token: str) -> Tuple[List[str], List[str]]:
-    """``(open_ids, unresolved_names)`` for ``/dba``: today's on-shift DBA people from the duty-shift
-    sheet's 'DBA' section, mapped name -> open_id via the OpenID directory tab."""
+def _shift_section_open_ids(
+    tenant_token: str,
+    parser: Callable[[List[List[Any]], datetime.date], List[str]],
+    log_label: str,
+) -> Tuple[List[str], List[str]]:
+    """Shared resolver for a checkbox shift SECTION (DBA / Liveslot): read the ONE unified shift sheet,
+    parse today's on-shift names, then map each name -> open_id via the OpenID directory tab.
+    Returns ``(open_ids, unresolved_names)``; ``([], [])`` when the sheet can't be read."""
     from features.recording import duty_directory as _dir
 
-    token, sheet_id, sheet_name, rng = _dba_env()
-    if not token:
-        log.warning("duty_roster: DBA sheet token not set (DUTY_DBA_SHEET_TOKEN / DUTY_SRE_SHIFT_SHEET_TOKEN)")
+    rows = _read_shift_rows(tenant_token)
+    if not rows:
         return [], []
-    if not sheet_id:
-        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
-        if not sheet_id:
-            log.warning("duty_roster: DBA could not resolve sheet_id (token/share/permission?)")
-            return [], []
-    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
-    if err or not rows:
-        log.warning("duty_roster: DBA read failed (share the bot?) err=%s rows=%s", err, len(rows or []))
-        return [], []
-    names = parse_dba_shift_on_duty(rows, datetime.date.today())
+    names = parser(rows, datetime.date.today())
     open_ids: List[str] = []
     unresolved: List[str] = []
     seen: Set[str] = set()
@@ -645,6 +691,18 @@ def resolve_dba_duty_open_ids(tenant_token: str) -> Tuple[List[str], List[str]]:
         else:
             unresolved.append(nm)
     if unresolved:
-        log.warning("duty_roster: DBA names not in directory: %s", unresolved)
-    log.info("duty_roster: DBA on_shift=%s open_ids=%s", names, len(open_ids))
+        log.warning("duty_roster: %s names not in directory: %s", log_label, unresolved)
+    log.info("duty_roster: %s on_shift=%s open_ids=%s", log_label, names, len(open_ids))
     return open_ids, unresolved
+
+
+def resolve_dba_duty_open_ids(tenant_token: str) -> Tuple[List[str], List[str]]:
+    """``(open_ids, unresolved_names)`` for ``/dba``: today's on-shift DBA people from the duty-shift
+    sheet's 'DBA' section, mapped name -> open_id via the OpenID directory tab."""
+    return _shift_section_open_ids(tenant_token, parse_dba_shift_on_duty, "DBA")
+
+
+def resolve_liveslot_duty_open_ids(tenant_token: str) -> Tuple[List[str], List[str]]:
+    """``(open_ids, unresolved_names)`` for ``/sosm``: today's on-shift Liveslot SRE people from the
+    duty-shift sheet's 'Liveslot' section, mapped name -> open_id via the OpenID directory tab."""
+    return _shift_section_open_ids(tenant_token, parse_liveslot_shift_on_duty, "liveslot")
