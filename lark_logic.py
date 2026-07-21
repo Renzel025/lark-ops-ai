@@ -1023,6 +1023,29 @@ def _get_active_session_chat_id() -> str:
     return list(P0_SESSIONS.keys())[-1]
 
 
+def _parse_ring_commands(ring_raw: str) -> List[str]:
+    """Ordered, deduped SLASH-prefixed ring commands from the text after the leading @bot mention.
+
+    Supports multiple commands in one message: ``/scpms /fpms /fe`` -> ``["scpms","fpms","fe"]`` and
+    ``/fpms /c @Juan @Maria`` -> ``["fpms","c"]`` (the @mentions are read separately). Only tokens that
+    start with ``/`` and are valid ring commands (``RING_CMD_RE`` or ``c``) are kept, so inline
+    @mention placeholders and prose are ignored. Bare (no-slash) commands are handled by the caller's
+    single-command fallback so stray letters in chat can't page.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for tok in (ring_raw or "").split():
+        if not tok.startswith("/"):
+            continue
+        c = tok.lstrip("/").strip().lower()
+        if not c or c in seen:
+            continue
+        if c == "c" or RING_CMD_RE.match(c):
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 def process_message(
     incoming_text: str,
     chat_id: str,
@@ -1095,6 +1118,52 @@ def process_message(
         _ring_is_slash = _ring_raw.startswith("/")
         _ring_cmd = _ring_raw.lstrip("/").strip().lower()
         _ring_first = _ring_cmd.split()[0] if _ring_cmd.split() else ""
+
+        # Multi-command: "@bot /scpms /fpms /fe" or "@bot /fpms /c @Juan @Maria" — page EACH into the
+        # active meeting. Slash-prefixed only; /c consumes the message @mentions and needs @bot. A
+        # single slash command (e.g. /fpms) also flows through here. Bare "@bot m" (no slash) falls to
+        # the single-command blocks below.
+        _ring_cmds = _parse_ring_commands(_ring_raw)
+        if _ring_cmds and (_ring_is_slash or _mentions_our_bot(mention_names)):
+            _bot_mentioned = _mentions_our_bot(mention_names)
+            _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
+            log.info(
+                "ring cmds detected cmds=%s slash=%s bot_mentioned=%s tagged=%s chat_tail=%s",
+                _ring_cmds,
+                _ring_is_slash,
+                _bot_mentioned,
+                len(_direct),
+                chat_id[-8:] if chat_id else "",
+            )
+            from features.recording.vc_ring import handle_ring_command
+
+            _did = False
+            for _c in _ring_cmds:
+                if _c == "c":
+                    if not _bot_mentioned:
+                        # /c needs @bot so the @mentions are unambiguously the targets.
+                        continue
+                    handle_ring_command(
+                        "c",
+                        session_source,
+                        notify_chat,
+                        token,
+                        operator_open_id=user_id,
+                        tenant_token=tenant_token or token,
+                        direct_open_ids=_direct,
+                    )
+                else:
+                    handle_ring_command(
+                        _c,
+                        session_source,
+                        notify_chat,
+                        token,
+                        operator_open_id=user_id,
+                        tenant_token=tenant_token or token,
+                    )
+                _did = True
+            if _did:
+                return
 
         # @bot /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the
         # message @mentions. REQUIRES @mentioning the bot (so the user @mentions are unambiguously the
