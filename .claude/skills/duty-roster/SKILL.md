@@ -59,11 +59,16 @@ Local `*.xlsx` in the repo root are STALE samples (gitignored) — always read t
    yellow ones carry the VALUE `2` → the values API returns `2`, so those parse. **Colour-ONLY** (green,
    no value) cells read as blank → invisible to the values API (see "cell colours" below).
 
-4. **OSE & SRE Duty Shift** — token `BJWCsAB0zhYm8OtxTL5l1EkOgbb`, tab **"FINAL OSE & QA MERGE"**
-   (sheet_id `0phcuL`) — NOT "OSE2026". Month headers merged in row 1 (each column = one day). The
-   **SRE PLATFORM** section (~rows 79–105) has person rows with a per-day **checkbox**; the values API
-   returns it as `1`/`0`. Legend rows split **BACKEND** (FPMS/PMS/CPMS) vs **FRONTEND** (FE) →
-   maps `scpms`/`sfpms` vs `sfe`. (SRE parser TODO.)
+4. **OSE & SRE Duty Shift** — token `Pwy8szuqohsPZetrvnflvQcBg9c` (was `BJWCsAB0…`, re-created 2026-07),
+   tab **"FINAL OSE & QA MERGE"** (URL has no `?sheet=` → auto-resolve by NAME, leave sheet_id empty).
+   A1=`DATE(2026,1,1)`; columns are a CONTINUOUS daily timeline (col B = Jan 1, +1 day each), so today's
+   0-based col = `today.tm_yday`. The **SRE PLATFORM** section (header found by text; now ~rows 82–109
+   after TEAM A/B + **OTE** blocks were added ABOVE it) has person rows `Name (+phone)` in col A with a
+   per-day **checkbox** (`1`/`0`). Parser `parse_sre_shift_on_duty` finds only who is on shift today;
+   TEAM/OTE blocks above and the **DBA** section below are excluded (section ends at the
+   **BACKEND TEAM / FRONTEND TEAM** legend, ~r110). ✅ built. The team (CPMS/FPMS/FE/PMS) is NOT in this
+   sheet — it comes from the SRE handler tab. A **DBA** section (~r115+, own checkboxes) is available to
+   wire `/dba` later.
 
 ## Reading a sheet
 `lark_client.read_sheets_values_batch(tenant_token, spreadsheet_token, "<sheet_id>!A1:range")` → rows

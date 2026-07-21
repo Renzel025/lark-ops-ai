@@ -470,8 +470,9 @@ def _sre_shift_env() -> Tuple[str, str, str, str]:
     token = (os.getenv("DUTY_SRE_SHIFT_SHEET_TOKEN") or "").strip()
     sheet_id = (os.getenv("DUTY_SRE_SHIFT_SHEET_ID") or "").strip()
     sheet_name = (os.getenv("DUTY_SRE_SHIFT_SHEET_NAME") or "").strip()
-    # Default reaches ~col 370 (NF) so any day of the year resolves (HZ would stop mid-August).
-    rng = (os.getenv("DUTY_SRE_SHIFT_RANGE") or "A1:NF110").strip()
+    # Default reaches ~col 370 (NF) so any day of the year resolves (HZ would stop mid-August); rows
+    # to 130 give headroom below the SRE PLATFORM section (now ~r82-110 after OTE/TEAM blocks moved it down).
+    rng = (os.getenv("DUTY_SRE_SHIFT_RANGE") or "A1:NF130").strip()
     return token, sheet_id, sheet_name, rng
 
 
