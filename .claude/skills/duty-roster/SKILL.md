@@ -19,7 +19,7 @@ the user is deciding on a data-driven "Duty Command Registry" sheet rather than 
 | `fe` / `fpms` / `pms` | **team** duty | live roster sheet → parser → directory → open_id ✅ **built** (pms = PMS Support, weekly First Level by [Start,End]) |
 | `scpms` / `sfpms` / `sfe` / `spms` | **SRE** duty (CPMS/FPMS/FE/PMS) | ✅ **built** — SRE handler tab (`Name\|Handler`) → team match → directory → open_id; OPTIONAL on-shift filter via `DUTY_SRE_SHIFT_SHEET_TOKEN` (env stub `P0_VC_RING_DUTY_<TEAM>_OPEN_ID` = last-resort fallback) |
 | `cpms` | CPMS team duty | TODO (CPMS sheet) |
-| `dba` | DBA team duty | TODO (needs the DBA roster sheet) |
+| `dba` | DBA duty | ✅ **built** — today's on-shift people from the 'DBA' section of the OSE & SRE Duty Shift sheet (`DUTY_DBA_SHEET_TOKEN`, falls back to `DUTY_SRE_SHIFT_*`) → OpenID directory |
 
 **SRE resolution** (`duty_roster.resolve_sre_duty_open_ids`): the SRE handler tab is a 2nd tab on the
 directory sheet (`Name | Handler`, `?sheet=KMPx2p`); Handler is split on `/` and matched EXACTLY
