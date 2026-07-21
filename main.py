@@ -745,6 +745,13 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 )
             except Exception as e_cp:
                 log.warning("major check-person join prompt hook failed: %s", e_cp)
+            try:
+                from features.recording.sre_game import maybe_mark_sre_game_contact_joined
+
+                if oid:
+                    maybe_mark_sre_game_contact_joined(oid, tenant_token)
+            except Exception as e_sg:
+                log.warning("sre_game join hook failed: %s", e_sg)
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":
