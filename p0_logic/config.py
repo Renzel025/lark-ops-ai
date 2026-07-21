@@ -1029,9 +1029,10 @@ STATUS_RE = re.compile(r"^\s*(status|draft|check|st)\s*$", re.IGNORECASE)
 HELP_RE = re.compile(r"^\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
 # @bot ring commands — page duty/escalation into the ALREADY-active meeting:
 #   m = major responders, e = escalation (senior).
-#   Emergency duty family: scpms/sfpms/sfe/spms = duty SRE per team; fe/fpms/cpms/pms/dba = team duty.
+#   Emergency duty family: scpms/sfpms/sfe/spms = duty SRE per team; fe/fpms/cpms/pms/dba = team duty;
+#   sosm = liveslot SRE duty (Liveslot section of the OSE & SRE Duty Shift sheet).
 # Matched against the text AFTER the leading @bot mention is stripped.
-RING_CMD_RE = re.compile(r"^(m|e|scpms|sfpms|sfe|spms|fe|fpms|cpms|pms|dba)$", re.IGNORECASE)
+RING_CMD_RE = re.compile(r"^(m|e|scpms|sfpms|sfe|spms|fe|fpms|cpms|pms|dba|sosm)$", re.IGNORECASE)
 
 # DM whole line: ``create overview emergency|game`` or shortcuts ``coe`` / ``cog``.
 _STANDALONE_OVERVIEW_LONG_RE = re.compile(

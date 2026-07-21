@@ -9,7 +9,7 @@ user-invocable: true
 
 `@bot <cmd>` inside an incident group pages people into the **already-active** P0 VC meeting.
 
-**Current focus = the 9 EMERGENCY commands.** (Game OM / game PO / EGAME SRE families are deferred —
+**Current focus = the 10 EMERGENCY commands.** (Game OM / game PO / EGAME SRE families are deferred —
 the user is deciding on a data-driven "Duty Command Registry" sheet rather than ~130 hardcoded commands.)
 
 | Command | Who | Source / status |
@@ -17,16 +17,18 @@ the user is deciding on a data-driven "Duty Command Registry" sheet rather than 
 | `m` | major-P0 check persons | `P0_MAJOR_CHECK_PERSON_IDS` (config) |
 | `e` | escalation contacts | `P0_VC_RING_ESCALATION_OPEN_IDS` (config) |
 | `fe` / `fpms` / `pms` | **team** duty | live roster sheet → parser → directory → open_id ✅ **built** (pms = PMS Support, weekly First Level by [Start,End]) |
-| `scpms` / `sfpms` / `sfe` / `spms` | **SRE** duty (CPMS/FPMS/FE/PMS) | ✅ **built** — SRE handler tab (`Name\|Handler`) → team match → directory → open_id; OPTIONAL on-shift filter via `DUTY_SRE_SHIFT_SHEET_TOKEN` (env stub `P0_VC_RING_DUTY_<TEAM>_OPEN_ID` = last-resort fallback) |
+| `scpms` / `sfpms` / `sfe` / `spms` | **SRE** duty (CPMS/FPMS/FE/PMS) | ✅ **built** — SRE handler tab (`Name\|Handler`) → team match → directory → open_id; OPTIONAL on-shift filter gated on `DUTY_SRE_ONSHIFT_FILTER=1` (env stub `P0_VC_RING_DUTY_<TEAM>_OPEN_ID` = last-resort fallback) |
 | `cpms` | CPMS team duty | TODO (CPMS sheet) |
-| `dba` | DBA team duty | TODO (needs the DBA roster sheet) |
+| `dba` | DBA duty | ✅ **built** — today's on-shift people from the 'DBA' section of the ONE OSE & SRE Duty Shift sheet (`DUTY_SHIFT_SHEET_TOKEN`) → OpenID directory |
+| `sosm` | liveslot SRE duty | ✅ **built** — today's on-shift people from the 'Liveslot' section of the same sheet → OpenID directory |
 
 **SRE resolution** (`duty_roster.resolve_sre_duty_open_ids`): the SRE handler tab is a 2nd tab on the
 directory sheet (`Name | Handler`, `?sheet=KMPx2p`); Handler is split on `/` and matched EXACTLY
-(`PMS` must not substring-match `CPMS`/`FPMS`). With `DUTY_SRE_SHIFT_SHEET_TOKEN` unset (test posture,
-all-"OSE" tab) every team handler rings; set it to also intersect with today's on-shift set from the
-OSE & SRE Duty Shift "SRE PLATFORM" section (checkbox 1/0, column = `1 + day_of_year`, continuous
-daily timeline from A1=Jan 1).
+(`PMS` must not substring-match `CPMS`/`FPMS`). The on-shift filter is DECOUPLED from the shift-sheet
+token (which `/dba` and `/sosm` also need) and gated on its own flag **`DUTY_SRE_ONSHIFT_FILTER`**
+(default OFF → every team handler rings; the all-"OSE" test tab rings the OSE test account). Turn it
+on to also intersect with today's on-shift set from the OSE & SRE Duty Shift "SRE PLATFORM" section
+(checkbox 1/0, column = `day_of_year`, continuous daily timeline from A1=Jan 1).
 
 All 9 are recognized by `RING_CMD_RE`; the TODO ones reply "not wired up yet" until a parser + sheet
 env are added. There is a dedicated **`duty-roster-expert` agent** (`.claude/agents/`) for this work.
@@ -59,11 +61,27 @@ Local `*.xlsx` in the repo root are STALE samples (gitignored) — always read t
    yellow ones carry the VALUE `2` → the values API returns `2`, so those parse. **Colour-ONLY** (green,
    no value) cells read as blank → invisible to the values API (see "cell colours" below).
 
-4. **OSE & SRE Duty Shift** — token `BJWCsAB0zhYm8OtxTL5l1EkOgbb`, tab **"FINAL OSE & QA MERGE"**
-   (sheet_id `0phcuL`) — NOT "OSE2026". Month headers merged in row 1 (each column = one day). The
-   **SRE PLATFORM** section (~rows 79–105) has person rows with a per-day **checkbox**; the values API
-   returns it as `1`/`0`. Legend rows split **BACKEND** (FPMS/PMS/CPMS) vs **FRONTEND** (FE) →
-   maps `scpms`/`sfpms` vs `sfe`. (SRE parser TODO.)
+4. **OSE & SRE Duty Shift** — token `Pwy8szuqohsPZetrvnflvQcBg9c` (was `BJWCsAB0…`, re-created 2026-07),
+   tab **"FINAL OSE & QA MERGE"** (URL has no `?sheet=` → auto-resolve by NAME, leave sheet_id empty).
+   ONE sheet, several checkbox sections. A1=`DATE(2026,1,1)`; columns are a CONTINUOUS daily timeline
+   (col B = Jan 1, +1 day each), so today's 0-based col = `today.tm_yday`. Every section marks on-shift
+   with a per-day **checkbox** (`1`/`0`). Env: `DUTY_SHIFT_SHEET_TOKEN` / `_SHEET_NAME` / `_RANGE`
+   (=`A1:NF210`, must reach Liveslot ~r184); legacy `DUTY_SRE_SHIFT_*` / `DUTY_DBA_*` still fall back.
+   Sections (all parsed by the generic `_parse_shift_section(rows, today, header_matches, own_kw)`,
+   which finds the header row, reads person rows `Name (+phone)` below, and stops at the next section
+   header in `_SHIFT_SECTION_ENDS` or after ≥5 blank rows):
+   - **SRE PLATFORM** (~r82) → `parse_sre_shift_on_duty`, ends at BACKEND/FRONTEND TEAM legend (~r110).
+     The team (CPMS/FPMS/FE/PMS) is NOT in this sheet — it comes from the SRE handler tab.
+   - **DBA** (~r115, col A EXACTLY `DBA`) → `parse_dba_shift_on_duty`, ends at 'SRE Game'. Drives `/dba`.
+   - **Liveslot** (~r179) → `parse_liveslot_shift_on_duty`, ends at 'EGAME'. Drives `/sosm`. ✅ built.
+   - **SRE Game** (r130-177) → `features/recording/sre_game.py` ✅ built. Per game an ORDERED contact
+     list (no checkboxes — row order = escalation priority). Commands `/srebac /srer /sredt /sresic
+     /srebl /srepai /srecg /srepp /sredb /sreib` (dt/sic share "Dragon Tiger & Sicbo"; cg/pp share
+     "Colorgame & Pulaputi"). `/sre<game>` rings the 1st contact + posts a thread prompt; a **no/yes
+     text reply** in that thread escalates to the next / stops (`maybe_handle_sre_game_reply`, scoped —
+     non-yes/no replies fall through, never swallowed). Parser scoped to the "SRE Game" section so
+     "COLORGAME" inside EGAME's "ColorGameSlot" is never matched.
+   - **DEFERRED** (do not touch): EGAME (r187, game-name keyword map → fixed people), IT team (r200).
 
 ## Reading a sheet
 `lark_client.read_sheets_values_batch(tenant_token, spreadsheet_token, "<sheet_id>!A1:range")` → rows
