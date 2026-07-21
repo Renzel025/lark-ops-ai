@@ -197,6 +197,12 @@ def handle_ring_command(
     c = (cmd or "").strip().lower()
     tok = (tenant_token or token or "").strip()
 
+    # Master gate: with VC ring disabled (prod default), silently ignore — no sheet reads, no reply.
+    # This is the single choke point for every ring command (single and multi), so prod stays a no-op.
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("ring cmd ignored (P0_VC_RING_ENABLED off) cmd=%s", c)
+        return
+
     if c == "c":
         # Model A — direct tag-ring: invite the tagged people (filters out the bot + operator).
         targets = _filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id)
