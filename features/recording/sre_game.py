@@ -304,11 +304,16 @@ def maybe_handle_sre_game_reply(
     if not key:
         return False
     with _ESC_LOCK:
+        active = list(_ESC_BY_THREAD.keys())
         st = _ESC_BY_THREAD.get(key)
         if st and time.time() - float(st.get("ts") or 0) > _ESC_TTL_SEC:
             _cancel_timer(st)
             _ESC_BY_THREAD.pop(key, None)
             st = None
+    log.info(
+        "sre_game: reply key_tail=%s text=%r matched=%s active_tails=%s",
+        key[-8:], text, bool(st), [k[-8:] for k in active],
+    )
     if not st:
         return False
     tok = (tenant_token or token or "").strip()
