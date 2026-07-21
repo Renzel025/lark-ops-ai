@@ -1119,6 +1119,39 @@ def process_message(
         _ring_cmd = _ring_raw.lstrip("/").strip().lower()
         _ring_first = _ring_cmd.split()[0] if _ring_cmd.split() else ""
 
+        # SRE Game escalation. First: a no/yes REPLY inside an active escalation thread advances/stops
+        # it (scoped — a non-yes/no reply is ignored here and falls through to normal routing, so this
+        # never swallows unrelated chatter). Then: a /sre<game> command starts a new escalation.
+        _esc_thread = (root_id or parent_id or "").strip()
+        if _esc_thread:
+            from features.recording.sre_game import maybe_handle_sre_game_reply
+
+            if maybe_handle_sre_game_reply(
+                _esc_thread,
+                text_raw,
+                token,
+                tenant_token=tenant_token or token,
+                operator_open_id=user_id,
+            ):
+                return
+        if _ring_cmd:
+            from features.recording.sre_game import is_sre_game_command
+
+            if is_sre_game_command(_ring_cmd) and (_ring_is_slash or _mentions_our_bot(mention_names)):
+                from features.recording.sre_game import start_sre_game_escalation
+
+                start_sre_game_escalation(
+                    _ring_cmd,
+                    session_source,
+                    notify_chat,
+                    token,
+                    command_message_id=message_id,
+                    thread_root=root_id,
+                    operator_open_id=user_id,
+                    tenant_token=tenant_token or token,
+                )
+                return
+
         # Multi-command: "@bot /scpms /fpms /fe" or "@bot /fpms /c @Juan @Maria" — page EACH into the
         # active meeting. Slash-prefixed only; /c consumes the message @mentions and needs @bot. A
         # single slash command (e.g. /fpms) also flows through here. Bare "@bot m" (no slash) falls to

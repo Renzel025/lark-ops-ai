@@ -74,8 +74,14 @@ Local `*.xlsx` in the repo root are STALE samples (gitignored) — always read t
      The team (CPMS/FPMS/FE/PMS) is NOT in this sheet — it comes from the SRE handler tab.
    - **DBA** (~r115, col A EXACTLY `DBA`) → `parse_dba_shift_on_duty`, ends at 'SRE Game'. Drives `/dba`.
    - **Liveslot** (~r179) → `parse_liveslot_shift_on_duty`, ends at 'EGAME'. Drives `/sosm`. ✅ built.
-   - **DEFERRED** (do not touch): SRE Game (r130-177, priority 1st/2nd/3rd contacts), EGAME (r187,
-     game-name keyword map), IT team (r200).
+   - **SRE Game** (r130-177) → `features/recording/sre_game.py` ✅ built. Per game an ORDERED contact
+     list (no checkboxes — row order = escalation priority). Commands `/srebac /srer /sredt /sresic
+     /srebl /srepai /srecg /srepp /sredb /sreib` (dt/sic share "Dragon Tiger & Sicbo"; cg/pp share
+     "Colorgame & Pulaputi"). `/sre<game>` rings the 1st contact + posts a thread prompt; a **no/yes
+     text reply** in that thread escalates to the next / stops (`maybe_handle_sre_game_reply`, scoped —
+     non-yes/no replies fall through, never swallowed). Parser scoped to the "SRE Game" section so
+     "COLORGAME" inside EGAME's "ColorGameSlot" is never matched.
+   - **DEFERRED** (do not touch): EGAME (r187, game-name keyword map → fixed people), IT team (r200).
 
 ## Reading a sheet
 `lark_client.read_sheets_values_batch(tenant_token, spreadsheet_token, "<sheet_id>!A1:range")` → rows
