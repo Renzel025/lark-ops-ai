@@ -1126,9 +1126,10 @@ def process_message(
         if _esc_thread:
             from features.recording.sre_game import maybe_handle_sre_game_reply
 
+            # Pass the mention-stripped text so "@bot /n" and a bare "/n" both parse to "n".
             if maybe_handle_sre_game_reply(
                 _esc_thread,
-                text_raw,
+                _ring_raw,
                 token,
                 tenant_token=tenant_token or token,
                 operator_open_id=user_id,
