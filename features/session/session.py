@@ -1485,6 +1485,24 @@ def _dm_instruction_lark_response_ok(st: int, resp_body: str) -> bool:
     return _parse_lark_api_code(j.get("code")) == 0
 
 
+def _send_dm_ring_guide_card(open_id: str, tenant_token: str, operator_lark_user_id: str = "") -> None:
+    """Post the VC ring-command cheat-sheet to the duty's DM (best-effort; user_id path preferred like
+    the green card). No-op unless ``P0_DM_RING_GUIDE_ENABLED`` is on AND ring itself is enabled."""
+    oid = (open_id or "").strip()
+    if not oid or not _config.get_p0_dm_ring_guide_enabled():
+        return
+    card = _cards.build_ring_commands_guide_card()
+    uid = (operator_lark_user_id or "").strip()
+    try:
+        if uid:
+            st, body, _ = _lark.post_card_to_user_cross_app(oid, uid, tenant_token, card, use_user_id=True)
+            if _dm_instruction_lark_response_ok(st, body):
+                return
+        _lark.post_card_to_open_id(oid, tenant_token, card)
+    except Exception as e:  # noqa: BLE001 — guide is best-effort, never block the overview DM
+        log.warning("DM ring guide: post failed open_id_tail=%s: %s", oid[-8:] if len(oid) > 8 else oid, e)
+
+
 def _send_dm_instruction_card_logged(
     open_id: str,
     tenant_token: str,
@@ -1507,6 +1525,9 @@ def _send_dm_instruction_card_logged(
     if not oid:
         return
     label = (context or "DM instruction").strip()
+    # Post the VC ring-command cheat-sheet FIRST (chronologically above the green card) so the duty sees
+    # how to call people into the meeting before the overview prompt. Gated + only when ring is enabled.
+    _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
     card = _cards.build_dm_instruction_card(
         priority,
         source_chat_label=source_chat_label,
