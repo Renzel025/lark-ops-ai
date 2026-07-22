@@ -8,6 +8,7 @@ Auth (first match wins for Bearer paths; API key is separate fallback):
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from typing import Optional, Tuple
@@ -200,4 +201,99 @@ def anthropic_chat_once(
         return "\n".join(parts).strip()
     except Exception as e:
         log.warning("anthropic_chat_once: parse failed: %s", e)
+        return ""
+
+
+_OCR_SYSTEM_PROMPT = (
+    "You extract ONLY visible text from screenshots.\n"
+    "Rules:\n"
+    "- Output only text visible in the image.\n"
+    "- Preserve names, @mentions, IDs, timestamps, numbers, and line breaks.\n"
+    "- Do not summarize.\n"
+    "- Do not infer.\n"
+    "- Do not create templates.\n"
+    "- Do not add labels like Player ID, Game Name, Error Code unless they are literally visible.\n"
+    "- If a part is unreadable, skip that part instead of inventing."
+)
+
+
+def _detect_image_media_type(b: bytes) -> str:
+    """Sniff the image media type from magic bytes (Anthropic validates it); default JPEG."""
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def anthropic_vision_ocr(image_bytes: bytes, *, model: Optional[str] = None) -> str:
+    """OCR a screenshot with Claude (multimodal). Returns the visible text, or '' on failure.
+
+    Drop-in replacement for ``groq_client.groq_vision_ocr``. Model defaults to ``ANTHROPIC_VISION_MODEL``
+    then the normal chat model (Haiku 4.5 under OAuth) via ``_effective_model``.
+    """
+    if not image_bytes:
+        return ""
+    headers, auth_mode = _request_headers()
+    if auth_mode not in ("api_key", "auth_token", "oauth_file", "bearer"):
+        return ""
+    system = _build_system(auth_mode, _OCR_SYSTEM_PROMPT)
+    if not system:
+        return ""
+    if auth_mode in _OAUTH_AUTH_MODES:
+        headers = _apply_oauth_headers(headers)
+    vmodel = model or (os.getenv("ANTHROPIC_VISION_MODEL") or "").strip() or None
+    payload = {
+        "model": _effective_model(auth_mode, vmodel),
+        "max_tokens": 2200,
+        "system": system,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": _detect_image_media_type(image_bytes),
+                            "data": base64.b64encode(image_bytes).decode("utf-8"),
+                        },
+                    },
+                    {"type": "text", "text": "Extract the screenshot text exactly as visible."},
+                ],
+            }
+        ],
+    }
+    log.info("anthropic_vision_ocr: model=%s auth=%s bytes=%s", payload["model"], auth_mode, len(image_bytes))
+    try:
+        resp = requests.post(ANTHROPIC_MESSAGES_URL, headers=headers, json=payload, timeout=_config.REQ_TIMEOUT)
+    except requests.RequestException as e:
+        log.warning("anthropic_vision_ocr: request failed auth=%s: %s", auth_mode, e)
+        return ""
+    if resp.status_code == 401 and auth_mode == "oauth_file":
+        fresh = _oauth.get_oauth_access_token(allow_refresh=True)
+        if fresh:
+            headers["authorization"] = f"Bearer {fresh}"
+            try:
+                resp = requests.post(ANTHROPIC_MESSAGES_URL, headers=headers, json=payload, timeout=_config.REQ_TIMEOUT)
+            except requests.RequestException as e:
+                log.warning("anthropic_vision_ocr: retry failed: %s", e)
+                return ""
+    if resp.status_code != 200:
+        log.error("anthropic_vision_ocr: HTTP=%s auth=%s body=%s", resp.status_code, auth_mode, (resp.text or "")[:400])
+        return ""
+    try:
+        data = resp.json()
+        parts = [
+            str(b.get("text") or "")
+            for b in (data.get("content") or [])
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return "\n".join(p for p in parts if p).strip()
+    except Exception as e:
+        log.warning("anthropic_vision_ocr: parse failed: %s", e)
         return ""
