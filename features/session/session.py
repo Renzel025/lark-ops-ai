@@ -2217,27 +2217,8 @@ def start_p0(
             return True
         return False
 
-    # Run the Bitable adjustment notice FIRST, before scheduling the Grafana screenshot,
-    # so a slow/hung Grafana path can never delay the Bitable ops/deploy cards.
-    if priority == "P0" and not _cancelled_midflight():
-        try:
-            from features.overview import bitable_adjustments as _bitable_adj
-
-            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
-            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
-                token,
-                source_chat_id=chat_id,
-                priority=priority,
-            )
-        except Exception as e:
-            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
-    if not _cancelled_midflight():
-        try:
-            from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
-
-            schedule_p0_graph_screenshot(token, priority, chat_label)
-        except Exception as e:
-            log.warning("start_p0: graph screenshot hook failed: %s", e)
+    # Send the duty their DM FIRST — the ring-command guide + green Build-overview card — so the
+    # actionable prompts arrive immediately, ahead of the slower Bitable + Grafana side-effects below.
     # Auto overview preview only when P0 is declared from Issue Watch DM (explicit alert_key).
     # Typed p0 / thread confirm always get the green Build overview card.
     issue_watch_key = (issue_watch_alert_key or "").strip()
@@ -2268,6 +2249,27 @@ def start_p0(
             enqueue_dm_issue_watch_overview_if_needed(oid, token, dm_item, issue_watch_key)
         else:
             enqueue_dm_instruction_if_needed(oid, token, dm_item)
+    # THEN the Bitable adjustment notice, before the Grafana screenshot, so a slow/hung Grafana path
+    # can never delay the Bitable ops/deploy cards.
+    if priority == "P0" and not _cancelled_midflight():
+        try:
+            from features.overview import bitable_adjustments as _bitable_adj
+
+            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
+            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
+                token,
+                source_chat_id=chat_id,
+                priority=priority,
+            )
+        except Exception as e:
+            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
+    if not _cancelled_midflight():
+        try:
+            from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
+
+            schedule_p0_graph_screenshot(token, priority, chat_label)
+        except Exception as e:
+            log.warning("start_p0: graph screenshot hook failed: %s", e)
     try:
         schedule_vc_auto_cancel_if_no_external_joins(chat_id, session_key=session_key)
     except Exception as e:
