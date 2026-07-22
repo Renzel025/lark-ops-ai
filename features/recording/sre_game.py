@@ -159,6 +159,18 @@ def _is_escalate(text: str) -> bool:
     return _norm_reply(text) in _ESCALATE_WORDS
 
 
+def _first_token(text: str) -> str:
+    """Lowercased first word of the reply, sans a leading slash (e.g. '/c @A @B' -> 'c')."""
+    t = (text or "").strip().lstrip("/").strip()
+    return re.split(r"\s+", t, 1)[0].lower() if t else ""
+
+
+def _is_call(text: str) -> bool:
+    """``/c`` — call/invite the tagged check person(s) directly (retry the current one or bring in
+    other specific people). Tags carry the open_ids; the word itself is just the trigger."""
+    return _first_token(text) == "c"
+
+
 def _match_retry(text: str) -> Tuple[bool, str]:
     """``/r`` / ``retry`` retries the CURRENT contact; ``/r <name>`` / ``retry <name>`` retries that
     specific contact instead (useful once the escalation has moved past them — e.g. ``/r OSE`` after
@@ -243,10 +255,30 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     )
 
 
+def _contacts_list_md(label: str, pairs: List[Tuple[str, str]]) -> str:
+    """Numbered roster of ALL check persons for the game, shown under the 'Calling…' line."""
+    lines = [f"SRE {label} check persons"]
+    for i, (nm, _oid) in enumerate(pairs):
+        lines.append(f"{i + 1}. {nm}")
+    return "\n".join(lines)
+
+
+def _command_hints_md(pairs: List[Tuple[str, str]], idx: int) -> List[str]:
+    """The '/n' + '/c @…' command hints shown when a check person hasn't joined yet."""
+    total = len(pairs)
+    lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
+    if idx + 1 < total:
+        lines.append(f"/n to call the next check person ({pairs[idx + 1][0]})")
+    lines.append(
+        "/c @checkperson to retry the current check person or invite other specific check persons "
+        "(tag one or more)"
+    )
+    return lines
+
+
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
                     status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
-    total = len(pairs)
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
     lead = "Retrying — calling" if retry else "Calling"
@@ -262,14 +294,10 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     if oid and status not in ("no_session",):
         # Lark sends no "declined" event, so the escalation auto-confirms when the contact joins the VC;
         # if they don't, the operator drives it with these commands (also auto-prompted after the timeout).
-        lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
-        if idx + 1 < total:
-            lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-        lines.append("/r @checkperson to retry calling a specific check person")
-        tail = "\n".join(lines)
+        body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
     else:
-        tail = ""
-    return _reply(mid, token, head + tail)
+        body = ""
+    return _reply(mid, token, head + body)
 
 
 def _cancel_timer(st: Dict[str, Any]) -> None:
@@ -305,19 +333,13 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     if not token:
         return
     name = pairs[idx][0]
-    total = len(pairs)
     to = int(_timeout_sec())
-    lines = [
+    head = (
         f"{name} ({_ordinal(idx + 1)} check person {label}) did not proceed to join the meeting "
-        f"(no answer within {to}s).",
-        "",
-        "You can use these commands:",
-        "",
-    ]
-    if idx + 1 < total:
-        lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-    lines.append(f"/r @checkperson to retry calling a specific check person, e.g. /r {name}")
-    _reply(thread_key, token, "\n".join(lines))
+        f"(no answer within {to}s)."
+    )
+    body = _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
+    _reply(thread_key, token, head + "\n\n" + body)
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
 
@@ -414,6 +436,25 @@ def maybe_handle_sre_game_reply(
         return False
     tok = (tenant_token or token or "").strip()
     primary = str(st.get("primary") or keys[0]).strip()
+
+    if _is_call(text):
+        # /c @people — force-invite the tagged check person(s) into the meeting (retry the current one
+        # or bring in other specific people). force_reinvite bypasses the merge-dedupe so an already
+        # invited person actually rings again. Does NOT change the /n escalation pointer.
+        tagged = [t for t in (tagged_open_ids or []) if t]
+        if not tagged:
+            _reply(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
+            return True
+        status = _vc_ring.force_reinvite_open_ids(
+            st["session_source"], tagged, tenant_token=tok, operator_open_id=operator_open_id
+        )
+        log.info("sre_game: /c cmd=%s tagged=%s status=%s", st["cmd"], len(tagged), status)
+        if status in ("no_session",):
+            _reply(primary, token, "No active meeting — start a P0 meeting first.")
+        else:
+            who = " ".join(f"<at id={t}></at>" for t in tagged)
+            _reply(primary, token, f"Calling {who} into the meeting")
+        return True
 
     is_retry, retry_name = _match_retry(text)
     if is_retry:
