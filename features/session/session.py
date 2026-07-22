@@ -1492,18 +1492,29 @@ def _send_dm_ring_guide_card(open_id: str, tenant_token: str, operator_lark_user
     """Post the VC ring-command cheat-sheet to the duty's DM (best-effort; user_id path preferred like
     the green card). No-op unless ``P0_DM_RING_GUIDE_ENABLED`` is on AND ring itself is enabled."""
     oid = (open_id or "").strip()
-    if not oid or not _config.get_p0_dm_ring_guide_enabled():
+    tail = oid[-8:] if len(oid) > 8 else oid
+    try:
+        enabled = _config.get_p0_dm_ring_guide_enabled()
+    except Exception as e:  # noqa: BLE001
+        log.warning("DM ring guide: gate check failed open_id_tail=%s: %s", tail, e)
         return
-    card = _cards.build_ring_commands_guide_card()
+    log.info("DM ring guide: entry open_id_tail=%s enabled=%s", tail, enabled)
+    if not oid or not enabled:
+        return
     uid = (operator_lark_user_id or "").strip()
     try:
+        card = _cards.build_ring_commands_guide_card()
         if uid:
-            st, body, _ = _lark.post_card_to_user_cross_app(oid, uid, tenant_token, card, use_user_id=True)
+            st, body, mid = _lark.post_card_to_user_cross_app(oid, uid, tenant_token, card, use_user_id=True)
+            log.info("DM ring guide: user_id post open_id_tail=%s http=%s mid_tail=%s", tail, st, (mid or "")[-8:])
             if _dm_instruction_lark_response_ok(st, body):
                 return
-        _lark.post_card_to_open_id(oid, tenant_token, card)
+            log.warning("DM ring guide: user_id path not ok body=%s — trying open_id", (body or "")[:300])
+        st2, body2, mid2 = _lark.post_card_to_open_id(oid, tenant_token, card)
+        log.info("DM ring guide: open_id post open_id_tail=%s http=%s mid_tail=%s ok=%s",
+                 tail, st2, (mid2 or "")[-8:], _dm_instruction_lark_response_ok(st2, body2))
     except Exception as e:  # noqa: BLE001 — guide is best-effort, never block the overview DM
-        log.warning("DM ring guide: post failed open_id_tail=%s: %s", oid[-8:] if len(oid) > 8 else oid, e)
+        log.warning("DM ring guide: post failed open_id_tail=%s: %s", tail, e)
 
 
 def _send_dm_instruction_card_logged(
