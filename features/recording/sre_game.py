@@ -104,7 +104,6 @@ def parse_sre_game_contacts(rows: List[List[Any]], header_kw: str) -> List[str]:
     if game_idx < 0:
         return []
     names: List[str] = []
-    seen: set = set()
     blanks = 0
     for row in rows[game_idx + 1:]:
         col_a = str((row[0] if row else "") or "").strip()
@@ -120,9 +119,9 @@ def parse_sre_game_contacts(rows: List[List[Any]], header_kw: str) -> List[str]:
         if "IF CAN'T CONTACT" in up or "IF CANT CONTACT" in up:
             continue
         nm = _duty._clean_person_name(col_a)
-        key = _duty._norm_name(nm)
-        if nm and key not in seen:
-            seen.add(key)
+        # Keep EVERY contact row in sheet order, INCLUDING repeats — the same person can legitimately be
+        # both the 1st and a later fallback contact, and the escalation list must match the sheet 1:1.
+        if nm:
             names.append(nm)
     return names
 
