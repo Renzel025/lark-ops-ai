@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
+from p0_logic import cards as _cards
 from features.recording import duty_roster as _duty
 from features.recording import duty_directory as _dir
 from features.recording import vc_ring as _vc_ring
@@ -170,7 +171,10 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
     replied-to message — hence the multi-key registration)."""
     if not (mid and token and (text or "").strip()):
         return {}
-    st, body = _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
+    # Post the prompt as a clean interactive card (header + lark_md body) rather than plain text,
+    # then parse the created message ids EXACTLY as before (required for multi-key registration).
+    card = _cards.build_ring_status_card("📞 SRE duty", text)
+    st, body = _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
     ids: Dict[str, str] = {}
     if st == 200 and body:
         try:
@@ -216,11 +220,12 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
                     status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
     total = len(pairs)
-    who = f'<at user_id="{oid}"></at>' if oid else name
+    # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
+    who = f'<at id={oid}></at>' if oid else name
     lead = "🔁 Retrying — calling" if retry else "📞 Calling"
     if not oid:
         head = (
-            f"⚠️ {label} {_ordinal(idx + 1)}/{total} contact **{name}** is NOT in the OpenID directory "
+            f"⚠️ {label} {_ordinal(idx + 1)}/{total} contact {name} is NOT in the OpenID directory "
             f"— can't ring. Add them (Name → open_id), then retry."
         )
     elif status == "no_session":
@@ -261,24 +266,26 @@ def _on_timeout(thread_key: str, idx: int) -> None:
         if not st or st.get("reached") or st.get("idx") != idx:
             return  # already joined / advanced / stopped
         pairs = list(st["pairs"])
+        label = str(st.get("label") or "")
     token = _lark.get_tenant_token_primary()
     if not token:
         return
     name = pairs[idx][0]
     total = len(pairs)
     to = int(_timeout_sec())
+    lines = [
+        f"⏱️ {label} — {_ordinal(idx + 1)} contact {name} did not accept the invite "
+        f"(declined or no answer within {to}s).",
+        "",
+        "What next?",
+    ]
     if idx + 1 < total:
-        nxt = pairs[idx + 1][0]
-        msg = (
-            f"⏱️ {name} did not accept the invite ({to}s — no join / expired).\n"
-            f"Reply **/n** to invite {nxt} ({_ordinal(idx + 2)}), **/r** to retry {name}, or **/y** if reached."
-        )
+        lines.append(f"• /n → proceed to the next contact: {pairs[idx + 1][0]} ({_ordinal(idx + 2)})")
     else:
-        msg = (
-            f"⏱️ {name} did not accept the invite ({to}s — no join / expired) — last contact.\n"
-            f"Reply **/r** to retry {name}, or **/y** to close."
-        )
-    _reply(thread_key, token, msg)
+        lines.append("• (no more contacts after this one)")
+    lines.append(f"• /r → retry {name} ({_ordinal(idx + 1)})")
+    lines.append("• /y → reached — stop the escalation")
+    _reply(thread_key, token, "\n".join(lines))
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
 
