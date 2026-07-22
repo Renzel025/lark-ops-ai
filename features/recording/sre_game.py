@@ -223,26 +223,21 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     lead = "Retrying — calling" if retry else "Calling"
     if not oid:
         head = (
-            f"{label} {_ordinal(idx + 1)}/{total} contact {name} is NOT in the OpenID directory "
+            f"{name} ({_ordinal(idx + 1)} check person {label}) is NOT in the OpenID directory "
             f"— can't ring. Add them (Name → open_id), then retry."
         )
     elif status == "no_session":
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
-        head = f"{lead} {who} ({_ordinal(idx + 1)}/{total} — {label}) into the meeting…"
-    to = int(_timeout_sec())
+        head = f"{lead} {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
     if oid and status not in ("no_session",):
-        opts = []
+        # Lark sends no "declined" event, so the escalation auto-confirms when the contact joins the VC;
+        # if they don't, the operator drives it with these commands (also auto-prompted after the timeout).
+        lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
         if idx + 1 < total:
-            opts.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-        opts.append("/r to retry")
-        # Lark sends no "declined" event, so we auto-ask after the timeout — but the operator can act
-        # IMMEDIATELY (e.g. the moment they see the call declined) by replying one of these. When the
-        # contact joins the VC, the escalation auto-stops — no manual "reached" reply is needed.
-        tail = (
-            f"\nWaiting up to {to}s for them to accept — I'll auto-confirm when they join the meeting."
-            f"\nDeclined or can't reach them? Reply " + ", ".join(opts) + " — I'll also ask automatically after {}s.".format(to)
-        )
+            lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
+        lines.append(f"/r to retry call {name}")
+        tail = "\n".join(lines)
     else:
         tail = ""
     return _reply(mid, token, head + tail)
@@ -284,17 +279,15 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     total = len(pairs)
     to = int(_timeout_sec())
     lines = [
-        f"{label} — {_ordinal(idx + 1)} contact {name} did not accept the invite "
-        f"(declined or no answer within {to}s).",
+        f"{name} ({_ordinal(idx + 1)} check person {label}) did not proceed to join the meeting "
+        f"(no answer within {to}s).",
         "",
-        "What next?",
+        "You can use these commands:",
+        "",
     ]
     if idx + 1 < total:
-        lines.append(f"• /n → proceed to the next contact: {pairs[idx + 1][0]} ({_ordinal(idx + 2)})")
-    else:
-        lines.append("• (no more contacts after this one)")
-    lines.append(f"• /r → retry {name} ({_ordinal(idx + 1)})")
-    lines.append("(If they join the meeting, I'll auto-confirm and stop — no reply needed.)")
+        lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
+    lines.append(f"/r to retry call {name}")
     _reply(thread_key, token, "\n".join(lines))
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
@@ -454,4 +447,4 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     name = hit_st["pairs"][hit_st["idx"]][0]
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(primary, token, f"{name} joined the meeting — {hit_st['label']} escalation done.")
+    _reply(primary, token, f"{name} joined the meeting")
