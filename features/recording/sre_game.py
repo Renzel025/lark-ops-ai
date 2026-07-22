@@ -206,6 +206,13 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
     return ids
 
 
+def _reply_text(mid: str, token: str, text: str) -> None:
+    """Plain-text threaded reply (no card). Used for the lightweight 'joined the meeting' confirmation."""
+    if not (mid and token and (text or "").strip()):
+        return
+    _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
+
+
 def _register(state: Dict[str, Any], keys: List[str]) -> None:
     """Register ``state`` under every non-empty key (deduped) so a reply matching ANY of the thread's
     identifiers (command msg id / bot-reply msg id / root id / thread id) resolves to it."""
@@ -493,4 +500,4 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     name = hit_st["pairs"][hit_st["idx"]][0]
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(primary, token, f"{name} joined the meeting")
+    _reply_text(primary, token, f"{name} joined the meeting")
