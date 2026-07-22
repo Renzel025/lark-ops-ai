@@ -227,15 +227,9 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "⚠️ No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)}/{total} — {label}) into the meeting…"
+    # No escalate instructions here — they appear ONLY on timeout (invite not accepted / expired).
     to = int(_timeout_sec())
-    if idx + 1 < total:
-        nxt = pairs[idx + 1][0]
-        tail = (
-            f"\nWaiting {to}s to join. If not: reply **/n** → {nxt} ({_ordinal(idx + 2)}), "
-            f"**/r** to retry {name}, or **/y** if reached."
-        )
-    else:
-        tail = f"\nWaiting {to}s (last contact). Reply **/r** to retry, or **/y** if reached."
+    tail = f"\n⏳ Waiting up to {to}s for them to accept the invite…" if (oid and status not in ("no_session",)) else ""
     return _reply(mid, token, head + tail)
 
 
@@ -276,11 +270,14 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     if idx + 1 < total:
         nxt = pairs[idx + 1][0]
         msg = (
-            f"⏱️ {name} hasn't joined ({to}s). Reply **/n** to invite {nxt} ({_ordinal(idx + 2)}), "
-            f"or **/r** to retry {name}."
+            f"⏱️ {name} did not accept the invite ({to}s — no join / expired).\n"
+            f"Reply **/n** to invite {nxt} ({_ordinal(idx + 2)}), **/r** to retry {name}, or **/y** if reached."
         )
     else:
-        msg = f"⏱️ {name} hasn't joined ({to}s) — last contact. Reply **/r** to retry, or **/y** to close."
+        msg = (
+            f"⏱️ {name} did not accept the invite ({to}s — no join / expired) — last contact.\n"
+            f"Reply **/r** to retry {name}, or **/y** to close."
+        )
     _reply(thread_key, token, msg)
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
