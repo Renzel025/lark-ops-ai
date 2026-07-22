@@ -410,9 +410,9 @@ def maybe_handle_sre_game_reply(
 
     is_retry, retry_name = _match_retry(text)
     if is_retry:
-        # Prefer a tagged Lark user whose open_id matches a contact — no spelling/name issues, and the
-        # @mention open_id is already in the primary app's space (same path as /c). Fall back to a typed
-        # name; a bare "/r" (no tag, no name) retries the current contact.
+        # /r ALWAYS names WHO to retry — either a tagged Lark user (preferred; the @mention open_id is
+        # already in the primary app's space, same path as /c) or a typed name. A bare "/r" with neither
+        # is rejected with a hint, so the command is unambiguous.
         tagged = [t for t in (tagged_open_ids or []) if t]
         found = -1
         for i, (_nm, oid) in enumerate(st["pairs"]):
@@ -424,10 +424,11 @@ def maybe_handle_sre_game_reply(
             if found < 0:
                 _reply(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
                 return True
-        if found < 0 and tagged:
-            _reply(primary, token, f"That tagged user is not in the {st['label']} contact list.")
+        if found < 0:
+            cur = st["pairs"][st["idx"]][0]
+            _reply(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
             return True
-        idx = found if found >= 0 else st["idx"]
+        idx = found
         with _ESC_LOCK:
             _cancel_timer(st)
             st["idx"] = idx
