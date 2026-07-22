@@ -264,7 +264,7 @@ def handle_ring_command(
             _lark.post_text_to_chat(
                 notify_chat,
                 token,
-                f"⚠️ '/{c}' is not wired up yet — its roster parser/sheet config is still pending.",
+                f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.",
             )
         return
 
@@ -273,7 +273,7 @@ def handle_ring_command(
             _lark.post_text_to_chat(
                 notify_chat,
                 token,
-                f"⚠️ No {label} configured yet ({unset_hint}). Ask an admin to set it.",
+                f"No {label} configured yet ({unset_hint}). Ask an admin to set it.",
             )
         return
 
@@ -303,24 +303,24 @@ def handle_ring_command(
         return
     is_ring_announcement = False
     if status == "disabled":
-        msg = "⚠️ VC ring is disabled (set P0_VC_RING_ENABLED=1)."
+        msg = "VC ring is disabled (set P0_VC_RING_ENABLED=1)."
     elif status == "no_session":
-        msg = "⚠️ No active meeting here yet — start a meeting first, then run this command."
+        msg = "No active meeting here yet — start a meeting first, then run this command."
     elif status == "no_targets":
-        msg = f"⚠️ No valid {label} to call."
+        msg = f"No valid {label} to call."
     elif status == "queued_oauth":
         msg = (
-            f"📞 Queued a call to {label} — it will ring once the meeting host finishes the "
+            f"Queued a call to {label} — it will ring once the meeting host finishes the "
             "one-time Lark authorization (the host just got a DM)."
         )
     else:  # ringing
-        msg = f"📞 Calling {label} into the meeting now…"
+        msg = f"Calling {label} into the meeting now…"
         # Tag the target(s) by name for fe/fpms/pms/SRE/DBA/liveslot + /c.
         # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
         if targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
             ats = " ".join(f'<at id={oid}></at>' for oid in targets)
             when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
-            msg = f"📞 Calling {label} {when}into the meeting now… {ats}"
+            msg = f"Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = str(sess.get("meeting_invite_message_id") or "").strip()
@@ -336,9 +336,9 @@ def handle_ring_command(
     # Render the status/prompt as a clean interactive card (header + lark_md body) instead of
     # plain text, so bold/mentions render and there are no literal markdown asterisks.
     if status in ("disabled", "no_session", "no_targets"):
-        card_title, card_template = "⚠️ Duty ring", "orange"
+        card_title, card_template = "Duty ring", "orange"
     else:
-        card_title, card_template = "📞 Duty ring", "blue"
+        card_title, card_template = "Duty ring", "blue"
     card = _cards.build_ring_status_card(card_title, msg, header_template=card_template)
     if mid:
         _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)

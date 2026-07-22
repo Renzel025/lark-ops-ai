@@ -2917,7 +2917,7 @@ def get_p0_major_check_person_join_thread_text() -> str:
     raw = (os.getenv("P0_MAJOR_CHECK_PERSON_JOIN_THREAD_TEXT") or "").strip()
     if raw:
         return raw
-    return "{name} is already in the P0 meeting."
+    return "{name} joined the P0 meeting."
 
 
 def get_lark_bot_open_id() -> str:

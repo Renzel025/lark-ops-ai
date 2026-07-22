@@ -5,8 +5,8 @@ The "SRE Game" section of the OSE & SRE Duty Shift sheet lists, per game, an ORD
 rings the 1st contact into the active P0 meeting, then WATCHES for them to join:
 
     @bot /srebac  -> ring Wylie (1st), wait 90s
-      • Wylie JOINS the VC within 90s -> ✅ reached, stop (auto).
-      • Wylie does NOT join in 90s     -> ⏱️ prompt: reply /n to invite Chi Sheun (2nd), /r to retry Wylie.
+      • Wylie JOINS the VC within 90s -> reached, stop (auto).
+      • Wylie does NOT join in 90s     -> prompt: reply /n to invite Chi Sheun (2nd), /r to retry Wylie.
 
 Lark has no "invite declined/expired" event, so "did not accept" = "did not JOIN within the timeout".
 Replies in the command's thread: /n = escalate to next, /r = retry current, /y = mark reached (stop).
@@ -173,7 +173,7 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
         return {}
     # Post the prompt as a clean interactive card (header + lark_md body) rather than plain text,
     # then parse the created message ids EXACTLY as before (required for multi-key registration).
-    card = _cards.build_ring_status_card("📞 SRE duty", text)
+    card = _cards.build_ring_status_card("SRE duty", text)
     st, body = _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
     ids: Dict[str, str] = {}
     if st == 200 and body:
@@ -222,19 +222,31 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     total = len(pairs)
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
-    lead = "🔁 Retrying — calling" if retry else "📞 Calling"
+    lead = "Retrying — calling" if retry else "Calling"
     if not oid:
         head = (
-            f"⚠️ {label} {_ordinal(idx + 1)}/{total} contact {name} is NOT in the OpenID directory "
+            f"{label} {_ordinal(idx + 1)}/{total} contact {name} is NOT in the OpenID directory "
             f"— can't ring. Add them (Name → open_id), then retry."
         )
     elif status == "no_session":
-        head = "⚠️ No active meeting — start a P0 meeting first, then run this command."
+        head = "No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)}/{total} — {label}) into the meeting…"
-    # No escalate instructions here — they appear ONLY on timeout (invite not accepted / expired).
     to = int(_timeout_sec())
-    tail = f"\n⏳ Waiting up to {to}s for them to accept the invite…" if (oid and status not in ("no_session",)) else ""
+    if oid and status not in ("no_session",):
+        opts = []
+        if idx + 1 < total:
+            opts.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
+        opts.append("/r to retry")
+        opts.append("/y if reached")
+        # Lark sends no "declined" event, so we auto-ask after the timeout — but the operator can act
+        # IMMEDIATELY (e.g. the moment they see the call declined) by replying one of these.
+        tail = (
+            f"\nWaiting up to {to}s for them to accept."
+            f"\nDeclined or can't reach them? Reply " + ", ".join(opts) + " — I'll also ask automatically after {}s.".format(to)
+        )
+    else:
+        tail = ""
     return _reply(mid, token, head + tail)
 
 
@@ -274,7 +286,7 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     total = len(pairs)
     to = int(_timeout_sec())
     lines = [
-        f"⏱️ {label} — {_ordinal(idx + 1)} contact {name} did not accept the invite "
+        f"{label} — {_ordinal(idx + 1)} contact {name} did not accept the invite "
         f"(declined or no answer within {to}s).",
         "",
         "What next?",
@@ -309,7 +321,7 @@ def start_sre_game_escalation(
     label = SRE_GAME_LABEL.get(c, c.upper())
     pairs = resolve_sre_game_contacts(c, tok)
     if not pairs:
-        _reply(command_message_id, token, f"⚠️ No {label} SRE contacts found in the 'SRE Game' section.")
+        _reply(command_message_id, token, f"No {label} SRE contacts found in the 'SRE Game' section.")
         return
     primary = (command_message_id or thread_root or "").strip()
     state: Dict[str, Any] = {
@@ -356,10 +368,11 @@ def maybe_handle_sre_game_reply(
         if st and time.time() - float(st.get("ts") or 0) > _ESC_TTL_SEC:
             _pop_state(st)
             st = None
-    log.info(
-        "sre_game: reply keys=%s text=%r matched=%s active_tails=%s",
-        [k[-8:] for k in keys], text, bool(st), [k[-8:] for k in active],
-    )
+    if active:  # only log when an escalation is actually active (silent in prod / ring-off)
+        log.info(
+            "sre_game: reply keys=%s text=%r matched=%s active_tails=%s",
+            [k[-8:] for k in keys], text, bool(st), [k[-8:] for k in active],
+        )
     if not st:
         return False
     tok = (tenant_token or token or "").strip()
@@ -368,7 +381,7 @@ def maybe_handle_sre_game_reply(
     if _is_reached(text):
         cur = st["pairs"][st["idx"]][0]
         _pop_state(st)
-        _reply(primary, token, f"✅ Reached {cur} — {st['label']} escalation stopped.")
+        _reply(primary, token, f"Reached {cur} — {st['label']} escalation stopped.")
         return True
 
     if _is_retry(text):
@@ -387,7 +400,7 @@ def maybe_handle_sre_game_reply(
         nxt = st["idx"] + 1
         if nxt >= len(st["pairs"]):
             _pop_state(st)
-            _reply(primary, token, f"⚠️ No more {st['label']} contacts — end of the escalation list.")
+            _reply(primary, token, f"No more {st['label']} contacts — end of the escalation list.")
             return True
         with _ESC_LOCK:
             _cancel_timer(st)
@@ -425,4 +438,4 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     name = hit_st["pairs"][hit_st["idx"]][0]
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(primary, token, f"✅ {name} joined the meeting — {hit_st['label']} escalation done.")
+    _reply(primary, token, f"{name} joined the meeting — {hit_st['label']} escalation done.")
