@@ -232,9 +232,21 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "⚠️ No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)}/{total} — {label}) into the meeting…"
-    # No escalate instructions here — they appear ONLY on timeout (invite not accepted / expired).
     to = int(_timeout_sec())
-    tail = f"\n⏳ Waiting up to {to}s for them to accept the invite…" if (oid and status not in ("no_session",)) else ""
+    if oid and status not in ("no_session",):
+        opts = []
+        if idx + 1 < total:
+            opts.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
+        opts.append("/r to retry")
+        opts.append("/y if reached")
+        # Lark sends no "declined" event, so we auto-ask after the timeout — but the operator can act
+        # IMMEDIATELY (e.g. the moment they see the call declined) by replying one of these.
+        tail = (
+            f"\n⏳ Waiting up to {to}s for them to accept."
+            f"\nDeclined or can't reach them? Reply " + ", ".join(opts) + " — I'll also ask automatically after {}s.".format(to)
+        )
+    else:
+        tail = ""
     return _reply(mid, token, head + tail)
 
 
