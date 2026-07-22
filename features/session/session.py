@@ -266,6 +266,9 @@ def _activate_dm_instruction_slot(
             target_chat=target_chat,
             source_chat_label=label,
         ):
+            # This path skips the green card (posts the suggested overview instead), so post the ring
+            # guide here too — otherwise the duty never sees it on an Issue-Watch-declared P0.
+            _send_dm_ring_guide_card(oid, tok, op_uid)
             log.info(
                 "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
                 context,
