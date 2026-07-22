@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
+from p0_logic import anthropic_client as _anthropic
 from p0_logic import cards as _cards
 from p0_logic import config as _config
 from . import draft_store as _store
@@ -177,7 +178,17 @@ def _add_image_to_draft(
                 log.warning("image download failed (no message_id for resource fallback). err=%s", e)
     if not img:
         raise RuntimeError(str(err_resource or err_images or "download failed"))
-    ocr_text = _groq.groq_vision_ocr(img)
+    # OCR the screenshot with Claude (multimodal) when Anthropic auth is available; fall back to Groq
+    # vision otherwise (or if Claude returns nothing). Groq's vision models keep getting deprecated —
+    # Claude is the primary path now.
+    ocr_text = ""
+    try:
+        if _anthropic.has_anthropic_auth():
+            ocr_text = _anthropic.anthropic_vision_ocr(img)
+    except Exception as e:  # noqa: BLE001
+        log.warning("drafts: Claude OCR failed, falling back to Groq: %s", e)
+    if not (ocr_text or "").strip():
+        ocr_text = _groq.groq_vision_ocr(img)
     if not ocr_text.strip():
         raise RuntimeError("OCR returned empty")
     with _store.draft_transaction(sender_open_id) as tx:
