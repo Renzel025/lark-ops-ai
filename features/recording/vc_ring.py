@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
+from p0_logic import cards as _cards
 from features.session import session as _session
 from . import vc_user_oauth as _oauth
 
@@ -314,9 +315,10 @@ def handle_ring_command(
         )
     else:  # ringing
         msg = f"📞 Calling {label} into the meeting now…"
-        # Tag the target(s) by name for fe/fpms/pms/SRE/DBA/liveslot + /c — <at user_id> auto-renders it.
+        # Tag the target(s) by name for fe/fpms/pms/SRE/DBA/liveslot + /c.
+        # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
         if targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
-            ats = " ".join(f'<at user_id="{oid}"></at>' for oid in targets)
+            ats = " ".join(f'<at id={oid}></at>' for oid in targets)
             when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
             msg = f"📞 Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
@@ -331,10 +333,17 @@ def handle_ring_command(
         _session.P0_SESSIONS[session_source] = sess
         if _session._session_disk.enabled():
             _session._session_disk.save_session(session_source, sess)
-    if mid:
-        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
+    # Render the status/prompt as a clean interactive card (header + lark_md body) instead of
+    # plain text, so bold/mentions render and there are no literal markdown asterisks.
+    if status in ("disabled", "no_session", "no_targets"):
+        card_title, card_template = "⚠️ Duty ring", "orange"
     else:
-        _lark.post_text_to_chat(notify_chat, token, msg)
+        card_title, card_template = "📞 Duty ring", "blue"
+    card = _cards.build_ring_status_card(card_title, msg, header_template=card_template)
+    if mid:
+        _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
+    else:
+        _lark.post_card_to_chat(notify_chat, token, card)
 
 
 def _filter_ring_targets(

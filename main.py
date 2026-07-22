@@ -745,6 +745,13 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 )
             except Exception as e_cp:
                 log.warning("major check-person join prompt hook failed: %s", e_cp)
+            try:
+                from features.recording.sre_game import maybe_mark_sre_game_contact_joined
+
+                if oid:
+                    maybe_mark_sre_game_contact_joined(oid, tenant_token)
+            except Exception as e_sg:
+                log.warning("sre_game join hook failed: %s", e_sg)
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":
@@ -813,6 +820,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
         message_create_time = (msg.get("create_time") or "").strip()
         parent_id = (msg.get("parent_id") or "").strip()
         root_id = (msg.get("root_id") or "").strip()
+        thread_id = (msg.get("thread_id") or "").strip()
 
         sender_open_id = (
             (((evt.get("sender") or {}).get("sender_id") or {}).get("open_id") or "").strip()
@@ -884,6 +892,7 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
             message_create_time=message_create_time,
             parent_id=parent_id,
             root_id=root_id,
+            thread_id=thread_id,
             image_key=image_keys[0] if image_keys else "",
             mention_names=mention_names,
             chat_type=chat_type,

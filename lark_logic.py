@@ -1063,6 +1063,7 @@ def process_message(
     message_create_time = str(kwargs.get("message_create_time") or "").strip()
     parent_id = str(kwargs.get("parent_id") or "").strip()
     root_id = str(kwargs.get("root_id") or "").strip()
+    thread_id = str(kwargs.get("thread_id") or "").strip()
     image_key = str(kwargs.get("image_key") or kwargs.get("file_key") or "").strip()
     mention_names = _clean_mention_names(kwargs.get("mention_names") or kwargs.get("mentions"))
     tenant_token = str(kwargs.get("tenant_token") or token or "").strip()
@@ -1122,13 +1123,15 @@ def process_message(
         # SRE Game escalation. First: a no/yes REPLY inside an active escalation thread advances/stops
         # it (scoped — a non-yes/no reply is ignored here and falls through to normal routing, so this
         # never swallows unrelated chatter). Then: a /sre<game> command starts a new escalation.
-        _esc_thread = (root_id or parent_id or "").strip()
-        if _esc_thread:
+        _esc_keys = [k for k in (root_id, parent_id, thread_id) if k]
+        if _esc_keys:
             from features.recording.sre_game import maybe_handle_sre_game_reply
 
+            # Pass ALL thread identifiers (root/parent/thread) + the mention-stripped text so "@bot /n"
+            # and a bare "/n" both parse to "n" and match whichever key the escalation was stored under.
             if maybe_handle_sre_game_reply(
-                _esc_thread,
-                text_raw,
+                _esc_keys,
+                _ring_raw,
                 token,
                 tenant_token=tenant_token or token,
                 operator_open_id=user_id,

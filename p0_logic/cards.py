@@ -687,6 +687,26 @@ def build_no_active_p0_session_card(mode: str = "end") -> Dict[str, Any]:
     }
 
 
+def build_ring_status_card(title: str, body_md: str, *, header_template: str = "blue") -> Dict[str, Any]:
+    """
+    Compact status card for duty-ring / SRE-game OUTPUT messages (previously plain text).
+
+    ``title`` renders in the colored header; ``body_md`` is a single ``lark_md`` div so it
+    renders mentions cleanly. NOTE: in ``lark_md`` a mention is ``<at id=ou_xxx></at>``
+    (NOT the text-message ``<at user_id="...">`` form).
+    """
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": (title or "").strip()},
+            "template": (header_template or "blue").strip() or "blue",
+        },
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": (body_md or "").strip()}},
+        ],
+    }
+
+
 def build_meeting_ended_card(
     meeting_no: str,
     duration_text: str = "Not available",
