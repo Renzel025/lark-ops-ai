@@ -325,6 +325,19 @@ def start_sre_game_escalation(
     if not pairs:
         _reply(command_message_id, token, f"No {label} SRE contacts found in the 'SRE Game' section.")
         return
+    # Retire any prior escalation for the SAME chat + game — a repeated /srebac supersedes the old one,
+    # so stale states don't pile up and steal the join-detect / thread replies.
+    with _ESC_LOCK:
+        _seen: set = set()
+        prior = []
+        for st in _ESC_BY_THREAD.values():
+            if id(st) in _seen:
+                continue
+            _seen.add(id(st))
+            if st.get("session_source") == session_source and st.get("cmd") == c:
+                prior.append(st)
+    for st in prior:
+        _pop_state(st)
     primary = (command_message_id or thread_root or "").strip()
     state: Dict[str, Any] = {
         "cmd": c, "label": label, "pairs": pairs, "idx": 0,
@@ -427,10 +440,20 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
         return
     hit_st: Dict[str, Any] = {}
     with _ESC_LOCK:
+        # Pick the MOST RECENT escalation awaiting this joiner (many may await the same person across
+        # repeated commands; the current thread has the newest ts) — not just the first one found.
+        best_ts = -1.0
+        seen_ids: set = set()
         for st in _ESC_BY_THREAD.values():
-            if not st.get("reached") and str(st.get("awaiting_oid") or "") == oid:
+            if id(st) in seen_ids:
+                continue
+            seen_ids.add(id(st))
+            if st.get("reached") or str(st.get("awaiting_oid") or "") != oid:
+                continue
+            ts = float(st.get("ts") or 0)
+            if ts > best_ts:
+                best_ts = ts
                 hit_st = st
-                break
         if hit_st:
             hit_st["reached"] = True
             _pop_state(hit_st)
