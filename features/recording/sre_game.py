@@ -211,7 +211,9 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     _name, oid = pair
     if not oid:
         return "unresolved"
-    return _vc_ring.invite_open_ids_into_active_meeting(
+    # Force a direct re-invite each step: the normal merge path dedupes and would NOT re-ring a contact
+    # already invited (breaks /r retry and re-calling the same person). Escalation must actually ring.
+    return _vc_ring.force_reinvite_open_ids(
         session_source, [oid], tenant_token=tenant_token, operator_open_id=operator_open_id
     )
 
