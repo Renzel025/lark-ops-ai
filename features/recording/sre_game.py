@@ -5,12 +5,13 @@ The "SRE Game" section of the OSE & SRE Duty Shift sheet lists, per game, an ORD
 rings the 1st contact into the active P0 meeting, then WATCHES for them to join:
 
     @bot /srebac  -> ring Wylie (1st), wait 90s
-      • Wylie JOINS the VC within 90s -> reached, stop (auto).
+      • Wylie JOINS the VC within 90s -> reached, stop (auto) + posts "Wylie joined the meeting".
       • Wylie does NOT join in 90s     -> prompt: reply /n to invite Chi Sheun (2nd), /r to retry Wylie.
 
 Lark has no "invite declined/expired" event, so "did not accept" = "did not JOIN within the timeout".
-Replies in the command's thread: /n = escalate to next, /r = retry current, /y = mark reached (stop).
-``sredt``/``sresic`` share "Dragon Tiger & Sicbo"; ``srecg``/``srepp`` share "Colorgame & Pulaputi".
+Replies in the command's thread: /n = escalate to next, /r = retry current. When the contact actually
+JOINS the VC, the escalation auto-stops and posts "<name> joined the meeting" — there is no manual
+"reached" reply. ``sredt``/``sresic`` share "Dragon Tiger & Sicbo"; ``srecg``/``srepp`` share "Colorgame & Pulaputi".
 Contacts resolve name->open_id via the OpenID directory (subject to the same primary-app requirement).
 """
 from __future__ import annotations
@@ -145,7 +146,6 @@ def _ordinal(n: int) -> str:
 
 
 _ESCALATE_WORDS = {"n", "no"}
-_REACHED_WORDS = {"y", "yes"}
 _RETRY_WORDS = {"r", "retry"}
 
 
@@ -155,10 +155,6 @@ def _norm_reply(text: str) -> str:
 
 def _is_escalate(text: str) -> bool:
     return _norm_reply(text) in _ESCALATE_WORDS
-
-
-def _is_reached(text: str) -> bool:
-    return _norm_reply(text) in _REACHED_WORDS
 
 
 def _is_retry(text: str) -> bool:
@@ -240,11 +236,11 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         if idx + 1 < total:
             opts.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
         opts.append("/r to retry")
-        opts.append("/y if reached")
         # Lark sends no "declined" event, so we auto-ask after the timeout — but the operator can act
-        # IMMEDIATELY (e.g. the moment they see the call declined) by replying one of these.
+        # IMMEDIATELY (e.g. the moment they see the call declined) by replying one of these. When the
+        # contact joins the VC, the escalation auto-stops — no manual "reached" reply is needed.
         tail = (
-            f"\nWaiting up to {to}s for them to accept."
+            f"\nWaiting up to {to}s for them to accept — I'll auto-confirm when they join the meeting."
             f"\nDeclined or can't reach them? Reply " + ", ".join(opts) + " — I'll also ask automatically after {}s.".format(to)
         )
     else:
@@ -298,7 +294,7 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     else:
         lines.append("• (no more contacts after this one)")
     lines.append(f"• /r → retry {name} ({_ordinal(idx + 1)})")
-    lines.append("• /y → reached — stop the escalation")
+    lines.append("(If they join the meeting, I'll auto-confirm and stop — no reply needed.)")
     _reply(thread_key, token, "\n".join(lines))
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
@@ -366,10 +362,11 @@ def maybe_handle_sre_game_reply(
     tenant_token: str = "",
     operator_open_id: str = "",
 ) -> bool:
-    """Interpret a /y (reached), /n (escalate), or /r (retry) reply in an active escalation thread.
-    ``thread_keys`` = the reply's candidate identifiers (root_id, parent_id, thread_id); the state is
-    matched against ANY of them. Returns True only when it handled the message; anything else returns
-    False so normal routing proceeds (never swallows unrelated chatter)."""
+    """Interpret a /n (escalate) or /r (retry) reply in an active escalation thread. (There is no manual
+    "reached" reply — the escalation auto-stops when the contact joins the VC.) ``thread_keys`` = the
+    reply's candidate identifiers (root_id, parent_id, thread_id); the state is matched against ANY of
+    them. Returns True only when it handled the message; anything else returns False so normal routing
+    proceeds (never swallows unrelated chatter)."""
     keys = [k.strip() for k in (thread_keys or []) if k and k.strip()]
     if not keys:
         return False
@@ -392,12 +389,6 @@ def maybe_handle_sre_game_reply(
         return False
     tok = (tenant_token or token or "").strip()
     primary = str(st.get("primary") or keys[0]).strip()
-
-    if _is_reached(text):
-        cur = st["pairs"][st["idx"]][0]
-        _pop_state(st)
-        _reply(primary, token, f"Reached {cur} — {st['label']} escalation stopped.")
-        return True
 
     if _is_retry(text):
         with _ESC_LOCK:
@@ -429,7 +420,7 @@ def maybe_handle_sre_game_reply(
             _arm_timeout(primary, nxt)
         return True
 
-    return False  # not /y /n /r -> let normal routing handle this message
+    return False  # not /n /r -> let normal routing handle this message
 
 
 def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = "") -> None:
