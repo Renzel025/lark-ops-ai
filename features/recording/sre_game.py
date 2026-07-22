@@ -15,6 +15,7 @@ Contacts resolve name->open_id via the OpenID directory (subject to the same pri
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -163,9 +164,43 @@ def _is_retry(text: str) -> bool:
     return _norm_reply(text) in _RETRY_WORDS
 
 
-def _reply(mid: str, token: str, text: str) -> None:
-    if mid and token:
-        _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
+def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
+    """Post a threaded reply to ``mid``; return the created message's {message_id, root_id, thread_id}
+    so the escalation can be keyed by whatever thread root Lark actually assigns (it is NOT always the
+    replied-to message — hence the multi-key registration)."""
+    if not (mid and token and (text or "").strip()):
+        return {}
+    st, body = _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
+    ids: Dict[str, str] = {}
+    if st == 200 and body:
+        try:
+            data = (json.loads(body) or {}).get("data") or {}
+            for k in ("message_id", "root_id", "thread_id"):
+                v = str(data.get(k) or "").strip()
+                if v:
+                    ids[k] = v
+        except (ValueError, TypeError):
+            pass
+    return ids
+
+
+def _register(state: Dict[str, Any], keys: List[str]) -> None:
+    """Register ``state`` under every non-empty key (deduped) so a reply matching ANY of the thread's
+    identifiers (command msg id / bot-reply msg id / root id / thread id) resolves to it."""
+    ks = sorted({k.strip() for k in keys if k and k.strip()})
+    state["_keys"] = ks
+    with _ESC_LOCK:
+        for k in ks:
+            _ESC_BY_THREAD[k] = state
+
+
+def _pop_state(state: Dict[str, Any]) -> None:
+    """Cancel the timer and remove ``state`` under all of its registered keys."""
+    with _ESC_LOCK:
+        _cancel_timer(state)
+        for k in state.get("_keys", []):
+            if _ESC_BY_THREAD.get(k) is state:
+                _ESC_BY_THREAD.pop(k, None)
 
 
 def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str, operator_open_id: str) -> str:
@@ -178,7 +213,7 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
-                    status: str, *, retry: bool = False) -> None:
+                    status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
     total = len(pairs)
     who = f'<at user_id="{oid}"></at>' if oid else name
@@ -201,7 +236,7 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         )
     else:
         tail = f"\nWaiting {to}s (last contact). Reply **/r** to retry, or **/y** if reached."
-    _reply(mid, token, head + tail)
+    return _reply(mid, token, head + tail)
 
 
 def _cancel_timer(st: Dict[str, Any]) -> None:
@@ -268,29 +303,32 @@ def start_sre_game_escalation(
     c = (cmd or "").strip().lower()
     tok = (tenant_token or token or "").strip()
     label = SRE_GAME_LABEL.get(c, c.upper())
-    thread_key = (thread_root or command_message_id or "").strip()
     pairs = resolve_sre_game_contacts(c, tok)
     if not pairs:
         _reply(command_message_id, token, f"⚠️ No {label} SRE contacts found in the 'SRE Game' section.")
         return
+    primary = (command_message_id or thread_root or "").strip()
+    state: Dict[str, Any] = {
+        "cmd": c, "label": label, "pairs": pairs, "idx": 0,
+        "session_source": session_source, "notify_chat": notify_chat, "ts": time.time(),
+        "awaiting_oid": pairs[0][1], "reached": False, "timer": None, "primary": primary, "_keys": [],
+    }
     status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
-    with _ESC_LOCK:
-        _ESC_BY_THREAD[thread_key] = {
-            "cmd": c, "label": label, "pairs": pairs, "idx": 0,
-            "session_source": session_source, "notify_chat": notify_chat, "ts": time.time(),
-            "awaiting_oid": pairs[0][1], "reached": False, "timer": None,
-        }
+    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status)
+    # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
+    # thread root is NOT always the command message, so a /n reply may carry any of these as its root.
+    _register(state, [command_message_id, thread_root,
+                      ids.get("message_id", ""), ids.get("root_id", ""), ids.get("thread_id", "")])
     log.info(
-        "sre_game: started cmd=%s label=%s contacts=%s thread_tail=%s status=%s",
-        c, label, [p[0] for p in pairs], thread_key[-8:] if thread_key else "", status,
+        "sre_game: started cmd=%s label=%s contacts=%s keys=%s status=%s",
+        c, label, [p[0] for p in pairs], [k[-8:] for k in state["_keys"]], status,
     )
-    _calling_prompt(command_message_id, token, label, pairs, 0, status)
-    if pairs[0][1] and status not in ("no_session", "disabled"):
-        _arm_timeout(thread_key, 0)
+    if pairs[0][1] and status not in ("no_session", "disabled") and primary:
+        _arm_timeout(primary, 0)
 
 
 def maybe_handle_sre_game_reply(
-    thread_key: str,
+    thread_keys: List[str],
     text: str,
     token: str,
     *,
@@ -298,32 +336,35 @@ def maybe_handle_sre_game_reply(
     operator_open_id: str = "",
 ) -> bool:
     """Interpret a /y (reached), /n (escalate), or /r (retry) reply in an active escalation thread.
-    Returns True only when it handled the message; anything else returns False so normal routing
-    proceeds (never swallows unrelated chatter)."""
-    key = (thread_key or "").strip()
-    if not key:
+    ``thread_keys`` = the reply's candidate identifiers (root_id, parent_id, thread_id); the state is
+    matched against ANY of them. Returns True only when it handled the message; anything else returns
+    False so normal routing proceeds (never swallows unrelated chatter)."""
+    keys = [k.strip() for k in (thread_keys or []) if k and k.strip()]
+    if not keys:
         return False
     with _ESC_LOCK:
         active = list(_ESC_BY_THREAD.keys())
-        st = _ESC_BY_THREAD.get(key)
+        st = None
+        for k in keys:
+            st = _ESC_BY_THREAD.get(k)
+            if st:
+                break
         if st and time.time() - float(st.get("ts") or 0) > _ESC_TTL_SEC:
-            _cancel_timer(st)
-            _ESC_BY_THREAD.pop(key, None)
+            _pop_state(st)
             st = None
     log.info(
-        "sre_game: reply key_tail=%s text=%r matched=%s active_tails=%s",
-        key[-8:], text, bool(st), [k[-8:] for k in active],
+        "sre_game: reply keys=%s text=%r matched=%s active_tails=%s",
+        [k[-8:] for k in keys], text, bool(st), [k[-8:] for k in active],
     )
     if not st:
         return False
     tok = (tenant_token or token or "").strip()
+    primary = str(st.get("primary") or keys[0]).strip()
 
     if _is_reached(text):
         cur = st["pairs"][st["idx"]][0]
-        with _ESC_LOCK:
-            _cancel_timer(st)
-            _ESC_BY_THREAD.pop(key, None)
-        _reply(key, token, f"✅ Reached {cur} — {st['label']} escalation stopped.")
+        _pop_state(st)
+        _reply(primary, token, f"✅ Reached {cur} — {st['label']} escalation stopped.")
         return True
 
     if _is_retry(text):
@@ -333,18 +374,16 @@ def maybe_handle_sre_game_reply(
             st["ts"] = time.time()
         status = _ring_contact(st["session_source"], st["pairs"][idx], tok, operator_open_id)
         log.info("sre_game: retry cmd=%s %s (%s) status=%s", st["cmd"], st["pairs"][idx][0], _ordinal(idx + 1), status)
-        _calling_prompt(key, token, st["label"], st["pairs"], idx, status, retry=True)
+        _calling_prompt(primary, token, st["label"], st["pairs"], idx, status, retry=True)
         if st["pairs"][idx][1] and status not in ("no_session", "disabled"):
-            _arm_timeout(key, idx)
+            _arm_timeout(primary, idx)
         return True
 
     if _is_escalate(text):
         nxt = st["idx"] + 1
         if nxt >= len(st["pairs"]):
-            with _ESC_LOCK:
-                _cancel_timer(st)
-                _ESC_BY_THREAD.pop(key, None)
-            _reply(key, token, f"⚠️ No more {st['label']} contacts — end of the escalation list.")
+            _pop_state(st)
+            _reply(primary, token, f"⚠️ No more {st['label']} contacts — end of the escalation list.")
             return True
         with _ESC_LOCK:
             _cancel_timer(st)
@@ -353,9 +392,9 @@ def maybe_handle_sre_game_reply(
             st["ts"] = time.time()
         status = _ring_contact(st["session_source"], st["pairs"][nxt], tok, operator_open_id)
         log.info("sre_game: escalated cmd=%s to %s (%s) status=%s", st["cmd"], st["pairs"][nxt][0], _ordinal(nxt + 1), status)
-        _calling_prompt(key, token, st["label"], st["pairs"], nxt, status)
+        _calling_prompt(primary, token, st["label"], st["pairs"], nxt, status)
         if st["pairs"][nxt][1] and status not in ("no_session", "disabled"):
-            _arm_timeout(key, nxt)
+            _arm_timeout(primary, nxt)
         return True
 
     return False  # not /y /n /r -> let normal routing handle this message
@@ -367,19 +406,19 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     oid = (joiner_open_id or "").strip()
     if not oid:
         return
-    hit_key = ""
     hit_st: Dict[str, Any] = {}
     with _ESC_LOCK:
-        for k, st in _ESC_BY_THREAD.items():
+        for st in _ESC_BY_THREAD.values():
             if not st.get("reached") and str(st.get("awaiting_oid") or "") == oid:
-                hit_key, hit_st = k, st
+                hit_st = st
                 break
-        if hit_key:
-            _cancel_timer(hit_st)
-            _ESC_BY_THREAD.pop(hit_key, None)
-    if not hit_key:
+        if hit_st:
+            hit_st["reached"] = True
+            _pop_state(hit_st)
+    if not hit_st:
         return
     token = (tenant_token or "").strip() or _lark.get_tenant_token_primary()
     name = hit_st["pairs"][hit_st["idx"]][0]
+    primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(hit_key, token, f"✅ {name} joined the meeting — {hit_st['label']} escalation done.")
+    _reply(primary, token, f"✅ {name} joined the meeting — {hit_st['label']} escalation done.")
