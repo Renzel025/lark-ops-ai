@@ -177,6 +177,50 @@ def invite_open_ids_into_active_meeting(
     return "queued_oauth"
 
 
+def force_reinvite_open_ids(
+    chat_id: str,
+    open_ids: List[str],
+    *,
+    tenant_token: str = "",
+    operator_open_id: str = "",
+) -> str:
+    """Re-send a VC invite to ``open_ids`` into the active meeting EVEN IF already invited.
+
+    The normal ``invite_open_ids_into_active_meeting`` path dedupes (only rings NEWLY-added targets),
+    so it no-ops when re-ringing the same person. This rings them DIRECTLY via the inviter's OAuth —
+    used by the SRE-game escalation (/srebac … /r retry, /n next) so each step actually re-invites.
+
+    Returns: ``disabled`` / ``no_session`` / ``no_targets`` / ``queued_oauth`` / ``ringing`` / ``failed``.
+    """
+    if not _config.get_p0_vc_ring_enabled():
+        return "disabled"
+    cid = (chat_id or "").strip()
+    sess = _session.P0_SESSIONS.get(cid)
+    if not isinstance(sess, dict):
+        return "no_session"
+    meeting_id = str(sess.get("meeting_id") or "").strip()
+    if not meeting_id:
+        return "no_session"
+    trigger = str(sess.get("trigger_open_id") or operator_open_id or "").strip()
+    raw = _filter_ring_targets(
+        [str(x).strip() for x in (open_ids or []) if str(x).strip()], operator_open_id=trigger
+    )
+    if not raw:
+        return "no_targets"
+    inviter = _config.get_p0_vc_ring_inviter_open_id() or trigger
+    user_tok = _oauth.get_user_access_token(inviter)
+    if not user_tok:
+        maybe_prompt_oauth_dm(inviter, tenant_token)
+        log.warning("vc_ring: force re-invite queued — no user_access_token for inviter_tail=%s", inviter[-8:])
+        return "queued_oauth"
+    ok, detail = _lark.invite_users_to_vc_meeting(user_tok, meeting_id, raw)
+    log.info(
+        "vc_ring: force re-invite count=%s ok=%s meeting_tail=%s detail=%s",
+        len(raw), ok, meeting_id[-8:], (detail or "")[:200],
+    )
+    return "ringing" if ok else "failed"
+
+
 def handle_ring_command(
     cmd: str,
     session_source: str,
