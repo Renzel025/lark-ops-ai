@@ -191,7 +191,7 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
         return {}
     # Post the prompt as a clean interactive card (header + lark_md body) rather than plain text,
     # then parse the created message ids EXACTLY as before (required for multi-key registration).
-    card = _cards.build_ring_status_card("SRE duty", text)
+    card = _cards.build_ring_status_card("Inviting check person", text)
     st, body = _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
     ids: Dict[str, str] = {}
     if st == 200 and body:

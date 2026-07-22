@@ -380,9 +380,9 @@ def handle_ring_command(
     # Render the status/prompt as a clean interactive card (header + lark_md body) instead of
     # plain text, so bold/mentions render and there are no literal markdown asterisks.
     if status in ("disabled", "no_session", "no_targets"):
-        card_title, card_template = "Duty ring", "orange"
+        card_title, card_template = "Inviting check person", "orange"
     else:
-        card_title, card_template = "Duty ring", "blue"
+        card_title, card_template = "Inviting check person", "blue"
     card = _cards.build_ring_status_card(card_title, msg, header_template=card_template)
     if mid:
         _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
