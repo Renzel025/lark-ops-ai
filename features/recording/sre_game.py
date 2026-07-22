@@ -9,9 +9,11 @@ rings the 1st contact into the active P0 meeting, then WATCHES for them to join:
       • Wylie does NOT join in 90s     -> prompt: reply /n to invite Chi Sheun (2nd), /r to retry Wylie.
 
 Lark has no "invite declined/expired" event, so "did not accept" = "did not JOIN within the timeout".
-Replies in the command's thread: /n = escalate to next, /r = retry current. When the contact actually
-JOINS the VC, the escalation auto-stops and posts "<name> joined the meeting" — there is no manual
-"reached" reply. ``sredt``/``sresic`` share "Dragon Tiger & Sicbo"; ``srecg``/``srepp`` share "Colorgame & Pulaputi".
+Replies in the command's thread: /n = escalate to next, /r = retry the current contact, /r <name> =
+retry ANY contact by name (e.g. "/r Wylie" even after the escalation moved on to Chi Sheun). When the
+contact actually JOINS the VC, the escalation auto-stops and posts "<name> joined the meeting" — there
+is no manual "reached" reply. ``sredt``/``sresic`` share "Dragon Tiger & Sicbo"; ``srecg``/``srepp``
+share "Colorgame & Pulaputi".
 Contacts resolve name->open_id via the OpenID directory (subject to the same primary-app requirement).
 """
 from __future__ import annotations
@@ -146,7 +148,7 @@ def _ordinal(n: int) -> str:
 
 
 _ESCALATE_WORDS = {"n", "no"}
-_RETRY_WORDS = {"r", "retry"}
+_RETRY_RE = re.compile(r"^/?(?:r|retry)(?:\s+(.+))?$", re.IGNORECASE)
 
 
 def _norm_reply(text: str) -> str:
@@ -157,8 +159,27 @@ def _is_escalate(text: str) -> bool:
     return _norm_reply(text) in _ESCALATE_WORDS
 
 
-def _is_retry(text: str) -> bool:
-    return _norm_reply(text) in _RETRY_WORDS
+def _match_retry(text: str) -> Tuple[bool, str]:
+    """``/r`` / ``retry`` retries the CURRENT contact; ``/r <name>`` / ``retry <name>`` retries that
+    specific contact instead (useful once the escalation has moved past them — e.g. ``/r OSE`` after
+    it already advanced to a 2nd contact). Returns (is_retry, name_arg_or_empty)."""
+    m = _RETRY_RE.match((text or "").strip())
+    if not m:
+        return False, ""
+    return True, (m.group(1) or "").strip()
+
+
+def _find_contact_idx(pairs: List[Tuple[str, str]], name: str) -> int:
+    """Index of the contact whose name matches ``name`` (case/space-insensitive; falls back to a
+    unique prefix match), or -1 if none/ambiguous."""
+    key = _duty._norm_name(name)
+    if not key:
+        return -1
+    for i, (nm, _oid) in enumerate(pairs):
+        if _duty._norm_name(nm) == key:
+            return i
+    hits = [i for i, (nm, _oid) in enumerate(pairs) if _duty._norm_name(nm).startswith(key)]
+    return hits[0] if len(hits) == 1 else -1
 
 
 def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
@@ -214,6 +235,14 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     )
 
 
+def _other_name(pairs: List[Tuple[str, str]], idx: int) -> str:
+    """A contact name other than ``pairs[idx]``, for use as a ``/r <name>`` example."""
+    for i, (nm, _oid) in enumerate(pairs):
+        if i != idx:
+            return nm
+    return ""
+
+
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
                     status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
@@ -237,6 +266,8 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         if idx + 1 < total:
             lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
         lines.append(f"/r to retry call {name}")
+        if total > 1:
+            lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
         tail = "\n".join(lines)
     else:
         tail = ""
@@ -288,6 +319,8 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     if idx + 1 < total:
         lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
     lines.append(f"/r to retry call {name}")
+    if total > 1:
+        lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
     _reply(thread_key, token, "\n".join(lines))
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
@@ -383,10 +416,19 @@ def maybe_handle_sre_game_reply(
     tok = (tenant_token or token or "").strip()
     primary = str(st.get("primary") or keys[0]).strip()
 
-    if _is_retry(text):
+    is_retry, retry_name = _match_retry(text)
+    if is_retry:
+        idx = st["idx"]
+        if retry_name:
+            found = _find_contact_idx(st["pairs"], retry_name)
+            if found < 0:
+                _reply(primary, token, f"No contact named '{retry_name}' in the {st['label']} list.")
+                return True
+            idx = found
         with _ESC_LOCK:
             _cancel_timer(st)
-            idx = st["idx"]
+            st["idx"] = idx
+            st["awaiting_oid"] = st["pairs"][idx][1]
             st["ts"] = time.time()
         status = _ring_contact(st["session_source"], st["pairs"][idx], tok, operator_open_id)
         log.info("sre_game: retry cmd=%s %s (%s) status=%s", st["cmd"], st["pairs"][idx][0], _ordinal(idx + 1), status)
