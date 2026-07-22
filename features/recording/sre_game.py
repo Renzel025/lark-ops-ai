@@ -356,10 +356,11 @@ def maybe_handle_sre_game_reply(
         if st and time.time() - float(st.get("ts") or 0) > _ESC_TTL_SEC:
             _pop_state(st)
             st = None
-    log.info(
-        "sre_game: reply keys=%s text=%r matched=%s active_tails=%s",
-        [k[-8:] for k in keys], text, bool(st), [k[-8:] for k in active],
-    )
+    if active:  # only log when an escalation is actually active (silent in prod / ring-off)
+        log.info(
+            "sre_game: reply keys=%s text=%r matched=%s active_tails=%s",
+            [k[-8:] for k in keys], text, bool(st), [k[-8:] for k in active],
+        )
     if not st:
         return False
     tok = (tenant_token or token or "").strip()
