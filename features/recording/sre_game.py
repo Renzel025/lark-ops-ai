@@ -24,7 +24,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -166,7 +166,8 @@ def _match_retry(text: str) -> Tuple[bool, str]:
     m = _RETRY_RE.match((text or "").strip())
     if not m:
         return False, ""
-    return True, (m.group(1) or "").strip()
+    # Tolerate an @mention form ("/r @OSE") — strip a leading '@' so it matches the roster name.
+    return True, (m.group(1) or "").strip().lstrip("@").strip()
 
 
 def _find_contact_idx(pairs: List[Tuple[str, str]], name: str) -> int:
@@ -235,14 +236,6 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     )
 
 
-def _other_name(pairs: List[Tuple[str, str]], idx: int) -> str:
-    """A contact name other than ``pairs[idx]``, for use as a ``/r <name>`` example."""
-    for i, (nm, _oid) in enumerate(pairs):
-        if i != idx:
-            return nm
-    return ""
-
-
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
                     status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
@@ -265,9 +258,7 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
         if idx + 1 < total:
             lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-        lines.append(f"/r to retry call {name}")
-        if total > 1:
-            lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
+        lines.append("/r @checkperson to retry calling a specific check person")
         tail = "\n".join(lines)
     else:
         tail = ""
@@ -318,9 +309,7 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     ]
     if idx + 1 < total:
         lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-    lines.append(f"/r to retry call {name}")
-    if total > 1:
-        lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
+    lines.append(f"/r @checkperson to retry calling a specific check person, e.g. /r {name}")
     _reply(thread_key, token, "\n".join(lines))
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
@@ -387,12 +376,15 @@ def maybe_handle_sre_game_reply(
     *,
     tenant_token: str = "",
     operator_open_id: str = "",
+    tagged_open_ids: Optional[List[str]] = None,
 ) -> bool:
     """Interpret a /n (escalate) or /r (retry) reply in an active escalation thread. (There is no manual
     "reached" reply — the escalation auto-stops when the contact joins the VC.) ``thread_keys`` = the
     reply's candidate identifiers (root_id, parent_id, thread_id); the state is matched against ANY of
-    them. Returns True only when it handled the message; anything else returns False so normal routing
-    proceeds (never swallows unrelated chatter)."""
+    them. ``tagged_open_ids`` = open_ids of any Lark users @mentioned in the reply, so "/r @Person"
+    retries the tagged contact directly (preferred over typing the name). Returns True only when it
+    handled the message; anything else returns False so normal routing proceeds (never swallows
+    unrelated chatter)."""
     keys = [k.strip() for k in (thread_keys or []) if k and k.strip()]
     if not keys:
         return False
@@ -418,13 +410,24 @@ def maybe_handle_sre_game_reply(
 
     is_retry, retry_name = _match_retry(text)
     if is_retry:
-        idx = st["idx"]
-        if retry_name:
+        # Prefer a tagged Lark user whose open_id matches a contact — no spelling/name issues, and the
+        # @mention open_id is already in the primary app's space (same path as /c). Fall back to a typed
+        # name; a bare "/r" (no tag, no name) retries the current contact.
+        tagged = [t for t in (tagged_open_ids or []) if t]
+        found = -1
+        for i, (_nm, oid) in enumerate(st["pairs"]):
+            if oid and oid in tagged:
+                found = i
+                break
+        if found < 0 and retry_name:
             found = _find_contact_idx(st["pairs"], retry_name)
             if found < 0:
-                _reply(primary, token, f"No contact named '{retry_name}' in the {st['label']} list.")
+                _reply(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
                 return True
-            idx = found
+        if found < 0 and tagged:
+            _reply(primary, token, f"That tagged user is not in the {st['label']} contact list.")
+            return True
+        idx = found if found >= 0 else st["idx"]
         with _ESC_LOCK:
             _cancel_timer(st)
             st["idx"] = idx
