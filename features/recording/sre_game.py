@@ -454,4 +454,4 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     name = hit_st["pairs"][hit_st["idx"]][0]
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(primary, token, f"{name} joined the meeting — {hit_st['label']} escalation done.")
+    _reply(primary, token, f"{name} joined the meeting")
