@@ -24,7 +24,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -104,7 +104,6 @@ def parse_sre_game_contacts(rows: List[List[Any]], header_kw: str) -> List[str]:
     if game_idx < 0:
         return []
     names: List[str] = []
-    seen: set = set()
     blanks = 0
     for row in rows[game_idx + 1:]:
         col_a = str((row[0] if row else "") or "").strip()
@@ -120,9 +119,9 @@ def parse_sre_game_contacts(rows: List[List[Any]], header_kw: str) -> List[str]:
         if "IF CAN'T CONTACT" in up or "IF CANT CONTACT" in up:
             continue
         nm = _duty._clean_person_name(col_a)
-        key = _duty._norm_name(nm)
-        if nm and key not in seen:
-            seen.add(key)
+        # Keep EVERY contact row in sheet order, INCLUDING repeats — the same person can legitimately be
+        # both the 1st and a later fallback contact, and the escalation list must match the sheet 1:1.
+        if nm:
             names.append(nm)
     return names
 
@@ -159,6 +158,18 @@ def _is_escalate(text: str) -> bool:
     return _norm_reply(text) in _ESCALATE_WORDS
 
 
+def _first_token(text: str) -> str:
+    """Lowercased first word of the reply, sans a leading slash (e.g. '/c @A @B' -> 'c')."""
+    t = (text or "").strip().lstrip("/").strip()
+    return re.split(r"\s+", t, 1)[0].lower() if t else ""
+
+
+def _is_call(text: str) -> bool:
+    """``/c`` — call/invite the tagged check person(s) directly (retry the current one or bring in
+    other specific people). Tags carry the open_ids; the word itself is just the trigger."""
+    return _first_token(text) == "c"
+
+
 def _match_retry(text: str) -> Tuple[bool, str]:
     """``/r`` / ``retry`` retries the CURRENT contact; ``/r <name>`` / ``retry <name>`` retries that
     specific contact instead (useful once the escalation has moved past them — e.g. ``/r OSE`` after
@@ -166,7 +177,8 @@ def _match_retry(text: str) -> Tuple[bool, str]:
     m = _RETRY_RE.match((text or "").strip())
     if not m:
         return False, ""
-    return True, (m.group(1) or "").strip()
+    # Tolerate an @mention form ("/r @OSE") — strip a leading '@' so it matches the roster name.
+    return True, (m.group(1) or "").strip().lstrip("@").strip()
 
 
 def _find_contact_idx(pairs: List[Tuple[str, str]], name: str) -> int:
@@ -190,7 +202,7 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
         return {}
     # Post the prompt as a clean interactive card (header + lark_md body) rather than plain text,
     # then parse the created message ids EXACTLY as before (required for multi-key registration).
-    card = _cards.build_ring_status_card("SRE duty", text)
+    card = _cards.build_ring_status_card("Inviting check person", text)
     st, body = _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
     ids: Dict[str, str] = {}
     if st == 200 and body:
@@ -203,6 +215,13 @@ def _reply(mid: str, token: str, text: str) -> Dict[str, str]:
         except (ValueError, TypeError):
             pass
     return ids
+
+
+def _reply_text(mid: str, token: str, text: str) -> None:
+    """Plain-text threaded reply (no card). Used for the lightweight 'joined the meeting' confirmation."""
+    if not (mid and token and (text or "").strip()):
+        return
+    _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
 
 
 def _register(state: Dict[str, Any], keys: List[str]) -> None:
@@ -235,18 +254,30 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     )
 
 
-def _other_name(pairs: List[Tuple[str, str]], idx: int) -> str:
-    """A contact name other than ``pairs[idx]``, for use as a ``/r <name>`` example."""
+def _contacts_list_md(label: str, pairs: List[Tuple[str, str]]) -> str:
+    """Numbered roster of ALL check persons for the game, shown under the 'Calling…' line."""
+    lines = [f"SRE {label} check persons"]
     for i, (nm, _oid) in enumerate(pairs):
-        if i != idx:
-            return nm
-    return ""
+        lines.append(f"{i + 1}. {nm}")
+    return "\n".join(lines)
+
+
+def _command_hints_md(pairs: List[Tuple[str, str]], idx: int) -> List[str]:
+    """The '/n' + '/c @…' command hints shown when a check person hasn't joined yet."""
+    total = len(pairs)
+    lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
+    if idx + 1 < total:
+        lines.append(f"/n to call the next check person ({pairs[idx + 1][0]})")
+    lines.append(
+        "/c @checkperson to retry the current check person or invite other specific check persons "
+        "(tag one or more)"
+    )
+    return lines
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
                     status: str, *, retry: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
-    total = len(pairs)
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
     lead = "Retrying — calling" if retry else "Calling"
@@ -262,16 +293,10 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     if oid and status not in ("no_session",):
         # Lark sends no "declined" event, so the escalation auto-confirms when the contact joins the VC;
         # if they don't, the operator drives it with these commands (also auto-prompted after the timeout).
-        lines = ["", "If check person did not proceed to join, you can use these commands:", ""]
-        if idx + 1 < total:
-            lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-        lines.append(f"/r to retry call {name}")
-        if total > 1:
-            lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
-        tail = "\n".join(lines)
+        body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
     else:
-        tail = ""
-    return _reply(mid, token, head + tail)
+        body = ""
+    return _reply(mid, token, head + body)
 
 
 def _cancel_timer(st: Dict[str, Any]) -> None:
@@ -307,21 +332,13 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     if not token:
         return
     name = pairs[idx][0]
-    total = len(pairs)
     to = int(_timeout_sec())
-    lines = [
+    head = (
         f"{name} ({_ordinal(idx + 1)} check person {label}) did not proceed to join the meeting "
-        f"(no answer within {to}s).",
-        "",
-        "You can use these commands:",
-        "",
-    ]
-    if idx + 1 < total:
-        lines.append(f"/n to call the next contact ({pairs[idx + 1][0]}) now")
-    lines.append(f"/r to retry call {name}")
-    if total > 1:
-        lines.append("/r <name> to retry a specific contact instead, e.g. /r " + _other_name(pairs, idx))
-    _reply(thread_key, token, "\n".join(lines))
+        f"(no answer within {to}s)."
+    )
+    body = _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
+    _reply(thread_key, token, head + "\n\n" + body)
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
 
@@ -387,12 +404,15 @@ def maybe_handle_sre_game_reply(
     *,
     tenant_token: str = "",
     operator_open_id: str = "",
+    tagged_open_ids: Optional[List[str]] = None,
 ) -> bool:
     """Interpret a /n (escalate) or /r (retry) reply in an active escalation thread. (There is no manual
     "reached" reply — the escalation auto-stops when the contact joins the VC.) ``thread_keys`` = the
     reply's candidate identifiers (root_id, parent_id, thread_id); the state is matched against ANY of
-    them. Returns True only when it handled the message; anything else returns False so normal routing
-    proceeds (never swallows unrelated chatter)."""
+    them. ``tagged_open_ids`` = open_ids of any Lark users @mentioned in the reply, so "/r @Person"
+    retries the tagged contact directly (preferred over typing the name). Returns True only when it
+    handled the message; anything else returns False so normal routing proceeds (never swallows
+    unrelated chatter)."""
     keys = [k.strip() for k in (thread_keys or []) if k and k.strip()]
     if not keys:
         return False
@@ -416,15 +436,46 @@ def maybe_handle_sre_game_reply(
     tok = (tenant_token or token or "").strip()
     primary = str(st.get("primary") or keys[0]).strip()
 
+    if _is_call(text):
+        # /c @people — force-invite the tagged check person(s) into the meeting (retry the current one
+        # or bring in other specific people). force_reinvite bypasses the merge-dedupe so an already
+        # invited person actually rings again. Does NOT change the /n escalation pointer.
+        tagged = [t for t in (tagged_open_ids or []) if t]
+        if not tagged:
+            _reply(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
+            return True
+        status = _vc_ring.force_reinvite_open_ids(
+            st["session_source"], tagged, tenant_token=tok, operator_open_id=operator_open_id
+        )
+        log.info("sre_game: /c cmd=%s tagged=%s status=%s", st["cmd"], len(tagged), status)
+        if status in ("no_session",):
+            _reply(primary, token, "No active meeting — start a P0 meeting first.")
+        else:
+            who = " ".join(f"<at id={t}></at>" for t in tagged)
+            _reply(primary, token, f"Calling {who} into the meeting")
+        return True
+
     is_retry, retry_name = _match_retry(text)
     if is_retry:
-        idx = st["idx"]
-        if retry_name:
+        # /r ALWAYS names WHO to retry — either a tagged Lark user (preferred; the @mention open_id is
+        # already in the primary app's space, same path as /c) or a typed name. A bare "/r" with neither
+        # is rejected with a hint, so the command is unambiguous.
+        tagged = [t for t in (tagged_open_ids or []) if t]
+        found = -1
+        for i, (_nm, oid) in enumerate(st["pairs"]):
+            if oid and oid in tagged:
+                found = i
+                break
+        if found < 0 and retry_name:
             found = _find_contact_idx(st["pairs"], retry_name)
             if found < 0:
-                _reply(primary, token, f"No contact named '{retry_name}' in the {st['label']} list.")
+                _reply(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
                 return True
-            idx = found
+        if found < 0:
+            cur = st["pairs"][st["idx"]][0]
+            _reply(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
+            return True
+        idx = found
         with _ESC_LOCK:
             _cancel_timer(st)
             st["idx"] = idx
@@ -489,4 +540,4 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     name = hit_st["pairs"][hit_st["idx"]][0]
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
-    _reply(primary, token, f"{name} joined the meeting")
+    _reply_text(primary, token, f"{name} joined the meeting")

@@ -266,6 +266,9 @@ def _activate_dm_instruction_slot(
             target_chat=target_chat,
             source_chat_label=label,
         ):
+            # This path skips the green card (posts the suggested overview instead), so post the ring
+            # guide here too — otherwise the duty never sees it on an Issue-Watch-declared P0.
+            _send_dm_ring_guide_card(oid, tok, op_uid)
             log.info(
                 "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
                 context,
@@ -1485,6 +1488,35 @@ def _dm_instruction_lark_response_ok(st: int, resp_body: str) -> bool:
     return _parse_lark_api_code(j.get("code")) == 0
 
 
+def _send_dm_ring_guide_card(open_id: str, tenant_token: str, operator_lark_user_id: str = "") -> None:
+    """Post the VC ring-command cheat-sheet to the duty's DM (best-effort; user_id path preferred like
+    the green card). No-op unless ``P0_DM_RING_GUIDE_ENABLED`` is on AND ring itself is enabled."""
+    oid = (open_id or "").strip()
+    tail = oid[-8:] if len(oid) > 8 else oid
+    try:
+        enabled = _config.get_p0_dm_ring_guide_enabled()
+    except Exception as e:  # noqa: BLE001
+        log.warning("DM ring guide: gate check failed open_id_tail=%s: %s", tail, e)
+        return
+    log.info("DM ring guide: entry open_id_tail=%s enabled=%s", tail, enabled)
+    if not oid or not enabled:
+        return
+    uid = (operator_lark_user_id or "").strip()
+    try:
+        card = _cards.build_ring_commands_guide_card()
+        if uid:
+            st, body, mid = _lark.post_card_to_user_cross_app(oid, uid, tenant_token, card, use_user_id=True)
+            log.info("DM ring guide: user_id post open_id_tail=%s http=%s mid_tail=%s", tail, st, (mid or "")[-8:])
+            if _dm_instruction_lark_response_ok(st, body):
+                return
+            log.warning("DM ring guide: user_id path not ok body=%s — trying open_id", (body or "")[:300])
+        st2, body2, mid2 = _lark.post_card_to_open_id(oid, tenant_token, card)
+        log.info("DM ring guide: open_id post open_id_tail=%s http=%s mid_tail=%s ok=%s",
+                 tail, st2, (mid2 or "")[-8:], _dm_instruction_lark_response_ok(st2, body2))
+    except Exception as e:  # noqa: BLE001 — guide is best-effort, never block the overview DM
+        log.warning("DM ring guide: post failed open_id_tail=%s: %s", tail, e)
+
+
 def _send_dm_instruction_card_logged(
     open_id: str,
     tenant_token: str,
@@ -1507,6 +1539,9 @@ def _send_dm_instruction_card_logged(
     if not oid:
         return
     label = (context or "DM instruction").strip()
+    # Post the VC ring-command cheat-sheet FIRST (chronologically above the green card) so the duty sees
+    # how to call people into the meeting before the overview prompt. Gated + only when ring is enabled.
+    _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
     card = _cards.build_dm_instruction_card(
         priority,
         source_chat_label=source_chat_label,
@@ -2182,27 +2217,8 @@ def start_p0(
             return True
         return False
 
-    # Run the Bitable adjustment notice FIRST, before scheduling the Grafana screenshot,
-    # so a slow/hung Grafana path can never delay the Bitable ops/deploy cards.
-    if priority == "P0" and not _cancelled_midflight():
-        try:
-            from features.overview import bitable_adjustments as _bitable_adj
-
-            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
-            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
-                token,
-                source_chat_id=chat_id,
-                priority=priority,
-            )
-        except Exception as e:
-            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
-    if not _cancelled_midflight():
-        try:
-            from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
-
-            schedule_p0_graph_screenshot(token, priority, chat_label)
-        except Exception as e:
-            log.warning("start_p0: graph screenshot hook failed: %s", e)
+    # Send the duty their DM FIRST — the ring-command guide + green Build-overview card — so the
+    # actionable prompts arrive immediately, ahead of the slower Bitable + Grafana side-effects below.
     # Auto overview preview only when P0 is declared from Issue Watch DM (explicit alert_key).
     # Typed p0 / thread confirm always get the green Build overview card.
     issue_watch_key = (issue_watch_alert_key or "").strip()
@@ -2233,6 +2249,27 @@ def start_p0(
             enqueue_dm_issue_watch_overview_if_needed(oid, token, dm_item, issue_watch_key)
         else:
             enqueue_dm_instruction_if_needed(oid, token, dm_item)
+    # THEN the Bitable adjustment notice, before the Grafana screenshot, so a slow/hung Grafana path
+    # can never delay the Bitable ops/deploy cards.
+    if priority == "P0" and not _cancelled_midflight():
+        try:
+            from features.overview import bitable_adjustments as _bitable_adj
+
+            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
+            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
+                token,
+                source_chat_id=chat_id,
+                priority=priority,
+            )
+        except Exception as e:
+            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
+    if not _cancelled_midflight():
+        try:
+            from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
+
+            schedule_p0_graph_screenshot(token, priority, chat_label)
+        except Exception as e:
+            log.warning("start_p0: graph screenshot hook failed: %s", e)
     try:
         schedule_vc_auto_cancel_if_no_external_joins(chat_id, session_key=session_key)
     except Exception as e:

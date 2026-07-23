@@ -2933,6 +2933,13 @@ def get_p0_vc_ring_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_dm_ring_guide_enabled() -> bool:
+    """``P0_DM_RING_GUIDE_ENABLED`` — post the VC ring-command cheat-sheet in the duty's DM just BEFORE
+    the green Build-overview card. Default on, but only ever shown when ring itself is enabled (so prod,
+    with ring off, never advertises commands that would do nothing)."""
+    return get_p0_vc_ring_enabled() and _env_flag_on("P0_DM_RING_GUIDE_ENABLED", "1")
+
+
 def get_p0_vc_ring_fallback_open_ids() -> List[str]:
     """``P0_VC_RING_FALLBACK_OPEN_IDS`` — comma-separated ``ou_...`` when concern has no @mention."""
     reload_env_runtime()

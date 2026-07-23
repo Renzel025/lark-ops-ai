@@ -1120,6 +1120,50 @@ def build_help_commands_card() -> Dict[str, Any]:
     }
 
 
+def _ring_commands_guide_md() -> str:
+    """VC ring-command cheat-sheet (DM guide, shown before the overview card). Plain text — no bold
+    markers or emojis, matching the ring status cards' style."""
+    return (
+        "Type these in the incident group (with the P0 meeting running) to call people into the meeting.\n\n"
+        "Duty / on-call (today's on-shift)\n"
+        "• /dba — DBA duty\n"
+        "• /sosm — Liveslot SRE duty\n"
+        "• /fe — Frontend duty\n"
+        "• /fpms — FPMS duty\n"
+        "• /pms — PMS support (first level)\n"
+        "• /scpms /sfpms /sfe /spms — SRE duty (CPMS / FPMS / FE / PMS)\n\n"
+        "Direct\n"
+        "• /c @Name — call the people you tag\n"
+        "• /m — major-P0 check persons\n"
+        "• /e — escalation contacts\n\n"
+        "Game SRE escalation (calls the 1st contact, then escalate)\n"
+        "• /srebac Baccarat · /srer Roulette · /sredt Dragon Tiger · /sresic Sicbo · /srebl Blackjack\n"
+        "• /srepai Paigow · /srecg Colorgame · /srepp Pulaputi · /sredb Dropball · /sreib In Between\n"
+        "• In the reply thread: /n next contact · /r @checkperson retry a specific one\n"
+        "  (when they join the meeting it auto-confirms — no reply needed)"
+    )
+
+
+def build_ring_commands_guide_card() -> Dict[str, Any]:
+    """DM cheat-sheet of the VC ring commands, posted just before the green Build-overview card."""
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "turquoise",
+            "title": {"tag": "plain_text", "content": "P0 Ring Commands — call people into the meeting"},
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": _ring_commands_guide_md()},
+                },
+            ]
+        },
+    }
+
+
 def dm_escalation_reminder_plain() -> str:
     """P0 SOP escalation reminder (plain text for DM lines)."""
     return (

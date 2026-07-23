@@ -1135,6 +1135,7 @@ def process_message(
                 token,
                 tenant_token=tenant_token or token,
                 operator_open_id=user_id,
+                tagged_open_ids=[x for x in (kwargs.get("mention_open_ids") or []) if x],
             ):
                 return
         if _ring_cmd:

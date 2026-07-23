@@ -154,6 +154,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | Variable | ON | OFF | Default |
 |----------|----|-----|---------|
 | `P0_VC_RING_ENABLED` | on | off | **off** |
+| `P0_DM_RING_GUIDE_ENABLED` | on | off | **on** (only shows when `P0_VC_RING_ENABLED=on`) |
 | `VC_RECORDING_FANOUT_SET_PERMISSION` | on | off | **on** |
 | `VC_RECORDING_FANOUT_PLAIN_META` | on | off | off (dev) / **on** (prod) |
 | `VC_RECORDING_FANOUT_TENANT_WIDE_VIEW` | on | off | off |
