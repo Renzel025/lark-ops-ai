@@ -315,9 +315,9 @@ def handle_ring_commands_batch(
             lines.append(f"{disp} — no one on duty / not configured")
             continue
         if c == "m":
-            _register_major_check_persons_for_join_prompt(session_source, targets)
+            _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
         else:
-            _register_join_watch_open_ids(session_source, targets)
+            _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
         status = invite_open_ids_into_active_meeting(
             session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
         )
@@ -400,11 +400,11 @@ def handle_ring_command(
     if c == "m":
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
-        _register_major_check_persons_for_join_prompt(session_source, targets)
+        _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
     elif _duty.is_roster_command(c) or _duty.is_sre_command(c) or c in ("c", "dba", "sosm"):
         # Watch today's fe/fpms/pms/SRE/DBA/liveslot duty (or the /c tagged people) so their VC-join
         # posts a "joined" reply in the meeting thread.
-        _register_join_watch_open_ids(session_source, targets)
+        _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
 
     status = invite_open_ids_into_active_meeting(
         session_source,
@@ -532,8 +532,19 @@ def _major_check_person_ring_open_ids(
     return out
 
 
+def _set_join_prompt_reply_mid(sess: Dict[str, Any], reply_mid: str) -> bool:
+    """Record the message the VC-join "joined / already in the meeting" prompt should reply to (the
+    command message when a ring command drove it) so that prompt lands in the SAME thread as the
+    command, not the meeting-link thread. Returns True if it changed."""
+    mid = (reply_mid or "").strip()
+    if not mid or sess.get("join_prompt_reply_mid") == mid:
+        return False
+    sess["join_prompt_reply_mid"] = mid
+    return True
+
+
 def _register_major_check_persons_for_join_prompt(
-    session_source: str, ring_open_ids: List[str]
+    session_source: str, ring_open_ids: List[str], *, reply_mid: str = ""
 ) -> None:
     """
     Populate ``major_check_person_open_ids`` / ``_user_ids`` on the session so the VC-join "joined"
@@ -551,34 +562,41 @@ def _register_major_check_persons_for_join_prompt(
     existing_uids = set(sess.get("major_check_person_user_ids") or [])
     merged_oids = existing_oids | oids
     merged_uids = existing_uids | uids
-    if merged_oids == existing_oids and merged_uids == existing_uids:
-        return  # nothing new to register
-    sess["major_check_person_open_ids"] = sorted(merged_oids)
-    sess["major_check_person_user_ids"] = sorted(merged_uids)
+    changed = _set_join_prompt_reply_mid(sess, reply_mid)
+    if merged_oids != existing_oids or merged_uids != existing_uids:
+        sess["major_check_person_open_ids"] = sorted(merged_oids)
+        sess["major_check_person_user_ids"] = sorted(merged_uids)
+        changed = True
     if "major_check_person_join_prompted" not in sess:
         sess["major_check_person_join_prompted"] = []
+        changed = True
+    if not changed:
+        return
     _session.P0_SESSIONS[session_source] = sess
     if _session._session_disk.enabled():
         _session._session_disk.save_session(session_source, sess)
 
 
-def _register_join_watch_open_ids(session_source: str, open_ids: List[str]) -> None:
+def _register_join_watch_open_ids(session_source: str, open_ids: List[str], *, reply_mid: str = "") -> None:
     """Add ``open_ids`` to the session join-watch set so ``maybe_prompt_major_check_person_joined``
     posts a "joined" thread reply when any of them joins the VC. Used by the fe/fpms duty ring
-    (open_id only — resolved from the roster directory). Preserves the ``join_prompted`` dedupe."""
+    (open_id only — resolved from the roster directory). Preserves the ``join_prompted`` dedupe.
+    ``reply_mid`` (the command message) routes that join prompt to the command thread."""
     sess = _session.P0_SESSIONS.get(session_source)
     if not sess:
         return
     add = {x for x in (open_ids or []) if x}
-    if not add:
-        return
     existing = set(sess.get("major_check_person_open_ids") or [])
     merged = existing | add
-    if merged == existing:
-        return
-    sess["major_check_person_open_ids"] = sorted(merged)
+    changed = _set_join_prompt_reply_mid(sess, reply_mid)
+    if merged != existing:
+        sess["major_check_person_open_ids"] = sorted(merged)
+        changed = True
     if "major_check_person_join_prompted" not in sess:
         sess["major_check_person_join_prompted"] = []
+        changed = True
+    if not changed:
+        return
     _session.P0_SESSIONS[session_source] = sess
     if _session._session_disk.enabled():
         _session._session_disk.save_session(session_source, sess)

@@ -148,7 +148,8 @@ def maybe_prompt_major_check_person_joined(
     if dedupe_key in prompted:
         return
     src_mid = str(
-        sess.get("meeting_invite_message_id")
+        sess.get("join_prompt_reply_mid")
+        or sess.get("meeting_invite_message_id")
         or sess.get("issue_watch_concern_message_id")
         or ""
     ).strip()
