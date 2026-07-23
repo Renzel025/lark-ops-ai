@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
-from p0_logic import cards as _cards
 from features.session import session as _session
 from . import vc_user_oauth as _oauth
 
@@ -230,17 +229,32 @@ def handle_ring_command(
     operator_open_id: str = "",
     tenant_token: str = "",
     direct_open_ids: Optional[List[str]] = None,
+    reply_to_message_id: str = "",
 ) -> None:
     """Handle a ring command (m / e / scpms / sfpms / sfe / fe / fpms, or ``c`` for a direct tag-ring).
 
     Pages the resolved people into the already-active meeting for ``session_source`` and
     posts a status reply to ``notify_chat``. Anyone in the group may run these. For ``c`` the
     targets come from ``direct_open_ids`` (the message @mentions) — no sheet/directory needed.
+
+    ``reply_to_message_id`` overrides the reply target (default = the meeting-link message): a mixed
+    command like ``/srebac sfpms cpms`` passes the command's own message id so every duty-ring status
+    lands in the SAME thread as the /srebac escalation card, not the separate meeting-link thread.
     """
     from features.recording import duty_roster as _duty
 
     c = (cmd or "").strip().lower()
     tok = (tenant_token or token or "").strip()
+    _reply_mid = (reply_to_message_id or "").strip()
+
+    def _out_text(text: str) -> None:
+        """Post a plain-text status: threaded under the command message when mixed-invoked, else the group."""
+        if not token:
+            return
+        if _reply_mid:
+            _lark.post_text_reply_to_message(_reply_mid, token, text, reply_in_thread=True)
+        else:
+            _lark.post_text_to_chat(notify_chat, token, text)
 
     # Master gate: with VC ring disabled (prod default), silently ignore — no sheet reads, no reply.
     # This is the single choke point for every ring command (single and multi), so prod stays a no-op.
@@ -304,21 +318,11 @@ def handle_ring_command(
         )
     else:
         # Recognized by RING_CMD_RE (e.g. cpms / pms) but no roster parser/config wired yet.
-        if token:
-            _lark.post_text_to_chat(
-                notify_chat,
-                token,
-                f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.",
-            )
+        _out_text(f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.")
         return
 
     if not targets:
-        if token:
-            _lark.post_text_to_chat(
-                notify_chat,
-                token,
-                f"No {label} configured yet ({unset_hint}). Ask an admin to set it.",
-            )
+        _out_text(f"No {label} configured yet ({unset_hint}). Ask an admin to set it.")
         return
 
     if c == "m":
@@ -367,7 +371,9 @@ def handle_ring_command(
             msg = f"Calling {label} {when}into the meeting now… {ats}"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
-    mid = str(sess.get("meeting_invite_message_id") or "").strip()
+    # Reply target: the caller-supplied message (mixed command → the /srebac thread) wins; otherwise the
+    # meeting-link message so standalone ring status still groups under the meeting notice.
+    mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
     # Dedupe the major-check-person "calling" announcement: auto-ring-on-join (_try_ring_session)
     # and this `@bot m` command both announce the same thing. Post it only once per meeting.
     if c == "m" and is_ring_announcement:
@@ -377,17 +383,13 @@ def handle_ring_command(
         _session.P0_SESSIONS[session_source] = sess
         if _session._session_disk.enabled():
             _session._session_disk.save_session(session_source, sess)
-    # Render the status/prompt as a clean interactive card (header + lark_md body) instead of
-    # plain text, so bold/mentions render and there are no literal markdown asterisks.
-    if status in ("disabled", "no_session", "no_targets"):
-        card_title, card_template = "Inviting check person", "orange"
-    else:
-        card_title, card_template = "Inviting check person", "blue"
-    card = _cards.build_ring_status_card(card_title, msg, header_template=card_template)
+    # Plain-text status (no "Inviting check person" card header) — threaded under the reply target:
+    # the /srebac command message for a mixed command, else the meeting-link message. The <at id=…>
+    # mentions still render in a text message.
     if mid:
-        _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
+        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
     else:
-        _lark.post_card_to_chat(notify_chat, token, card)
+        _lark.post_text_to_chat(notify_chat, token, msg)
 
 
 def _filter_ring_targets(

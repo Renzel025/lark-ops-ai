@@ -1202,6 +1202,7 @@ def process_message(
                         operator_open_id=user_id,
                         tenant_token=tenant_token or token,
                         direct_open_ids=_direct,
+                        reply_to_message_id=message_id,
                     )
                 else:
                     handle_ring_command(
@@ -1211,6 +1212,7 @@ def process_message(
                         token,
                         operator_open_id=user_id,
                         tenant_token=tenant_token or token,
+                        reply_to_message_id=message_id,
                     )
             return
 
