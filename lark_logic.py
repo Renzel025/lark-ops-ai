@@ -4,7 +4,7 @@ import time
 import secrets
 import logging
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from wiki_ai_logic import handle_wiki_ai
 from p0_logic.config import (
@@ -1023,27 +1023,46 @@ def _get_active_session_chat_id() -> str:
     return list(P0_SESSIONS.keys())[-1]
 
 
-def _parse_ring_commands(ring_raw: str) -> List[str]:
-    """Ordered, deduped SLASH-prefixed ring commands from the text after the leading @bot mention.
+def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
+    """Ordered, deduped commands from ONE message, allowing a MIX in a single line — e.g.
+    ``/srebac sfpms cpms`` or ``/scpms /fpms /c @Juan``. Returns ``(game_cmds, ring_cmds)``: game_cmds
+    are SRE-game escalation commands (srebac …); ring_cmds are duty/direct ring commands (scpms, fpms,
+    dba, c, …), fired into the active meeting.
 
-    Supports multiple commands in one message: ``/scpms /fpms /fe`` -> ``["scpms","fpms","fe"]`` and
-    ``/fpms /c @Juan @Maria`` -> ``["fpms","c"]`` (the @mentions are read separately). Only tokens that
-    start with ``/`` and are valid ring commands (``RING_CMD_RE`` or ``c``) are kept, so inline
-    @mention placeholders and prose are ignored. Bare (no-slash) commands are handled by the caller's
-    single-command fallback so stray letters in chat can't page.
+    Only ONE leading slash is needed — bare (slashless) command tokens are accepted, BUT only when the
+    whole message is a PURE command list (every token is a known command). If ANY token is prose
+    (e.g. "@bot pms is down"), only slash-prefixed tokens count, so casual chat can never page.
+    (@mentions are already stripped from ``ring_raw``; tagged targets come from mention_open_ids.)
     """
-    out: List[str] = []
-    seen: set = set()
-    for tok in (ring_raw or "").split():
-        if not tok.startswith("/"):
+    from features.recording.sre_game import is_sre_game_command
+
+    toks = [t for t in (ring_raw or "").split() if t]
+
+    def _cmd(tok: str) -> str:
+        return tok.lstrip("/").strip().lower()
+
+    def _known(c: str) -> bool:
+        return bool(is_sre_game_command(c) or c == "c" or RING_CMD_RE.match(c))
+
+    has_prose = any(not _known(_cmd(t)) for t in toks)
+    game: List[str] = []
+    ring: List[str] = []
+    gseen: set = set()
+    rseen: set = set()
+    for tok in toks:
+        if has_prose and not tok.startswith("/"):
+            continue  # with prose present, require an explicit slash per command
+        c = _cmd(tok)
+        if not c:
             continue
-        c = tok.lstrip("/").strip().lower()
-        if not c or c in seen:
-            continue
-        if c == "c" or RING_CMD_RE.match(c):
-            seen.add(c)
-            out.append(c)
-    return out
+        if is_sre_game_command(c):
+            if c not in gseen:
+                gseen.add(c)
+                game.append(c)
+        elif (c == "c" or RING_CMD_RE.match(c)) and c not in rseen:
+            rseen.add(c)
+            ring.append(c)
+    return game, ring
 
 
 def process_message(
@@ -1138,14 +1157,30 @@ def process_message(
                 tagged_open_ids=[x for x in (kwargs.get("mention_open_ids") or []) if x],
             ):
                 return
-        if _ring_cmd:
-            from features.recording.sre_game import is_sre_game_command
+        # Mixed commands in ONE message: "/srebac sfpms cpms" or "/scpms /fpms /c @Juan @Maria" — fire
+        # EACH into the active meeting. SRE-game commands (srebac …) start an escalation; duty/direct
+        # commands (scpms, fpms, dba, /c …) page their people. Only ONE leading slash is needed (bare
+        # tokens are honored when the whole message is a pure command list); /c consumes the message
+        # @mentions and needs @bot. A single command (/srebac, /fpms, @bot m) also flows through here.
+        _game_cmds, _ring_cmds = _parse_mixed_commands(_ring_raw)
+        if (_game_cmds or _ring_cmds) and (_ring_is_slash or _mentions_our_bot(mention_names)):
+            _bot_mentioned = _mentions_our_bot(mention_names)
+            _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
+            log.info(
+                "mixed cmds detected game=%s ring=%s slash=%s bot_mentioned=%s tagged=%s chat_tail=%s",
+                _game_cmds,
+                _ring_cmds,
+                _ring_is_slash,
+                _bot_mentioned,
+                len(_direct),
+                chat_id[-8:] if chat_id else "",
+            )
+            from features.recording.sre_game import start_sre_game_escalation
+            from features.recording.vc_ring import handle_ring_command
 
-            if is_sre_game_command(_ring_cmd) and (_ring_is_slash or _mentions_our_bot(mention_names)):
-                from features.recording.sre_game import start_sre_game_escalation
-
+            for _gc in _game_cmds:
                 start_sre_game_escalation(
-                    _ring_cmd,
+                    _gc,
                     session_source,
                     notify_chat,
                     token,
@@ -1154,27 +1189,6 @@ def process_message(
                     operator_open_id=user_id,
                     tenant_token=tenant_token or token,
                 )
-                return
-
-        # Multi-command: "@bot /scpms /fpms /fe" or "@bot /fpms /c @Juan @Maria" — page EACH into the
-        # active meeting. Slash-prefixed only; /c consumes the message @mentions and needs @bot. A
-        # single slash command (e.g. /fpms) also flows through here. Bare "@bot m" (no slash) falls to
-        # the single-command blocks below.
-        _ring_cmds = _parse_ring_commands(_ring_raw)
-        if _ring_cmds and (_ring_is_slash or _mentions_our_bot(mention_names)):
-            _bot_mentioned = _mentions_our_bot(mention_names)
-            _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
-            log.info(
-                "ring cmds detected cmds=%s slash=%s bot_mentioned=%s tagged=%s chat_tail=%s",
-                _ring_cmds,
-                _ring_is_slash,
-                _bot_mentioned,
-                len(_direct),
-                chat_id[-8:] if chat_id else "",
-            )
-            from features.recording.vc_ring import handle_ring_command
-
-            _did = False
             for _c in _ring_cmds:
                 if _c == "c":
                     if not _bot_mentioned:
@@ -1198,9 +1212,7 @@ def process_message(
                         operator_open_id=user_id,
                         tenant_token=tenant_token or token,
                     )
-                _did = True
-            if _did:
-                return
+            return
 
         # @bot /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the
         # message @mentions. REQUIRES @mentioning the bot (so the user @mentions are unambiguously the
