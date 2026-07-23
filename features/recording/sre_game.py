@@ -224,6 +224,15 @@ def _reply_text(mid: str, token: str, text: str) -> None:
     _lark.post_text_reply_to_message(mid, token, text, reply_in_thread=True)
 
 
+def _watch(state: Dict[str, Any], open_id: str, name: str) -> None:
+    """Track ``open_id`` (→ display name) as a called check person, so their VC join is confirmed."""
+    oid = (open_id or "").strip()
+    if not oid:
+        return
+    w = state.setdefault("watched", {})
+    w[oid] = (name or "").strip() or w.get(oid) or "The check person"
+
+
 def _register(state: Dict[str, Any], keys: List[str]) -> None:
     """Register ``state`` under every non-empty key (deduped) so a reply matching ANY of the thread's
     identifiers (command msg id / bot-reply msg id / root id / thread id) resolves to it."""
@@ -276,7 +285,8 @@ def _command_hints_md(pairs: List[Tuple[str, str]], idx: int) -> List[str]:
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
-                    status: str, *, retry: bool = False, verbose: bool = False) -> Dict[str, str]:
+                    status: str, *, retry: bool = False, verbose: bool = False,
+                    meeting_link: str = "") -> Dict[str, str]:
     name, oid = pairs[idx]
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
@@ -290,13 +300,19 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
-    # The full roster + command guide is shown ONCE, on the first call (verbose). Follow-up prompts
-    # (/n next, /r retry) stay short — just the 'Calling …' line — so the thread doesn't get spammy.
-    if verbose and oid and status not in ("no_session",):
-        body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
-    else:
-        body = ""
-    return _reply(mid, token, head + body)
+    # First call (verbose): a full card WITH the 'Inviting check person' header + roster + command guide
+    # + the meeting link (so the check person can tap to join). Follow-up prompts (/n next, /r retry):
+    # plain text, NO header, NO guide — short and un-spammy.
+    if verbose:
+        if oid and status not in ("no_session",):
+            body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
+        else:
+            body = ""
+        if (meeting_link or "").strip():
+            body += f"\n\nMeeting link: {meeting_link.strip()}"
+        return _reply(mid, token, head + body)
+    _reply_text(mid, token, head)
+    return {}
 
 
 def _cancel_timer(st: Dict[str, Any]) -> None:
@@ -383,9 +399,14 @@ def start_sre_game_escalation(
         "cmd": c, "label": label, "pairs": pairs, "idx": 0,
         "session_source": session_source, "notify_chat": notify_chat, "ts": time.time(),
         "awaiting_oid": pairs[0][1], "reached": False, "timer": None, "primary": primary, "_keys": [],
+        # Every open_id we've called (1st contact + any /n, /r, /c) mapped to a display name, so a VC
+        # join by ANY of them — not just the current /n contact — posts "<name> joined the meeting".
+        "watched": {},
     }
+    _watch(state, pairs[0][1], pairs[0][0])
+    link = _vc_ring.meeting_link_for(session_source)
     status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
-    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, verbose=True)
+    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, verbose=True, meeting_link=link)
     # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
     # thread root is NOT always the command message, so a /n reply may carry any of these as its root.
     _register(state, [command_message_id, thread_root,
@@ -443,17 +464,23 @@ def maybe_handle_sre_game_reply(
         # invited person actually rings again. Does NOT change the /n escalation pointer.
         tagged = [t for t in (tagged_open_ids or []) if t]
         if not tagged:
-            _reply(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
+            _reply_text(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
             return True
         status = _vc_ring.force_reinvite_open_ids(
             st["session_source"], tagged, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("sre_game: /c cmd=%s tagged=%s status=%s", st["cmd"], len(tagged), status)
         if status in ("no_session",):
-            _reply(primary, token, "No active meeting — start a P0 meeting first.")
+            _reply_text(primary, token, "No active meeting — start a P0 meeting first.")
         else:
+            # Watch each tagged person for a VC join (name from the roster, else a directory lookup),
+            # so "<name> joined the meeting" fires even for a /c-invited contact off the /n sequence.
+            pair_names = {oid: nm for nm, oid in st["pairs"] if oid}
+            for t in tagged:
+                nm = pair_names.get(t) or _lark.lookup_user_name_by_open_id(tok, t)
+                _watch(st, t, nm)
             who = " ".join(f"<at id={t}></at>" for t in tagged)
-            _reply(primary, token, f"Calling {who} into the meeting")
+            _reply_text(primary, token, f"Calling {who} into the meeting")
         return True
 
     is_retry, retry_name = _match_retry(text)
@@ -470,11 +497,11 @@ def maybe_handle_sre_game_reply(
         if found < 0 and retry_name:
             found = _find_contact_idx(st["pairs"], retry_name)
             if found < 0:
-                _reply(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
+                _reply_text(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
                 return True
         if found < 0:
             cur = st["pairs"][st["idx"]][0]
-            _reply(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
+            _reply_text(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
             return True
         idx = found
         with _ESC_LOCK:
@@ -482,6 +509,7 @@ def maybe_handle_sre_game_reply(
             st["idx"] = idx
             st["awaiting_oid"] = st["pairs"][idx][1]
             st["ts"] = time.time()
+            _watch(st, st["pairs"][idx][1], st["pairs"][idx][0])
         status = _ring_contact(st["session_source"], st["pairs"][idx], tok, operator_open_id)
         log.info("sre_game: retry cmd=%s %s (%s) status=%s", st["cmd"], st["pairs"][idx][0], _ordinal(idx + 1), status)
         _calling_prompt(primary, token, st["label"], st["pairs"], idx, status, retry=True)
@@ -493,13 +521,14 @@ def maybe_handle_sre_game_reply(
         nxt = st["idx"] + 1
         if nxt >= len(st["pairs"]):
             _pop_state(st)
-            _reply(primary, token, f"No more {st['label']} contacts — end of the escalation list.")
+            _reply_text(primary, token, f"No more {st['label']} contacts — end of the escalation list.")
             return True
         with _ESC_LOCK:
             _cancel_timer(st)
             st["idx"] = nxt
             st["awaiting_oid"] = st["pairs"][nxt][1]
             st["ts"] = time.time()
+            _watch(st, st["pairs"][nxt][1], st["pairs"][nxt][0])
         status = _ring_contact(st["session_source"], st["pairs"][nxt], tok, operator_open_id)
         log.info("sre_game: escalated cmd=%s to %s (%s) status=%s", st["cmd"], st["pairs"][nxt][0], _ordinal(nxt + 1), status)
         _calling_prompt(primary, token, st["label"], st["pairs"], nxt, status)
@@ -511,22 +540,22 @@ def maybe_handle_sre_game_reply(
 
 
 def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = "") -> None:
-    """On a VC join, if the joiner is the contact an active escalation is waiting for, mark it reached
-    (auto-stop) and cancel the timeout. Called from the VC join hook for every joiner."""
+    """On a VC join, if the joiner is ANY check person an active escalation has called (1st contact or
+    a later /n, /r, /c invite — tracked in ``watched``), post "<name> joined the meeting" and auto-stop
+    that escalation. Called from the VC join hook for every joiner."""
     oid = (joiner_open_id or "").strip()
     if not oid:
         return
     hit_st: Dict[str, Any] = {}
     with _ESC_LOCK:
-        # Pick the MOST RECENT escalation awaiting this joiner (many may await the same person across
-        # repeated commands; the current thread has the newest ts) — not just the first one found.
+        # Pick the MOST RECENT escalation that called this joiner (the current thread has the newest ts).
         best_ts = -1.0
         seen_ids: set = set()
         for st in _ESC_BY_THREAD.values():
             if id(st) in seen_ids:
                 continue
             seen_ids.add(id(st))
-            if st.get("reached") or str(st.get("awaiting_oid") or "") != oid:
+            if st.get("reached") or oid not in (st.get("watched") or {}):
                 continue
             ts = float(st.get("ts") or 0)
             if ts > best_ts:
@@ -538,7 +567,7 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
     if not hit_st:
         return
     token = (tenant_token or "").strip() or _lark.get_tenant_token_primary()
-    name = hit_st["pairs"][hit_st["idx"]][0]
+    name = (hit_st.get("watched") or {}).get(oid) or "The check person"
     primary = str(hit_st.get("primary") or "").strip()
     log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
     _reply_text(primary, token, f"{name} joined the meeting")
