@@ -276,7 +276,7 @@ def _command_hints_md(pairs: List[Tuple[str, str]], idx: int) -> List[str]:
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
-                    status: str, *, retry: bool = False) -> Dict[str, str]:
+                    status: str, *, retry: bool = False, verbose: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
@@ -290,9 +290,9 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
-    if oid and status not in ("no_session",):
-        # Lark sends no "declined" event, so the escalation auto-confirms when the contact joins the VC;
-        # if they don't, the operator drives it with these commands (also auto-prompted after the timeout).
+    # The full roster + command guide is shown ONCE, on the first call (verbose). Follow-up prompts
+    # (/n next, /r retry) stay short — just the 'Calling …' line — so the thread doesn't get spammy.
+    if verbose and oid and status not in ("no_session",):
         body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
     else:
         body = ""
@@ -333,12 +333,13 @@ def _on_timeout(thread_key: str, idx: int) -> None:
         return
     name = pairs[idx][0]
     to = int(_timeout_sec())
+    # Short, plain-text one-liner — no card header, no roster/command guide (the operator already saw
+    # the guide on the first /srebac call; repeating it every timeout is too noisy).
     head = (
         f"{name} ({_ordinal(idx + 1)} check person {label}) did not proceed to join the meeting "
         f"(no answer within {to}s)."
     )
-    body = _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
-    _reply(thread_key, token, head + "\n\n" + body)
+    _reply_text(thread_key, token, head)
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
 
@@ -384,7 +385,7 @@ def start_sre_game_escalation(
         "awaiting_oid": pairs[0][1], "reached": False, "timer": None, "primary": primary, "_keys": [],
     }
     status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
-    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status)
+    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, verbose=True)
     # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
     # thread root is NOT always the command message, so a /n reply may carry any of these as its root.
     _register(state, [command_message_id, thread_root,
