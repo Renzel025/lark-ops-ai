@@ -1176,7 +1176,7 @@ def process_message(
                 chat_id[-8:] if chat_id else "",
             )
             from features.recording.sre_game import start_sre_game_escalation
-            from features.recording.vc_ring import handle_ring_command
+            from features.recording.vc_ring import handle_ring_commands_batch
 
             for _gc in _game_cmds:
                 start_sre_game_escalation(
@@ -1189,31 +1189,21 @@ def process_message(
                     operator_open_id=user_id,
                     tenant_token=tenant_token or token,
                 )
-            for _c in _ring_cmds:
-                if _c == "c":
-                    if not _bot_mentioned:
-                        # /c needs @bot so the @mentions are unambiguously the targets.
-                        continue
-                    handle_ring_command(
-                        "c",
-                        session_source,
-                        notify_chat,
-                        token,
-                        operator_open_id=user_id,
-                        tenant_token=tenant_token or token,
-                        direct_open_ids=_direct,
-                        reply_to_message_id=message_id,
-                    )
-                else:
-                    handle_ring_command(
-                        _c,
-                        session_source,
-                        notify_chat,
-                        token,
-                        operator_open_id=user_id,
-                        tenant_token=tenant_token or token,
-                        reply_to_message_id=message_id,
-                    )
+            # /c needs @bot so the @mentions are unambiguously the targets; drop it otherwise.
+            _batch_cmds = [x for x in _ring_cmds if x != "c" or _bot_mentioned]
+            if _batch_cmds:
+                # ONE consolidated "Calling selected duty persons …" reply for all duty/direct rings,
+                # threaded under the command message (same thread as any /srebac escalation card).
+                handle_ring_commands_batch(
+                    _batch_cmds,
+                    session_source,
+                    notify_chat,
+                    token,
+                    operator_open_id=user_id,
+                    tenant_token=tenant_token or token,
+                    direct_open_ids=_direct,
+                    reply_to_message_id=message_id,
+                )
             return
 
         # @bot /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the

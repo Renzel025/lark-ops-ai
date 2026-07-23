@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -220,6 +220,130 @@ def force_reinvite_open_ids(
     return "ringing" if ok else "failed"
 
 
+def _resolve_ring(
+    c: str,
+    tok: str,
+    *,
+    direct_open_ids: Optional[List[str]] = None,
+    operator_open_id: str = "",
+) -> Tuple[List[str], str, str, bool]:
+    """Resolve a ring command to ``(targets, label, unset_hint, wired)``. ``wired`` is False for a
+    RING_CMD_RE command with no parser/config yet (cpms/pms). Shared by the single and batch handlers."""
+    from features.recording import duty_roster as _duty
+
+    if c == "c":
+        return (_filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id),
+                "the tagged people", "tag at least one person, e.g. /c @Name", True)
+    if c == "m":
+        return (_major_check_person_ring_open_ids(tok),
+                "major-P0 check persons", "P0_MAJOR_CHECK_PERSON_IDS", True)
+    if c == "e":
+        return (_config.get_p0_vc_ring_escalation_open_ids(),
+                "escalation contacts", "P0_VC_RING_ESCALATION_OPEN_IDS", True)
+    if _duty.is_sre_command(c):
+        targets, _u = _duty.resolve_sre_duty_open_ids(c, tok)
+        team = _duty.COMMAND_TEAM[c]
+        if not targets:
+            oid = _duty.get_duty_open_id(team)
+            if oid:
+                targets = [oid]
+        return (targets, f"duty SRE {team}",
+                f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
+                f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback", True)
+    if c == "dba":
+        targets, _u = _duty.resolve_dba_duty_open_ids(tok)
+        return (targets, "DBA duty",
+                "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
+                "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet", True)
+    if c == "sosm":
+        targets, _u = _duty.resolve_liveslot_duty_open_ids(tok)
+        return (targets, "liveslot SRE duty",
+                "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
+                "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet", True)
+    if _duty.is_roster_command(c):
+        targets, _u = _duty.resolve_duty_open_ids(c, tok)
+        return (targets, f"{c.upper()} duty",
+                f"DUTY_ROSTER_{c.upper()}_SHEET_TOKEN/_SHEET_ID and the duty directory "
+                f"(DUTY_DIRECTORY_SHEET_TOKEN)", True)
+    return ([], f"/{c}", "", False)
+
+
+def _ring_display_label(c: str) -> str:
+    """Short label for the consolidated batch message (e.g. scpms -> 'SRE CPMS', fe -> 'FE')."""
+    from features.recording import duty_roster as _duty
+
+    if _duty.is_sre_command(c):
+        return f"SRE {_duty.COMMAND_TEAM[c]}"
+    return {
+        "c": "Tagged people", "m": "Major check persons", "e": "Escalation contacts",
+        "dba": "DBA", "sosm": "Liveslot SRE",
+    }.get(c, c.upper())
+
+
+def handle_ring_commands_batch(
+    cmds: List[str],
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    operator_open_id: str = "",
+    tenant_token: str = "",
+    direct_open_ids: Optional[List[str]] = None,
+    reply_to_message_id: str = "",
+) -> None:
+    """Ring MULTIPLE duty/direct commands and post ONE consolidated status ("Calling selected duty
+    persons …") — one line per command — instead of a separate reply per command. Used for mixed
+    commands like ``/srebac sfpms spms cpms fe`` so the duty rings collapse into a single prompt."""
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("ring batch ignored (P0_VC_RING_ENABLED off) cmds=%s", cmds)
+        return
+    tok = (tenant_token or token or "").strip()
+    lines: List[str] = []
+    any_ringing = False
+    for raw in cmds:
+        c = (raw or "").strip().lower()
+        if not c:
+            continue
+        targets, label, _hint, wired = _resolve_ring(
+            c, tok, direct_open_ids=direct_open_ids, operator_open_id=operator_open_id
+        )
+        disp = _ring_display_label(c)
+        if not wired:
+            lines.append(f"{disp} — not wired up yet")
+            continue
+        if not targets:
+            lines.append(f"{disp} — no one on duty / not configured")
+            continue
+        if c == "m":
+            _register_major_check_persons_for_join_prompt(session_source, targets)
+        else:
+            _register_join_watch_open_ids(session_source, targets)
+        status = invite_open_ids_into_active_meeting(
+            session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
+        )
+        log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
+        ats = " ".join(f"<at id={oid}></at>" for oid in targets)
+        if status == "no_session":
+            lines.append(f"{disp} — no active meeting")
+        elif status == "disabled":
+            lines.append(f"{disp} — ring disabled")
+        elif status == "queued_oauth":
+            lines.append(f"{disp} — {ats} (queued; waiting for host authorization)")
+        else:  # ringing
+            lines.append(f"{disp} — {ats}")
+            any_ringing = True
+    if not lines or not token:
+        return
+    header = "Calling selected duty persons into the meeting now…" if any_ringing else "Selected duty commands:"
+    msg = header + "\n\n" + "\n".join(lines)
+    sess = _session.P0_SESSIONS.get(session_source) or {}
+    mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
+    if mid:
+        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
+    else:
+        _lark.post_text_to_chat(notify_chat, token, msg)
+
+
 def handle_ring_command(
     cmd: str,
     session_source: str,
@@ -262,65 +386,13 @@ def handle_ring_command(
         log.info("ring cmd ignored (P0_VC_RING_ENABLED off) cmd=%s", c)
         return
 
-    if c == "c":
-        # Model A — direct tag-ring: invite the tagged people (filters out the bot + operator).
-        targets = _filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id)
-        label = "the tagged people"
-        unset_hint = "tag at least one person, e.g. /c @Name"
-    elif c == "m":
-        # Reuse the existing major-P0 check-person list (P0_MAJOR_CHECK_PERSON_IDS),
-        # resolved to open_ids (also handles user_id entries).
-        targets = _major_check_person_ring_open_ids(tok)
-        label = "major-P0 check persons"
-        unset_hint = "P0_MAJOR_CHECK_PERSON_IDS"
-    elif c == "e":
-        targets = _config.get_p0_vc_ring_escalation_open_ids()
-        label = "escalation contacts"
-        unset_hint = "P0_VC_RING_ESCALATION_OPEN_IDS"
-    elif _duty.is_sre_command(c):
-        # SRE duty: SRE handler tab (Name|Handler) -> names whose Handler covers this team ->
-        # directory -> open_id. When DUTY_SRE_SHIFT_SHEET_TOKEN is set, also intersect with today's
-        # on-shift duty shift. Falls back to the P0_VC_RING_DUTY_<TEAM>_OPEN_ID env stub if empty.
-        targets, _unresolved = _duty.resolve_sre_duty_open_ids(c, tok)
-        team = _duty.COMMAND_TEAM[c]
-        if not targets:
-            oid = _duty.get_duty_open_id(team)
-            if oid:
-                targets = [oid]
-        label = f"duty SRE {team}"
-        unset_hint = (
-            f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
-            f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback"
-        )
-    elif c == "dba":
-        # DBA: today's on-shift DBA people from the 'DBA' section of the OSE & SRE Duty Shift sheet.
-        targets, _unresolved = _duty.resolve_dba_duty_open_ids(tok)
-        label = "DBA duty"
-        unset_hint = (
-            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
-            "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
-        )
-    elif c == "sosm":
-        # Liveslot SRE: today's on-shift people from the 'Liveslot' section of the OSE & SRE Duty Shift sheet.
-        targets, _unresolved = _duty.resolve_liveslot_duty_open_ids(tok)
-        label = "liveslot SRE duty"
-        unset_hint = (
-            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
-            "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
-        )
-    elif _duty.is_roster_command(c):
-        # fe / fpms: read the team roster sheet live -> today's duty name(s) -> directory -> open_id.
-        targets, _unresolved = _duty.resolve_duty_open_ids(c, tok)
-        label = f"{c.upper()} duty"
-        unset_hint = (
-            f"DUTY_ROSTER_{c.upper()}_SHEET_TOKEN/_SHEET_ID and the duty directory "
-            f"(DUTY_DIRECTORY_SHEET_TOKEN)"
-        )
-    else:
+    targets, label, unset_hint, wired = _resolve_ring(
+        c, tok, direct_open_ids=direct_open_ids, operator_open_id=operator_open_id
+    )
+    if not wired:
         # Recognized by RING_CMD_RE (e.g. cpms / pms) but no roster parser/config wired yet.
         _out_text(f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.")
         return
-
     if not targets:
         _out_text(f"No {label} configured yet ({unset_hint}). Ask an admin to set it.")
         return
