@@ -290,13 +290,16 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
-    # The full roster + command guide is shown ONCE, on the first call (verbose). Follow-up prompts
-    # (/n next, /r retry) stay short — just the 'Calling …' line — so the thread doesn't get spammy.
-    if verbose and oid and status not in ("no_session",):
-        body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
-    else:
-        body = ""
-    return _reply(mid, token, head + body)
+    # First call (verbose): a full card WITH the 'Inviting check person' header + roster + command guide.
+    # Follow-up prompts (/n next, /r retry): plain text, NO header, NO guide — short and un-spammy.
+    if verbose:
+        if oid and status not in ("no_session",):
+            body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
+        else:
+            body = ""
+        return _reply(mid, token, head + body)
+    _reply_text(mid, token, head)
+    return {}
 
 
 def _cancel_timer(st: Dict[str, Any]) -> None:
@@ -443,17 +446,17 @@ def maybe_handle_sre_game_reply(
         # invited person actually rings again. Does NOT change the /n escalation pointer.
         tagged = [t for t in (tagged_open_ids or []) if t]
         if not tagged:
-            _reply(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
+            _reply_text(primary, token, "Tag the check person(s) to call, e.g. /c @Name")
             return True
         status = _vc_ring.force_reinvite_open_ids(
             st["session_source"], tagged, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("sre_game: /c cmd=%s tagged=%s status=%s", st["cmd"], len(tagged), status)
         if status in ("no_session",):
-            _reply(primary, token, "No active meeting — start a P0 meeting first.")
+            _reply_text(primary, token, "No active meeting — start a P0 meeting first.")
         else:
             who = " ".join(f"<at id={t}></at>" for t in tagged)
-            _reply(primary, token, f"Calling {who} into the meeting")
+            _reply_text(primary, token, f"Calling {who} into the meeting")
         return True
 
     is_retry, retry_name = _match_retry(text)
@@ -470,11 +473,11 @@ def maybe_handle_sre_game_reply(
         if found < 0 and retry_name:
             found = _find_contact_idx(st["pairs"], retry_name)
             if found < 0:
-                _reply(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
+                _reply_text(primary, token, f"'{retry_name}' is not in the {st['label']} contact list.")
                 return True
         if found < 0:
             cur = st["pairs"][st["idx"]][0]
-            _reply(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
+            _reply_text(primary, token, f"Tag the check person to retry, e.g. /r @{cur}")
             return True
         idx = found
         with _ESC_LOCK:
@@ -493,7 +496,7 @@ def maybe_handle_sre_game_reply(
         nxt = st["idx"] + 1
         if nxt >= len(st["pairs"]):
             _pop_state(st)
-            _reply(primary, token, f"No more {st['label']} contacts — end of the escalation list.")
+            _reply_text(primary, token, f"No more {st['label']} contacts — end of the escalation list.")
             return True
         with _ESC_LOCK:
             _cancel_timer(st)
