@@ -177,12 +177,6 @@ def invite_open_ids_into_active_meeting(
     return "queued_oauth"
 
 
-def meeting_link_for(session_source: str) -> str:
-    """The active VC meeting link (join URL) for this incident chat, or '' when there is no session."""
-    sess = _session.P0_SESSIONS.get((session_source or "").strip()) or {}
-    return str(sess.get("link") or "").strip()
-
-
 def force_reinvite_open_ids(
     chat_id: str,
     open_ids: List[str],

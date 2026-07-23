@@ -285,8 +285,7 @@ def _command_hints_md(pairs: List[Tuple[str, str]], idx: int) -> List[str]:
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
-                    status: str, *, retry: bool = False, verbose: bool = False,
-                    meeting_link: str = "") -> Dict[str, str]:
+                    status: str, *, retry: bool = False, verbose: bool = False) -> Dict[str, str]:
     name, oid = pairs[idx]
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
@@ -300,16 +299,13 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
         head = f"{lead} {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
-    # First call (verbose): a full card WITH the 'Inviting check person' header + roster + command guide
-    # + the meeting link (so the check person can tap to join). Follow-up prompts (/n next, /r retry):
-    # plain text, NO header, NO guide — short and un-spammy.
+    # First call (verbose): a full card WITH the 'Inviting check person' header + roster + command guide.
+    # Follow-up prompts (/n next, /r retry): plain text, NO header, NO guide — short and un-spammy.
     if verbose:
         if oid and status not in ("no_session",):
             body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md(pairs, idx))
         else:
             body = ""
-        if (meeting_link or "").strip():
-            body += f"\n\nMeeting link: {meeting_link.strip()}"
         return _reply(mid, token, head + body)
     _reply_text(mid, token, head)
     return {}
@@ -404,9 +400,8 @@ def start_sre_game_escalation(
         "watched": {},
     }
     _watch(state, pairs[0][1], pairs[0][0])
-    link = _vc_ring.meeting_link_for(session_source)
     status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
-    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, verbose=True, meeting_link=link)
+    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, verbose=True)
     # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
     # thread root is NOT always the command message, so a /n reply may carry any of these as its root.
     _register(state, [command_message_id, thread_root,
