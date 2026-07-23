@@ -428,8 +428,9 @@ def maybe_handle_sre_game_reply(
     operator_open_id: str = "",
     tagged_open_ids: Optional[List[str]] = None,
 ) -> bool:
-    """Interpret a /n (escalate) or /r (retry) reply in an active escalation thread. (There is no manual
-    "reached" reply — the escalation auto-stops when the contact joins the VC.) ``thread_keys`` = the
+    """Interpret a /c (call tagged), /n (escalate), or /r (retry) reply in an active escalation thread.
+    A VC join only CONFIRMS "<name> joined the meeting" — it does NOT stop the escalation, so the
+    operator can keep calling the remaining contacts. ``thread_keys`` = the
     reply's candidate identifiers (root_id, parent_id, thread_id); the state is matched against ANY of
     them. ``tagged_open_ids`` = open_ids of any Lark users @mentioned in the reply, so "/r @Person"
     retries the tagged contact directly (preferred over typing the name). Returns True only when it
@@ -541,12 +542,15 @@ def maybe_handle_sre_game_reply(
 
 def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = "") -> None:
     """On a VC join, if the joiner is ANY check person an active escalation has called (1st contact or
-    a later /n, /r, /c invite — tracked in ``watched``), post "<name> joined the meeting" and auto-stop
-    that escalation. Called from the VC join hook for every joiner."""
+    a later /n, /r, /c invite — tracked in ``watched``), post "<name> joined the meeting". The escalation
+    is NOT stopped — the operator can keep calling more contacts (/n /c); it only confirms that person
+    joined (and cancels the pending timeout when the current awaited contact is the one who joined).
+    Called from the VC join hook for every joiner."""
     oid = (joiner_open_id or "").strip()
     if not oid:
         return
     hit_st: Dict[str, Any] = {}
+    name = ""
     with _ESC_LOCK:
         # Pick the MOST RECENT escalation that called this joiner (the current thread has the newest ts).
         best_ts = -1.0
@@ -555,19 +559,21 @@ def maybe_mark_sre_game_contact_joined(joiner_open_id: str, tenant_token: str = 
             if id(st) in seen_ids:
                 continue
             seen_ids.add(id(st))
-            if st.get("reached") or oid not in (st.get("watched") or {}):
+            if oid not in (st.get("watched") or {}):
                 continue
             ts = float(st.get("ts") or 0)
             if ts > best_ts:
                 best_ts = ts
                 hit_st = st
         if hit_st:
-            hit_st["reached"] = True
-            _pop_state(hit_st)
+            # Confirm this person once (drop from watched so a re-join doesn't double-post), but keep the
+            # escalation alive so /n can still reach the remaining contacts.
+            name = (hit_st.get("watched") or {}).pop(oid, "") or "The check person"
+            if str(hit_st.get("awaiting_oid") or "") == oid:
+                _cancel_timer(hit_st)
     if not hit_st:
         return
     token = (tenant_token or "").strip() or _lark.get_tenant_token_primary()
-    name = (hit_st.get("watched") or {}).get(oid) or "The check person"
     primary = str(hit_st.get("primary") or "").strip()
-    log.info("sre_game: contact joined cmd=%s name=%s — escalation done", hit_st.get("cmd"), name)
+    log.info("sre_game: contact joined cmd=%s name=%s (escalation stays active)", hit_st.get("cmd"), name)
     _reply_text(primary, token, f"{name} joined the meeting")
