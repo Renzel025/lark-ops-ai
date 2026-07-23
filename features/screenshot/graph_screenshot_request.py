@@ -290,17 +290,12 @@ def try_handle_graph_screenshot_request(
         groq_key=groq_key,
     )
 
-    wants_screenshot = (
-        has_explicit_graph_screenshot_intent(raw)
-        or has_natural_graph_request_cue(raw)
-        and parse_time_range_key(_strip_leading_mentions(raw, mention_names)) is not None
-        or _mentions_our_bot(mention_names)
-    )
-
     if not range_key:
-        if has_explicit_graph_screenshot_intent(raw) or (
-            wants_screenshot and _mentions_our_bot(mention_names)
-        ):
+        # Ask for a time range ONLY when the message explicitly says "screenshot" (or grafana-snap /
+        # grafana-screenshot) but omitted the window. A bare @bot mention of unrelated text
+        # (e.g. "@bot ignore, not P0 as per …") — or even a natural "please give me the graph" without
+        # the word screenshot — must NOT trigger the range prompt.
+        if has_explicit_graph_screenshot_intent(raw):
             _post_on_demand_reply(
                 cid,
                 tok,
