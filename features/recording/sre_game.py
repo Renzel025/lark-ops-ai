@@ -457,19 +457,20 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
 
 
 def _contacts_list_md(header: str, pairs: List[Tuple[str, str]]) -> str:
-    """Numbered roster of ALL check persons for the game, under the ``header`` title line."""
-    lines = [header]
+    """Numbered roster of ALL check persons for the game, under the BOLD ``header`` title line."""
+    lines = [f"**{header}**"]
     for i, (nm, _oid) in enumerate(pairs):
         lines.append(f"{i + 1}. {nm}")
     return "\n".join(lines)
 
 
 def _command_hints_md() -> List[str]:
-    """The '/c @…' hint shown under the check-person roster (only /c now — no /n stepping)."""
+    """The '/c @…' command hint shown under the check-person roster (only /c now — no /n stepping)."""
     return [
         "",
-        "/c @checkperson — use this to call another check person from the list "
-        "(retry the current one or tag other specific people).",
+        "**Commands**",
+        "**/c @checkperson** — call another check person from the list (retry the current one, or tag "
+        "other specific people).",
     ]
 
 
@@ -488,7 +489,7 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     elif status == "no_session":
         head = "No active meeting — start a P0 meeting first, then run this command."
     else:
-        head = f"Calling {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
+        head = f"Calling {who} ({_ordinal(idx + 1)} check person **{label}**) into the meeting"
     if oid and status not in ("no_session",):
         body = "\n\n" + _contacts_list_md(roster_header, pairs) + "\n" + "\n".join(_command_hints_md())
     else:

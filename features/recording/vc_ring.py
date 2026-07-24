@@ -276,7 +276,7 @@ def _resolve_ring(
 
 # Reminder shown under the fe/fpms/pms contact list: the ring calls only the 1st contact (today's
 # duty / First Level); use /c to page anyone else shown in the list.
-_CONTACT_LIST_NOTE = "/c @checkperson — use this if you want to contact someone else in the shift"
+_CONTACT_LIST_NOTE = "**/c @checkperson** — use this if you want to contact someone else in the shift"
 
 
 def _post_ring_card(
@@ -369,10 +369,10 @@ def handle_ring_commands_batch(
         )
         disp = _ring_display_label(c)
         if not wired:
-            top_lines.append(f"{disp} — not wired up yet")
+            top_lines.append(f"**{disp}** — not wired up yet")
             continue
         if not targets:
-            top_lines.append(f"{disp} — no one on duty / not configured")
+            top_lines.append(f"**{disp}** — no one on duty / not configured")
             continue
         if c == "m":
             _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
@@ -383,12 +383,12 @@ def handle_ring_commands_batch(
         )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
-        head = f"{disp} — {ats}" if ats else disp
+        head = f"**{disp}** — {ats}" if ats else f"**{disp}**"
         if status == "no_session":
-            top_lines.append(f"{disp} — no active meeting")
+            top_lines.append(f"**{disp}** — no active meeting")
             continue
         if status == "disabled":
-            top_lines.append(f"{disp} — ring disabled")
+            top_lines.append(f"**{disp}** — ring disabled")
             continue
         if status == "queued_oauth":
             top_lines.append(f"{head} (queued; waiting for host authorization)")
@@ -398,12 +398,12 @@ def handle_ring_commands_batch(
         # BOTTOM: this team's FULL duty list (all contacts, numbered from 1, incl. the one called above).
         roster_md = _duty_contact_list_md(c, tok)
         if roster_md:
-            bottom_blocks.append(f"{disp}\n{roster_md}")
+            bottom_blocks.append(f"**{disp}**\n{roster_md}")
     if not top_lines or not token:
         return
     parts = ["\n".join(top_lines)]  # top: one line per command, grouped (no blank lines between)
     if bottom_blocks:
-        parts.append("Duty list per team (tap /c @name to call any of them):\n\n" + "\n\n".join(bottom_blocks))
+        parts.append("**Duty list per team** (tap /c @name to call any of them):\n\n" + "\n\n".join(bottom_blocks))
     if bottom_blocks or any_ringing:
         parts.append(_CONTACT_LIST_NOTE)
     header = "Calling today's selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
@@ -508,7 +508,7 @@ def handle_ring_command(
         roster_md = _duty_contact_list_md(c, tok)
         parts = [ats] if ats else []
         if roster_md:
-            parts.append("Duty list (tap /c @name to call any of them):\n\n" + roster_md)
+            parts.append("**Duty list** (tap /c @name to call any of them):\n\n" + roster_md)
         if roster_md or _duty.is_roster_command(c) or _duty.is_sre_command(c):
             parts.append(_CONTACT_LIST_NOTE)
         body = "\n\n".join(parts) if parts else "Paging the duty into the meeting now."
