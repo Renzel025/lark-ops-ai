@@ -489,6 +489,8 @@ def _cpms_day_names(rows: List[List[Any]], today: datetime.date) -> Tuple[str, s
     """``(primary, backup)`` for today's day cell in a CPMS monthly calendar: match the cell whose
     FIRST line is today's day number; primary = 2nd line, backup = the 'bk: <name>' line."""
     day = str(today.day)
+    result: Tuple[str, str] = ("", "")
+    matches: List[List[str]] = []  # diagnostics: every cell whose first line is today's day
     for row in rows or []:
         for cell in (row or []):
             s = str(cell if cell is not None else "").replace("\r", "\n").strip()
@@ -497,6 +499,9 @@ def _cpms_day_names(rows: List[List[Any]], today: datetime.date) -> Tuple[str, s
             lines = [ln.strip() for ln in s.split("\n") if ln.strip()]
             if not lines or lines[0] != day:
                 continue
+            matches.append(lines[:4])
+            if result != ("", ""):
+                continue
             primary = _clean_person_name(lines[1]) if len(lines) > 1 else ""
             backup = ""
             for ln in lines[2:]:
@@ -504,8 +509,12 @@ def _cpms_day_names(rows: List[List[Any]], today: datetime.date) -> Tuple[str, s
                 if low.startswith("bk") or "backup" in low:
                     backup = _clean_person_name(ln.split(":", 1)[-1] if ":" in ln else ln)
                     break
-            return primary, backup
-    return "", ""
+            result = (primary, backup)
+    log.info(
+        "duty_roster: cpms date=%s day=%s cell_matches=%r -> primary/backup=%r",
+        today.isoformat(), day, matches[:8], result,
+    )
+    return result
 
 
 def parse_cpms_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
