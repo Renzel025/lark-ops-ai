@@ -274,29 +274,31 @@ _CONTACT_LIST_NOTE = "/c @checkperson — use this if you want to contact someon
 
 
 def _duty_contact_list_md(c: str, tok: str) -> str:
-    """Numbered contact-list block for a roster command (fe/fpms/pms), e.g.::
+    """Numbered contact-list block for a duty command, e.g. for fe/fpms::
 
           1. Alice — today (Jul 24)
           2. Bob — tomorrow (Jul 25)
           3. Carol — Jul 26
 
-    fe/fpms show today/tomorrow/day-after duty; pms shows First/Second/Third Level of this week.
-    Empty string when ``c`` is not a roster command or no slots resolve (sheet miss) — the caller
-    then falls back to its plain one-line status."""
+    fe/fpms show today/tomorrow/day-after duty; pms shows First/Second/Third Level of this week; the
+    SRE variants (sfpms/spms/scpms/sfe) list everyone who covers that team (no dates — the SRE Handler
+    tab is dateless). Empty string when ``c`` has no such list or nothing resolves (sheet miss) — the
+    caller then falls back to its plain one-line @mention status."""
     from features.recording import duty_roster as _duty
 
-    if not _duty.is_roster_command(c):
-        return ""
     try:
-        slots = _duty.resolve_duty_contact_slots(c, tok)
+        if _duty.is_roster_command(c):
+            lines: List[str] = []
+            for n, (label, names) in enumerate(_duty.resolve_duty_contact_slots(c, tok), start=1):
+                who = ", ".join(names) if names else "(no one listed)"
+                lines.append(f"  {n}. {who} — {label}")
+            return "\n".join(lines)
+        if _duty.is_sre_command(c):
+            names = _duty.resolve_sre_team_person_names(c, tok)
+            return "\n".join(f"  {n}. {nm}" for n, nm in enumerate(names, start=1))
     except Exception as e:  # pragma: no cover - never let a sheet hiccup break the ring
-        log.warning("ring: contact-slots failed cmd=%s err=%s", c, e)
-        return ""
-    lines: List[str] = []
-    for n, (label, names) in enumerate(slots, start=1):
-        who = ", ".join(names) if names else "(no one listed)"
-        lines.append(f"  {n}. {who} — {label}")
-    return "\n".join(lines)
+        log.warning("ring: contact-list failed cmd=%s err=%s", c, e)
+    return ""
 
 
 def _ring_display_label(c: str) -> str:
@@ -331,7 +333,7 @@ def handle_ring_commands_batch(
     tok = (tenant_token or token or "").strip()
     lines: List[str] = []
     any_ringing = False
-    saw_roster = False
+    saw_list = False
     for raw in cmds:
         c = (raw or "").strip().lower()
         if not c:
@@ -354,11 +356,12 @@ def handle_ring_commands_batch(
             session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
-        # fe/fpms/pms show a numbered today/tomorrow/day-after (or level) list instead of @mentions;
-        # the ring still calls only the 1st contact (today's duty / First Level), resolved above.
+        # fe/fpms/pms show a numbered today/tomorrow/day-after (or level) list; SRE variants list
+        # everyone who covers the team — instead of @mentions. The ring still calls only the resolved
+        # duty (today's duty / First Level / SRE handler), resolved above.
         block = _duty_contact_list_md(c, tok)
         if block:
-            saw_roster = True
+            saw_list = True
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
         if status == "no_session":
             lines.append(f"{disp} — no active meeting")
@@ -372,7 +375,7 @@ def handle_ring_commands_batch(
             any_ringing = True
     if not lines or not token:
         return
-    if saw_roster:
+    if saw_list:
         lines.append(_CONTACT_LIST_NOTE)
     header = "Calling selected duty persons into the meeting now…" if any_ringing else "Selected duty commands:"
     msg = header + "\n\n" + "\n\n".join(lines)
@@ -474,10 +477,11 @@ def handle_ring_command(
             "one-time Lark authorization (the host just got a DM)."
         )
     else:  # ringing
-        # fe/fpms/pms: show the numbered today/tomorrow/day-after (or First/Second/Third Level) list
-        # + the /c reminder. The ring still calls only the 1st contact (resolved above); the rest are
-        # shown for visibility. Falls back to the @mention line if the roster sheet read misses.
-        block = _duty_contact_list_md(c, tok) if _duty.is_roster_command(c) else ""
+        # fe/fpms/pms: numbered today/tomorrow/day-after (or First/Second/Third Level) list; SRE
+        # variants: everyone who covers the team. Plus the /c reminder. The ring still calls only the
+        # resolved duty (above); the rest are shown for visibility. Falls back to the @mention line if
+        # the sheet read misses (block == "").
+        block = _duty_contact_list_md(c, tok)
         if block:
             msg = f"Calling {label} into the meeting now…\n\n{block}\n\n{_CONTACT_LIST_NOTE}"
         elif targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):

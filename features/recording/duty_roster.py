@@ -732,6 +732,18 @@ def sre_team_names(
     return out
 
 
+def resolve_sre_team_person_names(cmd: str, tenant_token: str) -> List[str]:
+    """ORIGINAL-cased names of everyone whose SRE Handler covers ``cmd``'s team — the 'who else covers
+    this team' list shown under an SRE ring (sfpms/spms/scpms/sfe). No dates, no on-shift filter: the
+    SRE Handler tab has no date dimension. Returns ``[]`` for a non-SRE command or a read failure."""
+    from features.recording import duty_directory as _dir
+
+    want = SRE_COMMAND_TEAM_TOKENS.get((cmd or "").strip().lower())
+    if not want:
+        return []
+    return _dir.get_sre_team_person_names(tenant_token, want)
+
+
 def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], List[str]]:
     """``(open_ids, unresolved_names)`` for an SRE command: SRE-tab handlers for the team, optionally
     intersected with today's duty shift, then name -> open_id via the OpenID directory tab."""

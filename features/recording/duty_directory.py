@@ -27,7 +27,7 @@ import os
 import re
 import threading
 import time
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -225,3 +225,49 @@ def get_sre_handler_map(tenant_token: str) -> Dict[str, Set[str]]:
             _SRE_CACHE = mp
             _SRE_CACHE_TS = now
         return {k: set(v) for k, v in _SRE_CACHE.items()}
+
+
+def get_sre_team_person_names(tenant_token: str, team_tokens: Set[str]) -> List[str]:
+    """ORIGINAL-cased names (sheet order) whose SRE Handler covers any of ``team_tokens``.
+
+    For the ring "who else covers this team" list — no on-shift filter, deduped by normalized name,
+    original casing preserved (so 'OSE' / 'Jewell Peñamante' render as written, not title-cased).
+    Returns ``[]`` on any read/permission failure."""
+    want = {_norm_team_token(t) for t in (team_tokens or set()) if str(t).strip()}
+    if not want:
+        return []
+    token, sheet_id, sheet_name, rng = _sre_cfg()
+    if not token:
+        return []
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            return []
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        return []
+    header = list(rows[0] or [])
+    ci_name = _col_index(header, "name")
+    ci_handler = _col_index(header, "handler", "team", "teams")
+    if ci_name < 0 or ci_handler < 0:
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for r in rows[1:]:
+        cells = [str(c or "").strip() for c in (r or [])]
+
+        def g(i: int) -> str:
+            return cells[i] if 0 <= i < len(cells) else ""
+
+        raw = g(ci_name)
+        if not raw:
+            continue
+        tokens = {_norm_team_token(t) for t in g(ci_handler).split("/") if t.strip()}
+        if not (tokens & want):
+            continue
+        key = normalize_name(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    return out
