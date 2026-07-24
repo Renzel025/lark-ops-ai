@@ -1036,7 +1036,10 @@ def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
     """
     from features.recording.sre_game import is_sre_game_command, is_po_game_command
 
-    toks = [t for t in (ring_raw or "").split() if t]
+    # Drop @mention tokens (the /c targets, e.g. "@Name" / "@_user_2") — they're captured separately
+    # via mention_open_ids, so they must NOT count as "prose" (which would force a slash on every
+    # command). This lets "/cpms fpms /c @A @B" work with a single leading slash.
+    toks = [t for t in (ring_raw or "").split() if t and not t.startswith("@")]
 
     def _cmd(tok: str) -> str:
         return tok.lstrip("/").strip().lower()

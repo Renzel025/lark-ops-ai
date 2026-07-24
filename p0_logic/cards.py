@@ -1188,11 +1188,11 @@ Use `/c @Name` in the reply thread to call additional people from the contact li
 
 ### Combining Commands
 
-You can combine multiple commands in a single message. For example:
+You can combine multiple commands in a single message — just one leading slash. For example:
 
-* `/cpms /fpms /sfpms /fe`
+* `/cpms fpms sfpms fe`
 * `/c @Name1 @Name2 @Name3`
-* `/cpms /fpms /c @Name1 @Name2`
+* `/cpms fpms /c @Name1 @Name2`
 
 ### If a Command Doesn't Work
 
