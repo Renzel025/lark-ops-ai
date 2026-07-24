@@ -27,7 +27,7 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
@@ -250,6 +250,10 @@ def get_sre_team_person_names(tenant_token: str, team_tokens: Set[str]) -> List[
     ci_name = _col_index(header, "name")
     ci_handler = _col_index(header, "handler", "team", "teams")
     if ci_name < 0 or ci_handler < 0:
+        log.warning(
+            "duty_directory: SRE team-list — no Name/Handler header ci_name=%s ci_handler=%s header=%r",
+            ci_name, ci_handler, [str(h) for h in header],
+        )
         return []
     out: List[str] = []
     seen: Set[str] = set()
@@ -270,4 +274,14 @@ def get_sre_team_person_names(tenant_token: str, team_tokens: Set[str]) -> List[
             continue
         seen.add(key)
         out.append(raw)
+    # Diagnostic: show exactly what the bot read so a "why only one name?" case can be pinned to the
+    # sheet/range (small tab, so logging the raw name|handler pairs is cheap).
+    def _cell(r: Any, i: int) -> str:
+        return str(r[i]).strip() if isinstance(r, list) and 0 <= i < len(r) else ""
+
+    pairs = [(_cell(r, ci_name), _cell(r, ci_handler)) for r in rows[1:21]]
+    log.info(
+        "duty_directory: SRE team-list want=%s rows=%s ci_name=%s ci_handler=%s pairs=%r matched=%s",
+        sorted(want), len(rows), ci_name, ci_handler, pairs, out,
+    )
     return out
