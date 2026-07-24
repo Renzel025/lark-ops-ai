@@ -262,13 +262,26 @@ def _read_game_issue_rows(tenant_token: str) -> List[List[Any]]:
 
 
 def _strip_at_names(cell: Any) -> List[str]:
-    """Names in a contact cell: split on newlines, drop a leading '@', collapse inner whitespace."""
-    out: List[str] = []
-    for line in str(cell or "").replace("\r", "\n").split("\n"):
+    """Names in a Sheets contact cell. Handles three shapes the values API returns:
+      * plain text — '@Nelson C' (possibly several, newline-separated);
+      * a Lark @-mention OBJECT — ``{'type':'mention','name':'OSE','en_name':'OSE','text':'@OSE',…}``
+        (the Game Issue sheet stores contacts as real @-mentions, NOT text) -> take name/en_name;
+      * a LIST of rich-text segments (mix of the above) -> flatten.
+    Always returns clean display names with the leading '@' and inner whitespace normalised."""
+    if isinstance(cell, list):
+        out: List[str] = []
+        for seg in cell:
+            out.extend(_strip_at_names(seg))
+        return out
+    if isinstance(cell, dict):
+        nm = str(cell.get("name") or cell.get("en_name") or str(cell.get("text") or "").lstrip("@")).strip()
+        return [re.sub(r"\s+", " ", nm)] if nm else []
+    names: List[str] = []
+    for line in str(cell if cell is not None else "").replace("\r", "\n").split("\n"):
         nm = re.sub(r"\s+", " ", line.strip().lstrip("@").strip())
         if nm:
-            out.append(nm)
-    return out
+            names.append(nm)
+    return names
 
 
 def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
