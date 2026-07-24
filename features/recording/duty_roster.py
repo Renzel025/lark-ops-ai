@@ -677,15 +677,8 @@ def resolve_duty_contact_slots(cmd: str, tenant_token: str) -> List[Tuple[str, L
 
     if c == "pms":
         return [(lbl, [nm]) for lbl, nm in parse_pms_levels(rows, today)]
-    if c == "cpms":
-        primary, backup = _cpms_day_names(rows, today)
-        cpms_slots: List[Tuple[str, List[str]]] = []
-        if primary:
-            cpms_slots.append((_slot_date_label(0, today), [primary]))
-        if backup:
-            cpms_slots.append(("backup", [backup]))
-        return cpms_slots
 
+    # fe / fpms / cpms: today / tomorrow / day-after primary (cpms reads the day cell per date).
     slots: List[Tuple[str, List[str]]] = []
     for offset in (0, 1, 2):
         d = today + datetime.timedelta(days=offset)
