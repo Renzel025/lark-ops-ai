@@ -295,18 +295,17 @@ def _post_ring_card(
         _lark.post_card_to_chat(notify_chat, token, card)
 
 
-def _duty_contact_list_md(c: str, tok: str, *, skip_first: bool = False) -> str:
-    """Numbered contact-list block for a duty command, e.g. for fe/fpms::
+def _duty_contact_list_md(c: str, tok: str) -> str:
+    """Full numbered contact list for a duty command, e.g. for fe/fpms::
 
           1. Alice — today (Jul 24)
           2. Bob — tomorrow (Jul 25)
           3. Carol — Jul 26
 
     fe/fpms show today/tomorrow/day-after duty; pms shows First/Second/Third Level of this week; the
-    SRE variants (sfpms/spms/scpms/sfe) list everyone who covers that team (no dates — the SRE Handler
-    tab is dateless). ``skip_first`` drops the 1st entry (the contact already shown/called at the top of
-    the card) and keeps the ORIGINAL numbering (2., 3., …) so the block reads as the "other duties".
-    Empty string when ``c`` has no list, nothing resolves (sheet miss), or skip_first left nothing."""
+    SRE variants (sfpms/spms/scpms/sfe) list EVERYONE who covers that team (no dates — the SRE Handler
+    tab is dateless). Numbered from 1 and includes the 1st contact (the one being called), so the block
+    is the complete roster. Empty string when ``c`` has no list or nothing resolves (sheet miss)."""
     from features.recording import duty_roster as _duty
 
     try:
@@ -322,8 +321,6 @@ def _duty_contact_list_md(c: str, tok: str, *, skip_first: bool = False) -> str:
     except Exception as e:  # pragma: no cover - never let a sheet hiccup break the ring
         log.warning("ring: contact-list failed cmd=%s err=%s", c, e)
         return ""
-    if skip_first:
-        items = items[1:]
     return "\n".join(items)
 
 
@@ -398,15 +395,15 @@ def handle_ring_commands_batch(
         else:  # ringing
             top_lines.append(head)
             any_ringing = True
-        # BOTTOM: this team's other duties (2nd onward — the 1st is already the @mention above).
-        others = _duty_contact_list_md(c, tok, skip_first=True)
-        if others:
-            bottom_blocks.append(f"{disp}\n{others}")
+        # BOTTOM: this team's FULL duty list (all contacts, numbered from 1, incl. the one called above).
+        roster_md = _duty_contact_list_md(c, tok)
+        if roster_md:
+            bottom_blocks.append(f"{disp}\n{roster_md}")
     if not top_lines or not token:
         return
     parts = ["\n".join(top_lines)]  # top: one line per command, grouped (no blank lines between)
     if bottom_blocks:
-        parts.append("Other duties (tap /c @name to call):\n\n" + "\n\n".join(bottom_blocks))
+        parts.append("Duty list per team (tap /c @name to call any of them):\n\n" + "\n\n".join(bottom_blocks))
     if bottom_blocks or any_ringing:
         parts.append(_CONTACT_LIST_NOTE)
     header = "Calling today's selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
@@ -508,11 +505,11 @@ def handle_ring_command(
         when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
         title = f"Calling {label} {when}into the meeting now"
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
-        others = _duty_contact_list_md(c, tok, skip_first=True)
+        roster_md = _duty_contact_list_md(c, tok)
         parts = [ats] if ats else []
-        if others:
-            parts.append("Other duties (tap /c @name to call):\n\n" + others)
-        if others or _duty.is_roster_command(c) or _duty.is_sre_command(c):
+        if roster_md:
+            parts.append("Duty list (tap /c @name to call any of them):\n\n" + roster_md)
+        if roster_md or _duty.is_roster_command(c) or _duty.is_sre_command(c):
             parts.append(_CONTACT_LIST_NOTE)
         body = "\n\n".join(parts) if parts else "Paging the duty into the meeting now."
         is_ring_announcement = True
