@@ -276,7 +276,7 @@ def _resolve_ring(
 
 # Reminder shown under the fe/fpms/pms contact list: the ring calls only the 1st contact (today's
 # duty / First Level); use /c to page anyone else shown in the list.
-_CONTACT_LIST_NOTE = "**/c @checkperson** — use this if you want to contact someone else in the shift"
+_CONTACT_LIST_NOTE = "**/c @name** — use this if you want to contact someone else in the provided list"
 
 
 def _post_ring_card(
@@ -403,7 +403,7 @@ def handle_ring_commands_batch(
         return
     parts = ["\n".join(top_lines)]  # top: one line per command, grouped (no blank lines between)
     if bottom_blocks:
-        parts.append("**Duty list per team** (tap /c @name to call any of them):\n\n" + "\n\n".join(bottom_blocks))
+        parts.append("\n\n".join(bottom_blocks))
     if bottom_blocks or any_ringing:
         parts.append(_CONTACT_LIST_NOTE)
     header = "Calling today's selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
@@ -508,7 +508,7 @@ def handle_ring_command(
         roster_md = _duty_contact_list_md(c, tok)
         parts = [ats] if ats else []
         if roster_md:
-            parts.append("**Duty list** (tap /c @name to call any of them):\n\n" + roster_md)
+            parts.append(roster_md)
         if roster_md or _duty.is_roster_command(c) or _duty.is_sre_command(c):
             parts.append(_CONTACT_LIST_NOTE)
         body = "\n\n".join(parts) if parts else "Paging the duty into the meeting now."
