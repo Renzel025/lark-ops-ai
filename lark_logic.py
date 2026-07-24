@@ -1130,10 +1130,10 @@ def process_message(
                     log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
-        # Ring commands page duty/escalation into the already-active meeting. Trigger via a leading
-        # slash (/m /e /fe /fpms /cpms /pms /scpms …) OR by @mentioning the bot (@bot m). A bare
-        # "m"/"e" with NEITHER must not trigger, so stray single letters in normal chat can't page.
-        # Checked before the screenshot handler so these short commands aren't swallowed.
+        # Ring commands page duty/escalation into the already-active meeting. They REQUIRE a leading
+        # slash (/m /e /fe /fpms /pms /scpms /sfpms …); @mentioning the bot alone is NOT enough, so a
+        # bare "sfpms" / stray letter in normal chat (even with @bot) can never page. Checked before
+        # the screenshot handler so these short commands aren't swallowed.
         _ring_raw = _strip_leading_mentions(text_raw, mention_names).strip()
         _ring_is_slash = _ring_raw.startswith("/")
         _ring_cmd = _ring_raw.lstrip("/").strip().lower()
@@ -1159,11 +1159,12 @@ def process_message(
                 return
         # Mixed commands in ONE message: "/srebac sfpms cpms" or "/scpms /fpms /c @Juan @Maria" — fire
         # EACH into the active meeting. SRE-game commands (srebac …) start an escalation; duty/direct
-        # commands (scpms, fpms, dba, /c …) page their people. Only ONE leading slash is needed (bare
-        # tokens are honored when the whole message is a pure command list); /c consumes the message
-        # @mentions and needs @bot. A single command (/srebac, /fpms, @bot m) also flows through here.
+        # commands (scpms, fpms, dba, /c …) page their people. A LEADING SLASH is REQUIRED to trigger
+        # (bare tokens AFTER the leading slash are honored, e.g. "/srebac sfpms cpms"); @mentioning the
+        # bot alone is NOT enough, so casual chat / a stray @bot never pages. /c also needs @bot for its
+        # @mention targets. A single command ("/fpms", "/m") also flows through here.
         _game_cmds, _ring_cmds = _parse_mixed_commands(_ring_raw)
-        if (_game_cmds or _ring_cmds) and (_ring_is_slash or _mentions_our_bot(mention_names)):
+        if (_game_cmds or _ring_cmds) and _ring_is_slash:
             _bot_mentioned = _mentions_our_bot(mention_names)
             _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
             log.info(
@@ -1206,10 +1207,10 @@ def process_message(
                 )
             return
 
-        # @bot /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the
-        # message @mentions. REQUIRES @mentioning the bot (so the user @mentions are unambiguously the
-        # targets, and the bot is dropped from them). Bare "/c @a" without @bot does NOT trigger.
-        if _ring_first == "c" and _mentions_our_bot(mention_names):
+        # /c @person… — ad-hoc DIRECT call (Model A): ring the TAGGED people straight from the message
+        # @mentions. REQUIRES a leading slash AND @mentioning the bot (so the @mentions are unambiguously
+        # the targets, and the bot is dropped). "c @a" without the slash / without @bot does NOT trigger.
+        if _ring_first == "c" and _ring_is_slash and _mentions_our_bot(mention_names):
             _direct = [x for x in (kwargs.get("mention_open_ids") or []) if x]
             log.info(
                 "direct ring /c slash=%s tagged=%s chat_tail=%s",
@@ -1241,7 +1242,7 @@ def process_message(
                 chat_id[-8:] if chat_id else "",
                 session_source[-8:] if session_source else "",
             )
-            if _ring_is_slash or _bot_mentioned:
+            if _ring_is_slash:
                 from features.recording.vc_ring import handle_ring_command
 
                 handle_ring_command(
