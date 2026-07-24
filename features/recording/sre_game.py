@@ -52,14 +52,20 @@ SRE_GAME_CMD_RE = re.compile(
 # "Game Issue Emergency Contact" sheet and rings that game's PRODUCT MANAGERS (1st/2nd/3rd PM columns).
 # Token → the EXACT game name as written in that sheet's "Game" column.
 PO_GAME_HEADERS: Dict[str, str] = {
-    "pobac": "Baccarat", "por": "Roulette", "podt": "Dragon Tiger", "posic": "Sic Bo",
-    "pobl": "Black Jack", "popai": "Pai Gow", "pocg": "Color Game", "popp": "Pula Puti",
-    "podb": "Drop Ball", "poib": "InBetween",
+    # Table / OTG games
+    "pobac": "Baccarat", "pobact": "Baccarat Tournament",
+    "pobacm": "Baccarat (if all tables are maintenance)",
+    "por": "Roulette", "podt": "Dragon Tiger", "posic": "Sic Bo", "pobl": "Black Jack",
+    "popai": "Pai Gow", "pocg": "Color Game", "popp": "Pula Puti", "podb": "Drop Ball",
+    "poib": "InBetween", "pohan": "Hantak",
+    # Live / slot / sports / gamezone
+    "poosm": "OSM", "poegs": "EGS", "poevo": "Evo Live Games", "poeeze": "EEZE Live Game",
+    "pomlv": "Marble Race: Las Vegas", "pomm": "Marble 5vs5: Monaco",
+    "popt": "Playtech Live Game", "posport": "SportBet/Ebet", "potong": "Tongits Plus/ Texas Poker",
 }
 PO_GAME_LABEL: Dict[str, str] = dict(PO_GAME_HEADERS)
-PO_GAME_CMD_RE = re.compile(
-    r"^(pobac|por|podt|posic|pobl|popai|pocg|popp|podb|poib)$", re.IGNORECASE
-)
+# Built from the keys so the token list stays in sync; ^…$ anchors so 'por' never matches 'posport'.
+PO_GAME_CMD_RE = re.compile(r"^(?:" + "|".join(PO_GAME_HEADERS) + r")$", re.IGNORECASE)
 
 
 def is_po_game_command(cmd: str) -> bool:
@@ -343,8 +349,10 @@ def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
         norm = [_egame_norm(c) for c in (row or [])]
         if any(any(kw in v for kw in _PO_SECTION_END_KW) for v in norm):
             break  # next section — stop (only the first, Product-Manager section counts)
-        gv = norm[game_col] if game_col < len(norm) else ""
-        if gv != target:
+        raw_gv = str((row[game_col] if game_col < len(row) else "") or "")
+        # A game cell may hold SEVERAL games on separate lines (e.g. Gamezone) — match ANY line.
+        game_lines = {_egame_norm(ln) for ln in raw_gv.replace("\r", "\n").split("\n") if ln.strip()}
+        if target not in game_lines:
             continue
         names: List[str] = []
         for col in pm_cols:
@@ -371,9 +379,11 @@ def po_game_names(rows: List[List[Any]]) -> List[str]:
         norm = [_egame_norm(c) for c in (row or [])]
         if any(any(kw in v for kw in _PO_SECTION_END_KW) for v in norm):
             break
-        gv = str((row[game_col] if game_col < len(row) else "") or "").strip()
-        if gv:
-            out.append(gv)
+        raw_gv = str((row[game_col] if game_col < len(row) else "") or "")
+        for ln in raw_gv.replace("\r", "\n").split("\n"):  # multi-game cells (Gamezone) -> one per line
+            ln = ln.strip()
+            if ln:
+                out.append(ln)
     return out
 
 
