@@ -1121,30 +1121,84 @@ def build_help_commands_card() -> Dict[str, Any]:
 
 
 def _ring_commands_guide_md() -> str:
-    """VC ring-command cheat-sheet (DM guide, shown before the overview card). A LEADING SLASH is
-    required; commands can be mixed in one message (e.g. /cpms fpms sfpms fe)."""
-    return (
-        "Type these in the incident group (with the P0 meeting running) to call people into the meeting. "
-        "A leading slash is required; you can mix several in one message (e.g. **/cpms fpms sfpms fe**).\n\n"
-        "**Team duty (today's roster)**\n"
-        "• **/fe** Frontend · **/fpms** FPMS · **/pms** PMS (first level) · **/cpms** CPMS\n\n"
-        "**SRE duty**\n"
-        "• **/scpms** **/sfpms** **/sfe** **/spms** — SRE (CPMS / FPMS / FE / PMS)\n\n"
-        "**Shift sections (today's on-shift)**\n"
-        "• **/dba** DBA · **/sosm** Liveslot SRE\n\n"
-        "**Direct**\n"
-        "• **/c @Name** call the people you tag · **/m** major-P0 check persons · **/e** escalation contacts\n\n"
-        "**SRE game escalation** (rings the 1st contact; /c to reach others)\n"
-        "• **/srebac** Baccarat · **/srer** Roulette · **/sredt** Dragon Tiger · **/sresic** Sicbo · **/srebl** Blackjack\n"
-        "• **/srepai** Paigow · **/srecg** Colorgame · **/srepp** Pulaputi · **/sredb** Dropball · **/sreib** In Between\n\n"
-        "**PO product-manager escalation** (rings the 1st product manager)\n"
-        "• **/pobac** Baccarat · **/por** Roulette · **/podt** Dragon Tiger · **/posic** Sic Bo · **/pobl** Black Jack\n"
-        "• **/popai** Pai Gow · **/pocg** Color Game · **/popp** Pula Puti · **/podb** Drop Ball · **/poib** InBetween\n\n"
-        "**EGAME escalation**\n"
-        "• **/segame <game>** — e.g. **/segame Bakunawa** (any EGAME game, by exact name)\n\n"
-        "In the reply thread: **/c @name** to call someone else from the list "
-        "(a contact auto-confirms when they join — no reply needed)."
-    )
+    """VC ring-command cheat-sheet (DM guide, shown before the overview card). Rendered by the card's
+    markdown component (headings / lists / inline code)."""
+    return """### Call Commands
+
+Type these commands in the incident group **while the P0 meeting is running** to call people into the meeting. The bot will automatically contact the **current on-duty** members of the respective teams.
+
+#### Developer Duty
+
+* `/fe` — Frontend
+* `/fpms` — FPMS
+* `/pms` — PMS
+* `/cpms` — CPMS
+
+#### OM Duty
+
+* `/scpms`, `/sfpms`, `/sfe`, `/spms` — CPMS / FPMS / FE / PMS SRE
+* `/dba` — DBA
+* `/sosm` — LiveSlot SRE
+
+#### Direct Commands
+
+* `/c @Name` — Calls the tagged person(s).
+* `/m` — Calls the Major P0 contact list **@Bk @Yang @Koo @YC @Wennie @Eden @Jun Meng @Jayden Liu**
+* `/e` — No response → Escalate to @Wei Siong @Adrian Chong
+
+---
+
+### Additional Commands for **Game urgent-游戏紧急群**
+
+#### SRE Game (rings the primary SRE contact)
+
+* `/srebac` — Baccarat
+* `/srer` — Roulette
+* `/sredt` — Dragon Tiger
+* `/sresic` — Sic Bo
+* `/srebl` — Blackjack
+* `/srepai` — Pai Gow
+* `/srecg` — Color Game
+* `/srepp` — Pula Puti
+* `/sredb` — Drop Ball
+* `/sreib` — In Between
+
+#### PO Product Manager (rings the primary Product Manager)
+
+* `/pobac` — Baccarat
+* `/por` — Roulette
+* `/podt` — Dragon Tiger
+* `/posic` — Sic Bo
+* `/pobl` — Blackjack
+* `/popai` — Pai Gow
+* `/pocg` — Color Game
+* `/popp` — Pula Puti
+* `/podb` — Drop Ball
+* `/poib` — In Between
+
+#### EGAME SRE
+
+* `/segame <game>` — For example: `/segame Bakunawa` (works with any EGAME title using its exact game name).
+
+---
+
+### Reply Thread
+
+Use `/c @Name` in the reply thread to call additional people from the contact list. Once a contact joins the meeting, the bot automatically confirms their attendance—no reply is required.
+
+### Combining Commands
+
+You can combine multiple commands in a single message. For example:
+
+* `/cpms /fpms /sfpms /fe`
+* `/c @Name1 @Name2 @Name3`
+* `/cpms /fpms /c @Name1 @Name2`
+
+### If a Command Doesn't Work
+
+If any command is not working, you can always use the `/c` command to call people directly. For example:
+
+`/c @Renzel Hernandez @Name1 @Name2`"""
 
 
 def build_ring_commands_guide_card() -> Dict[str, Any]:
@@ -1158,10 +1212,8 @@ def build_ring_commands_guide_card() -> Dict[str, Any]:
         },
         "body": {
             "elements": [
-                {
-                    "tag": "div",
-                    "text": {"tag": "lark_md", "content": _ring_commands_guide_md()},
-                },
+                # schema-2.0 markdown component renders headings / lists / inline `code` (lark_md does not).
+                {"tag": "markdown", "content": _ring_commands_guide_md()},
             ]
         },
     }
