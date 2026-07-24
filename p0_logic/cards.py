@@ -1208,7 +1208,7 @@ def build_ring_commands_guide_card() -> Dict[str, Any]:
         "config": {"enable_forward": True},
         "header": {
             "template": "turquoise",
-            "title": {"tag": "plain_text", "content": "P0 Ring Commands — call people into the meeting"},
+            "title": {"tag": "plain_text", "content": "P0 Invite Commands — call and invite people into the meeting"},
         },
         "body": {
             "elements": [

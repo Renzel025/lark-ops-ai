@@ -311,16 +311,9 @@ def _strip_at_names(cell: Any) -> List[str]:
     return names
 
 
-def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
-    """Ordered PRODUCT-MANAGER names for ``game_name`` in the Game Issue Emergency Contact sheet: find
-    the header row (a 'Game' column + one or more 'Product Manager' columns), then the row whose Game
-    cell equals ``game_name`` (exact), and return the PM columns' names (@ stripped, deduped, in order).
-    Stops at the next section header (Person-in-Charge / Department) so only the PM section is used."""
-    target = _egame_norm(game_name)
-    if not target:
-        return []
-    hdr = game_col = -1
-    pm_cols: List[int] = []
+def _po_header(rows: List[List[Any]]) -> Tuple[int, int, List[int]]:
+    """``(header_row_idx, game_col, [pm_cols])`` for the Game Issue 'Emergency Contact' PM section — the
+    first row with a 'Game' column AND one or more 'Product Manager' columns; ``(-1, -1, [])`` if none."""
     for i, row in enumerate(rows):
         norm = [_egame_norm(c) for c in (row or [])]
         gcol = -1
@@ -331,8 +324,19 @@ def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
             if "product ma" in v:
                 pcs.append(j)
         if gcol >= 0 and pcs:
-            hdr, game_col, pm_cols = i, gcol, pcs
-            break
+            return i, gcol, pcs
+    return -1, -1, []
+
+
+def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
+    """Ordered PRODUCT-MANAGER names for ``game_name`` in the Game Issue Emergency Contact sheet: find
+    the header row (a 'Game' column + one or more 'Product Manager' columns), then the row whose Game
+    cell equals ``game_name`` (exact, case/space-insensitive), and return the PM columns' names (@
+    stripped, deduped, in order). Stops at the next section header so only the PM section is used."""
+    target = _egame_norm(game_name)
+    if not target:
+        return []
+    hdr, game_col, pm_cols = _po_header(rows)
     if hdr < 0:
         return []
     for row in rows[hdr + 1:]:
@@ -356,15 +360,36 @@ def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
     return []
 
 
-def resolve_po_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, str]]:
-    """Ordered ``[(name, open_id)]`` product managers for a /po<game> command."""
-    game = PO_GAME_HEADERS.get((cmd or "").strip().lower())
-    if not game:
+def po_game_names(rows: List[List[Any]]) -> List[str]:
+    """All game names in the Game Issue 'Emergency Contact' PM section (the Game column), in order —
+    shown as a hint when a typed /po game name doesn't match."""
+    hdr, game_col, _pm = _po_header(rows)
+    if hdr < 0:
         return []
+    out: List[str] = []
+    for row in rows[hdr + 1:]:
+        norm = [_egame_norm(c) for c in (row or [])]
+        if any(any(kw in v for kw in _PO_SECTION_END_KW) for v in norm):
+            break
+        gv = str((row[game_col] if game_col < len(row) else "") or "").strip()
+        if gv:
+            out.append(gv)
+    return out
+
+
+def resolve_po_game_contacts_by_name(game_name: str, tenant_token: str) -> List[Tuple[str, str]]:
+    """Ordered ``[(name, open_id)]`` product managers for a game NAME (free-text ``/po <game>`` — works
+    for ANY game in the sheet, incl. OSM / EGS / Marble Race / 'Baccarat Tournament' / etc.)."""
     rows = _read_game_issue_rows(tenant_token)
     if not rows:
         return []
-    return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in parse_po_game_managers(rows, game)]
+    return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in parse_po_game_managers(rows, game_name)]
+
+
+def resolve_po_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, str]]:
+    """Ordered ``[(name, open_id)]`` product managers for a FIXED ``/po<game>`` command token."""
+    game = PO_GAME_HEADERS.get((cmd or "").strip().lower())
+    return resolve_po_game_contacts_by_name(game, tenant_token) if game else []
 
 
 def _ordinal(n: int) -> str:
@@ -684,6 +709,42 @@ def start_po_game_escalation(
         return
     _begin_escalation(
         f"po:{c}", label, f"{label} product managers", pairs, session_source, notify_chat, token,
+        command_message_id=command_message_id, thread_root=thread_root,
+        operator_open_id=operator_open_id, tok=tok,
+    )
+
+
+def start_po_game_escalation_by_name(
+    game_name: str,
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    command_message_id: str,
+    thread_root: str = "",
+    operator_open_id: str = "",
+    tenant_token: str = "",
+) -> None:
+    """Ring the 1st PRODUCT MANAGER for a FREE-TEXT game name (``/po <game>``) — covers ANY game in the
+    Game Issue sheet, incl. those without a fixed /po<game> token (Hantak, OSM, EGS, Marble Race,
+    'Baccarat Tournament', …). Same escalation engine as /srebac."""
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("po_game: by-name ignored (P0_VC_RING_ENABLED off) game=%r", game_name)
+        return
+    g = (game_name or "").strip()
+    tok = (tenant_token or token or "").strip()
+    if not g:
+        _reply(command_message_id, token, "Usage: /po <game>, e.g. /po Baccarat")
+        return
+    pairs = resolve_po_game_contacts_by_name(g, tok)
+    if not pairs:
+        rows = _read_game_issue_rows(tok)
+        avail = po_game_names(rows) if rows else []
+        hint = (" Available games: " + ", ".join(avail) + ".") if avail else " Check the Game Issue Emergency Contact sheet."
+        _reply(command_message_id, token, f"No product managers found for '{g}'.{hint}")
+        return
+    _begin_escalation(
+        f"po:{_egame_norm(g)}", g, f"{g} product managers", pairs, session_source, notify_chat, token,
         command_message_id=command_message_id, thread_root=thread_root,
         operator_open_id=operator_open_id, tok=tok,
     )
