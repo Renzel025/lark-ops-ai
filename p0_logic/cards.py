@@ -1166,6 +1166,7 @@ Type these commands in the incident group **while the P0 meeting is running** to
 #### PO Product Manager (rings the primary Product Manager)
 
 * `/pobac` — Baccarat
+* `/pobt` — Baccarat Tournament
 * `/por` — Roulette
 * `/podt` — Dragon Tiger
 * `/posic` — Sic Bo
@@ -1175,6 +1176,16 @@ Type these commands in the incident group **while the P0 meeting is running** to
 * `/popp` — Pula Puti
 * `/podb` — Drop Ball
 * `/poib` — In Between
+* `/poht` — Hantak
+* `/poosm` — OSM
+* `/poegs` — EGS
+* `/poev` — Evo Live Games
+* `/poez` — EEZE Live Game
+* `/pogm` — Marble Race: Las Vegas / Marble 5vs5: Monaco
+* `/popt` — Playtech Live Game
+* `/posb` — SportBet/Ebet
+* `/pogz` — Tongits Plus/Texas Poker / Tongits Joker/Pusoy Plus/Lucky 9 Plus
+* `/po <game>` — any other game by its exact name (e.g. `/po Baccarat (if all tables are maintenance)`)
 
 #### EGAME SRE
 
