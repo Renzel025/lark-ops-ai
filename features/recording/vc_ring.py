@@ -276,7 +276,9 @@ def _resolve_ring(
 
 # Reminder shown under the fe/fpms/pms contact list: the ring calls only the 1st contact (today's
 # duty / First Level); use /c to page anyone else shown in the list.
-_CONTACT_LIST_NOTE = "**/c @name** — use this if you want to contact someone else in the provided list"
+_CONTACT_LIST_NOTE = (
+    "**commands**\n**/c @name** — use this if you want to contact someone else in the provided list"
+)
 
 
 def _post_ring_card(

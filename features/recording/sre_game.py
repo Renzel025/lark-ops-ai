@@ -465,12 +465,11 @@ def _contacts_list_md(header: str, pairs: List[Tuple[str, str]]) -> str:
 
 
 def _command_hints_md() -> List[str]:
-    """The '/c @…' command hint shown under the check-person roster (only /c now — no /n stepping)."""
+    """The '/c' command hint under the roster — same wording/style as the ring card's note."""
     return [
         "",
-        "**Commands**",
-        "**/c @checkperson** — call another check person from the list (retry the current one, or tag "
-        "other specific people).",
+        "**commands**",
+        "**/c @name** — use this if you want to contact someone else in the provided list",
     ]
 
 
