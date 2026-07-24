@@ -137,6 +137,80 @@ def resolve_sre_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, st
     return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in parse_sre_game_contacts(rows, kw)]
 
 
+# --------------------------------------------------------------------------------------------------
+# EGAME escalation (/segame <game>) — a DIFFERENT section of the SAME OSE & SRE Duty Shift sheet.
+# Layout per group: a games-header row (slash-separated game names) then the contact rows below it:
+#   Maria Makilling/ Malakas/ Bakunawa/ …       <- games this group handles
+#   Jin (60125855200)                           <- 1st contact
+#   YK (60175245040)                            <- 2nd contact
+# "/segame Bakunawa" rings the 1st contact of the group whose header lists that EXACT game token
+# ("Bakunawa" != "Bakunawa 2"). Same escalation engine as /srebac (ring 1st, list, /c).
+# --------------------------------------------------------------------------------------------------
+_EGAME_SECTION_ENDS = ("SRE GAME", "LIVESLOT", "IT TEAM", "SRE PLATFORM", "DBA", "BACKEND TEAM", "FRONTEND TEAM")
+
+
+def _egame_norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def parse_egame_contacts(rows: List[List[Any]], game_name: str) -> List[str]:
+    """Ordered contact NAMES for an e-game under the 'EGAME' section: find the group whose games-header
+    row (slash-separated) lists ``game_name`` as an EXACT token, then return the contact rows below it
+    (until the next games-header, a run of blanks, or the next section). 'Bakunawa' != 'Bakunawa 2'."""
+    target = _egame_norm(game_name)
+    if not target:
+        return []
+    start = -1
+    for i, row in enumerate(rows):
+        if _up(row[0] if row else "") == "EGAME":
+            start = i
+            break
+    if start < 0:
+        return []
+    n = len(rows)
+    i = start + 1
+    while i < n:
+        col_a = str((rows[i][0] if rows[i] else "") or "").strip()
+        up = _up(col_a)
+        if col_a and any(e in up for e in _EGAME_SECTION_ENDS):
+            break  # left the EGAME section
+        if col_a and "/" in col_a:  # a games-header row
+            games = {_egame_norm(g) for g in col_a.split("/") if g.strip()}
+            if target in games:
+                names: List[str] = []
+                blanks = 0
+                j = i + 1
+                while j < n:
+                    ca = str((rows[j][0] if rows[j] else "") or "").strip()
+                    if not ca:
+                        blanks += 1
+                        if blanks >= 2:
+                            break
+                        j += 1
+                        continue
+                    blanks = 0
+                    if any(e in _up(ca) for e in _EGAME_SECTION_ENDS) or "/" in ca:
+                        break  # next group / next section
+                    nm = _duty._clean_person_name(ca)
+                    if nm:
+                        names.append(nm)
+                    j += 1
+                return names
+        i += 1
+    return []
+
+
+def resolve_egame_contacts(game_name: str, tenant_token: str) -> List[Tuple[str, str]]:
+    """Ordered ``[(name, open_id)]`` for an e-game (open_id '' when the name isn't in the directory)."""
+    rows = _duty._read_shift_rows(tenant_token)
+    if not rows:
+        return []
+    return [
+        (nm, _dir.resolve_open_id_for_name(tenant_token, nm))
+        for nm in parse_egame_contacts(rows, game_name)
+    ]
+
+
 def _ordinal(n: int) -> str:
     if 10 <= (n % 100) <= 20:
         suf = "th"
@@ -226,9 +300,9 @@ def _ring_contact(session_source: str, pair: Tuple[str, str], tenant_token: str,
     )
 
 
-def _contacts_list_md(label: str, pairs: List[Tuple[str, str]]) -> str:
-    """Numbered roster of ALL check persons for the game, shown under the 'Calling…' line."""
-    lines = [f"SRE {label} check persons"]
+def _contacts_list_md(header: str, pairs: List[Tuple[str, str]]) -> str:
+    """Numbered roster of ALL check persons for the game, under the ``header`` title line."""
+    lines = [header]
     for i, (nm, _oid) in enumerate(pairs):
         lines.append(f"{i + 1}. {nm}")
     return "\n".join(lines)
@@ -244,9 +318,9 @@ def _command_hints_md() -> List[str]:
 
 
 def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str]], idx: int,
-                    status: str) -> Dict[str, str]:
-    """Post the 'Calling <1st contact>' card WITH the numbered check-person roster + the /c hint, and
-    return the created message ids for multi-key thread registration."""
+                    status: str, *, roster_header: str) -> Dict[str, str]:
+    """Post the 'Calling <1st contact>' card WITH the numbered check-person roster (titled
+    ``roster_header``) + the /c hint, and return the created message ids for thread registration."""
     name, oid = pairs[idx]
     # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
     who = f'<at id={oid}></at>' if oid else name
@@ -260,7 +334,7 @@ def _calling_prompt(mid: str, token: str, label: str, pairs: List[Tuple[str, str
     else:
         head = f"Calling {who} ({_ordinal(idx + 1)} check person {label}) into the meeting"
     if oid and status not in ("no_session",):
-        body = "\n\n" + _contacts_list_md(label, pairs) + "\n" + "\n".join(_command_hints_md())
+        body = "\n\n" + _contacts_list_md(roster_header, pairs) + "\n" + "\n".join(_command_hints_md())
     else:
         body = ""
     return _reply(mid, token, head + body)
@@ -310,6 +384,58 @@ def _on_timeout(thread_key: str, idx: int) -> None:
     log.info("sre_game: timeout cmd=%s idx=%s name=%s (no join in %ss)", st.get("cmd"), idx, name, to)
 
 
+def _begin_escalation(
+    esc_key: str,
+    label: str,
+    roster_header: str,
+    pairs: List[Tuple[str, str]],
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    command_message_id: str,
+    thread_root: str,
+    operator_open_id: str,
+    tok: str,
+) -> None:
+    """Shared escalation start: retire any prior escalation for the SAME chat + ``esc_key``, ring the
+    1st contact, post the card (roster titled ``roster_header``), register the thread keys, and arm the
+    90s no-join timeout. Used by both /srebac (SRE Game) and /segame (EGAME)."""
+    with _ESC_LOCK:
+        _seen: set = set()
+        prior = []
+        for st in _ESC_BY_THREAD.values():
+            if id(st) in _seen:
+                continue
+            _seen.add(id(st))
+            if st.get("session_source") == session_source and st.get("cmd") == esc_key:
+                prior.append(st)
+    for st in prior:
+        _pop_state(st)
+    primary = (command_message_id or thread_root or "").strip()
+    state: Dict[str, Any] = {
+        "cmd": esc_key, "label": label, "pairs": pairs, "idx": 0,
+        "session_source": session_source, "notify_chat": notify_chat, "ts": time.time(),
+        "awaiting_oid": pairs[0][1], "reached": False, "timer": None, "primary": primary, "_keys": [],
+        # Every open_id we've called (1st contact + any /c) mapped to a display name, so a VC join by
+        # ANY of them — not just the current contact — posts "<name> joined the meeting".
+        "watched": {},
+    }
+    _watch(state, pairs[0][1], pairs[0][0])
+    status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
+    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status, roster_header=roster_header)
+    # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
+    # thread root is NOT always the command message, so a /c reply may carry any of these as its root.
+    _register(state, [command_message_id, thread_root,
+                      ids.get("message_id", ""), ids.get("root_id", ""), ids.get("thread_id", "")])
+    log.info(
+        "sre_game: started key=%s label=%s contacts=%s keys=%s status=%s",
+        esc_key, label, [p[0] for p in pairs], [k[-8:] for k in state["_keys"]], status,
+    )
+    if pairs[0][1] and status not in ("no_session", "disabled") and primary:
+        _arm_timeout(primary, 0)
+
+
 def start_sre_game_escalation(
     cmd: str,
     session_source: str,
@@ -321,7 +447,7 @@ def start_sre_game_escalation(
     operator_open_id: str = "",
     tenant_token: str = "",
 ) -> None:
-    """Ring the 1st contact for ``cmd``, open a thread escalation, and watch 90s for them to join."""
+    """Ring the 1st contact for ``cmd`` (SRE Game section), open a thread escalation, watch 90s to join."""
     if not _config.get_p0_vc_ring_enabled():
         log.info("sre_game: ignored (P0_VC_RING_ENABLED off) cmd=%s", (cmd or "").strip().lower())
         return
@@ -332,41 +458,46 @@ def start_sre_game_escalation(
     if not pairs:
         _reply(command_message_id, token, f"No {label} SRE contacts found in the 'SRE Game' section.")
         return
-    # Retire any prior escalation for the SAME chat + game — a repeated /srebac supersedes the old one,
-    # so stale states don't pile up and steal the join-detect / thread replies.
-    with _ESC_LOCK:
-        _seen: set = set()
-        prior = []
-        for st in _ESC_BY_THREAD.values():
-            if id(st) in _seen:
-                continue
-            _seen.add(id(st))
-            if st.get("session_source") == session_source and st.get("cmd") == c:
-                prior.append(st)
-    for st in prior:
-        _pop_state(st)
-    primary = (command_message_id or thread_root or "").strip()
-    state: Dict[str, Any] = {
-        "cmd": c, "label": label, "pairs": pairs, "idx": 0,
-        "session_source": session_source, "notify_chat": notify_chat, "ts": time.time(),
-        "awaiting_oid": pairs[0][1], "reached": False, "timer": None, "primary": primary, "_keys": [],
-        # Every open_id we've called (1st contact + any /n, /r, /c) mapped to a display name, so a VC
-        # join by ANY of them — not just the current contact — posts "<name> joined the meeting".
-        "watched": {},
-    }
-    _watch(state, pairs[0][1], pairs[0][0])
-    status = _ring_contact(session_source, pairs[0], tok, operator_open_id)
-    ids = _calling_prompt(command_message_id, token, label, pairs, 0, status)
-    # Register under the command message, its root, AND the bot-reply's message/root/thread id — Lark's
-    # thread root is NOT always the command message, so a /c reply may carry any of these as its root.
-    _register(state, [command_message_id, thread_root,
-                      ids.get("message_id", ""), ids.get("root_id", ""), ids.get("thread_id", "")])
-    log.info(
-        "sre_game: started cmd=%s label=%s contacts=%s keys=%s status=%s",
-        c, label, [p[0] for p in pairs], [k[-8:] for k in state["_keys"]], status,
+    _begin_escalation(
+        c, label, f"SRE {label} check persons", pairs, session_source, notify_chat, token,
+        command_message_id=command_message_id, thread_root=thread_root,
+        operator_open_id=operator_open_id, tok=tok,
     )
-    if pairs[0][1] and status not in ("no_session", "disabled") and primary:
-        _arm_timeout(primary, 0)
+
+
+def start_egame_escalation(
+    game_name: str,
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    command_message_id: str,
+    thread_root: str = "",
+    operator_open_id: str = "",
+    tenant_token: str = "",
+) -> None:
+    """Ring the 1st contact handling ``game_name`` in the EGAME section (e.g. /segame Bakunawa); same
+    escalation engine as /srebac (ring 1st, list, /c). Game match is EXACT ('Bakunawa' != 'Bakunawa 2')."""
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("sre_game: egame ignored (P0_VC_RING_ENABLED off) game=%r", game_name)
+        return
+    g = (game_name or "").strip()
+    tok = (tenant_token or token or "").strip()
+    if not g:
+        _reply(command_message_id, token, "Usage: /segame <game>, e.g. /segame Bakunawa")
+        return
+    pairs = resolve_egame_contacts(g, tok)
+    if not pairs:
+        _reply(
+            command_message_id, token,
+            f"No EGAME contacts found for '{g}'. Check the exact game name in the 'EGAME' section.",
+        )
+        return
+    _begin_escalation(
+        f"egame:{_egame_norm(g)}", g, f"{g} (EGAME) check persons", pairs, session_source, notify_chat,
+        token, command_message_id=command_message_id, thread_root=thread_root,
+        operator_open_id=operator_open_id, tok=tok,
+    )
 
 
 def maybe_handle_sre_game_reply(

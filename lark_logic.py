@@ -1157,6 +1157,27 @@ def process_message(
                 tagged_open_ids=[x for x in (kwargs.get("mention_open_ids") or []) if x],
             ):
                 return
+        # /segame <game> — EGAME escalation: ring the 1st contact handling that EXACT e-game (e.g.
+        # "/segame Bakunawa", "/segame Bakunawa 2", "/segame Color Land"). Takes the REST of the line as
+        # the game name (may be multi-word), so it's handled here before the whitespace-split mixed
+        # parser. Requires the leading slash like every ring command.
+        if _ring_is_slash and _ring_first == "segame":
+            _after = _ring_raw.lstrip("/").strip().split(None, 1)
+            _game = _after[1].strip() if len(_after) > 1 else ""
+            from features.recording.sre_game import start_egame_escalation
+
+            start_egame_escalation(
+                _game,
+                session_source,
+                notify_chat,
+                token,
+                command_message_id=message_id,
+                thread_root=root_id,
+                operator_open_id=user_id,
+                tenant_token=tenant_token or token,
+            )
+            return
+
         # Mixed commands in ONE message: "/srebac sfpms cpms" or "/scpms /fpms /c @Juan @Maria" — fire
         # EACH into the active meeting. SRE-game commands (srebac …) start an escalation; duty/direct
         # commands (scpms, fpms, dba, /c …) page their people. A LEADING SLASH is REQUIRED to trigger
