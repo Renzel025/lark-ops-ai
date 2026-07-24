@@ -1121,26 +1121,29 @@ def build_help_commands_card() -> Dict[str, Any]:
 
 
 def _ring_commands_guide_md() -> str:
-    """VC ring-command cheat-sheet (DM guide, shown before the overview card). Plain text — no bold
-    markers or emojis, matching the ring status cards' style."""
+    """VC ring-command cheat-sheet (DM guide, shown before the overview card). A LEADING SLASH is
+    required; commands can be mixed in one message (e.g. /cpms fpms sfpms fe)."""
     return (
-        "Type these in the incident group (with the P0 meeting running) to call people into the meeting.\n\n"
-        "Duty / on-call (today's on-shift)\n"
-        "• /dba — DBA duty\n"
-        "• /sosm — Liveslot SRE duty\n"
-        "• /fe — Frontend duty\n"
-        "• /fpms — FPMS duty\n"
-        "• /pms — PMS support (first level)\n"
-        "• /scpms /sfpms /sfe /spms — SRE duty (CPMS / FPMS / FE / PMS)\n\n"
+        "Type these in the incident group (with the P0 meeting running) to call people into the meeting. "
+        "A leading slash is required; you can mix several in one message (e.g. /cpms fpms sfpms fe).\n\n"
+        "Team duty (today's roster)\n"
+        "• /fe — Frontend · /fpms — FPMS · /pms — PMS (first level) · /cpms — CPMS\n\n"
+        "SRE duty\n"
+        "• /scpms /sfpms /sfe /spms — SRE (CPMS / FPMS / FE / PMS)\n\n"
+        "Shift sections (today's on-shift)\n"
+        "• /dba — DBA · /sosm — Liveslot SRE\n\n"
         "Direct\n"
-        "• /c @Name — call the people you tag\n"
-        "• /m — major-P0 check persons\n"
-        "• /e — escalation contacts\n\n"
-        "Game SRE escalation (calls the 1st contact, then escalate)\n"
+        "• /c @Name — call the people you tag · /m — major-P0 check persons · /e — escalation contacts\n\n"
+        "SRE game escalation (rings the 1st contact; /c to reach others)\n"
         "• /srebac Baccarat · /srer Roulette · /sredt Dragon Tiger · /sresic Sicbo · /srebl Blackjack\n"
-        "• /srepai Paigow · /srecg Colorgame · /srepp Pulaputi · /sredb Dropball · /sreib In Between\n"
-        "• In the reply thread: /n next contact · /r @checkperson retry a specific one\n"
-        "  (when they join the meeting it auto-confirms — no reply needed)"
+        "• /srepai Paigow · /srecg Colorgame · /srepp Pulaputi · /sredb Dropball · /sreib In Between\n\n"
+        "PO product-manager escalation (rings the 1st product manager)\n"
+        "• /pobac Baccarat · /por Roulette · /podt Dragon Tiger · /posic Sic Bo · /pobl Black Jack\n"
+        "• /popai Pai Gow · /pocg Color Game · /popp Pula Puti · /podb Drop Ball · /poib InBetween\n\n"
+        "EGAME escalation\n"
+        "• /segame <game> — e.g. /segame Bakunawa (any EGAME game, by exact name)\n\n"
+        "In the reply thread: /c @name to call someone else from the list "
+        "(a contact auto-confirms when they join — no reply needed)."
     )
 
 
