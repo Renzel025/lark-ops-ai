@@ -482,12 +482,67 @@ def parse_pms_levels(rows: List[List[Any]], today: datetime.date) -> List[Tuple[
 
 
 # --------------------------------------------------------------------------------------------------
+# CPMS monthly calendar (/cpms) — one TAB per month ("MM-YYYY"); each day cell is
+# "<day>\n<primary>\nbk: <backup>". Rings today's PRIMARY; lists [primary, backup].
+# --------------------------------------------------------------------------------------------------
+def _cpms_day_names(rows: List[List[Any]], today: datetime.date) -> Tuple[str, str]:
+    """``(primary, backup)`` for today's day cell in a CPMS monthly calendar: match the cell whose
+    FIRST line is today's day number; primary = 2nd line, backup = the 'bk: <name>' line."""
+    day = str(today.day)
+    for row in rows or []:
+        for cell in (row or []):
+            s = str(cell if cell is not None else "").replace("\r", "\n").strip()
+            if not s:
+                continue
+            lines = [ln.strip() for ln in s.split("\n") if ln.strip()]
+            if not lines or lines[0] != day:
+                continue
+            primary = _clean_person_name(lines[1]) if len(lines) > 1 else ""
+            backup = ""
+            for ln in lines[2:]:
+                low = ln.lower()
+                if low.startswith("bk") or "backup" in low:
+                    backup = _clean_person_name(ln.split(":", 1)[-1] if ":" in ln else ln)
+                    break
+            return primary, backup
+    return "", ""
+
+
+def parse_cpms_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
+    """CPMS monthly calendar -> ``[today's PRIMARY]`` (the person the ring calls). The backup + roster
+    are surfaced separately by ``resolve_duty_contact_slots``."""
+    primary, _bk = _cpms_day_names(rows, today)
+    return [primary] if primary else []
+
+
+def _cpms_month_tab_candidates(today: datetime.date) -> List[str]:
+    """Candidate CPMS tab titles for today's month (the sheet mixes '07-2026' / '7-2026' / 'July-2026')."""
+    import calendar
+
+    m, y = today.month, today.year
+    return [f"{m:02d}-{y}", f"{m}-{y}", f"{calendar.month_name[m]}-{y}"]
+
+
+def _resolve_cpms_sheet_id(tenant_token: str, token: str, sheet_name: str, today: datetime.date) -> str:
+    """Resolve the CURRENT month's CPMS tab id. An explicit DUTY_ROSTER_CPMS_SHEET_NAME wins; else
+    probe the month-tab title formats (strict match, so a miss doesn't fall back to the first tab)."""
+    for cand in ([sheet_name] if sheet_name else []) + _cpms_month_tab_candidates(today):
+        sid = _lark.resolve_sheet_id(tenant_token, token, cand, strict=True)
+        if sid:
+            log.info("duty_roster: cpms month tab=%r sheet_id_tail=%s", cand, sid[-6:] if len(sid) > 6 else sid)
+            return sid
+    log.warning("duty_roster: cpms could not resolve current-month tab (tried %s)", _cpms_month_tab_candidates(today))
+    return ""
+
+
+# --------------------------------------------------------------------------------------------------
 # Live-read resolver for the fe/fpms/pms family
 # --------------------------------------------------------------------------------------------------
 _ROSTER: Dict[str, Tuple[str, Callable[[List[List[Any]], datetime.date], List[str]]]] = {
     "fe": ("DUTY_ROSTER_FE", parse_frontend_duty),
     "fpms": ("DUTY_ROSTER_FPMS", parse_fpms_duty),
     "pms": ("DUTY_ROSTER_PMS", parse_pms_duty),
+    "cpms": ("DUTY_ROSTER_CPMS", parse_cpms_duty),
 }
 
 
@@ -518,9 +573,14 @@ def resolve_duty_names(cmd: str, tenant_token: str) -> List[str]:
     if not token:
         log.warning("duty_roster: %s_SHEET_TOKEN not set", prefix)
         return []
+    today = datetime.date.today()
     if not sheet_id:
-        # Single-tab sheet: URL has no ?sheet= — resolve the sheet_id (by name, else first sheet).
-        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        # cpms = one TAB per month -> resolve the CURRENT month's tab; others: by name, else first tab.
+        if c == "cpms":
+            sheet_id = _resolve_cpms_sheet_id(tenant_token, token, sheet_name, today)
+        else:
+            # Single-tab sheet: URL has no ?sheet= — resolve the sheet_id (by name, else first sheet).
+            sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
         if not sheet_id:
             log.warning("duty_roster: %s could not resolve sheet_id (token/share/permission?)", prefix)
             return []
@@ -528,7 +588,6 @@ def resolve_duty_names(cmd: str, tenant_token: str) -> List[str]:
     if err or not rows:
         log.warning("duty_roster: %s read failed err=%s rows=%s", c, err, len(rows or []))
         return []
-    today = datetime.date.today()
     # Debug: show what the values API actually returned so a []-result parse can be diagnosed.
     head = [[str(x)[:10] for x in (r or [])[:14]] for r in rows[:6]]
     log.info("duty_roster: %s read rows=%s head=%r", c, len(rows), head)
@@ -584,15 +643,18 @@ def resolve_duty_contact_slots(cmd: str, tenant_token: str) -> List[Tuple[str, L
     token, sheet_id, sheet_name, rng = _roster_env(prefix)
     if not token:
         return []
+    today = datetime.date.today()
     if not sheet_id:
-        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if c == "cpms":
+            sheet_id = _resolve_cpms_sheet_id(tenant_token, token, sheet_name, today)
+        else:
+            sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
         if not sheet_id:
             return []
     rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
     if err or not rows:
         log.warning("duty_roster: %s contact-slots read failed err=%s", c, err)
         return []
-    today = datetime.date.today()
 
     def _uniq(names: List[str]) -> List[str]:
         out: List[str] = []
@@ -606,6 +668,14 @@ def resolve_duty_contact_slots(cmd: str, tenant_token: str) -> List[Tuple[str, L
 
     if c == "pms":
         return [(lbl, [nm]) for lbl, nm in parse_pms_levels(rows, today)]
+    if c == "cpms":
+        primary, backup = _cpms_day_names(rows, today)
+        cpms_slots: List[Tuple[str, List[str]]] = []
+        if primary:
+            cpms_slots.append((_slot_date_label(0, today), [primary]))
+        if backup:
+            cpms_slots.append(("backup", [backup]))
+        return cpms_slots
 
     slots: List[Tuple[str, List[str]]] = []
     for offset in (0, 1, 2):
