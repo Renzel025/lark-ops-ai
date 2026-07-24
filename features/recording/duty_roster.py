@@ -433,6 +433,54 @@ def parse_pms_duty(rows: List[List[Any]], today: datetime.date) -> List[str]:
     return []
 
 
+def parse_pms_levels(rows: List[List[Any]], today: datetime.date) -> List[Tuple[str, str]]:
+    """PMS weekly roster escalation levels: find the header row (Start / End / First|Second|Third
+    Level columns), then the week whose [Start, End] contains today, and return the ordered
+    ``[(level_label, name), ...]`` for whichever level columns are present and non-empty.
+
+    Unlike fe/fpms (which escalate across the next days), PMS escalates by LEVEL within the SAME
+    week — the level columns sit side by side on the one matching week row."""
+    hdr_idx = ci_start = ci_end = -1
+    level_cols: List[Tuple[str, int]] = []  # (display label, col idx), in first->second->third order
+    for i, row in enumerate(rows):
+        low = [re.sub(r"\s+", " ", str(c or "").strip().lower()) for c in (row or [])]
+        cs = ce = -1
+        found: Dict[str, int] = {}
+        for j, v in enumerate(low):
+            if v == "start" and cs < 0:
+                cs = j
+            elif v == "end" and ce < 0:
+                ce = j
+            elif v.startswith("first level") and "first" not in found:
+                found["first"] = j
+            elif v.startswith("second level") and "second" not in found:
+                found["second"] = j
+            elif v.startswith("third level") and "third" not in found:
+                found["third"] = j
+        if cs >= 0 and ce >= 0 and "first" in found:
+            hdr_idx, ci_start, ci_end = i, cs, ce
+            for key, lbl in (("first", "First Level"), ("second", "Second Level"), ("third", "Third Level")):
+                if key in found:
+                    level_cols.append((lbl, found[key]))
+            break
+    if hdr_idx < 0:
+        return []
+    for row in rows[hdr_idx + 1:]:
+        def g(idx: int) -> Any:
+            return row[idx] if 0 <= idx < len(row) else None
+
+        if not str(g(level_cols[0][1]) or "").strip():
+            continue
+        if _pms_week_contains(today, g(ci_start), g(ci_end)):
+            out: List[Tuple[str, str]] = []
+            for lbl, col in level_cols:
+                nm = str(g(col) or "").strip()
+                if nm:
+                    out.append((lbl, nm))
+            return out
+    return []
+
+
 # --------------------------------------------------------------------------------------------------
 # Live-read resolver for the fe/fpms/pms family
 # --------------------------------------------------------------------------------------------------
@@ -509,6 +557,61 @@ def resolve_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], List[
     if unresolved:
         log.warning("duty_roster: %s names not in directory: %s", cmd, unresolved)
     return open_ids, unresolved
+
+
+def _slot_date_label(offset: int, d: datetime.date) -> str:
+    """Slot label for the ring contact list: 'today (Jul 24)' / 'tomorrow (Jul 25)' / 'Jul 26'."""
+    date_str = f"{d.strftime('%b')} {d.day}"
+    when = {0: "today", 1: "tomorrow"}.get(offset, "")
+    return f"{when} ({date_str})" if when else date_str
+
+
+def resolve_duty_contact_slots(cmd: str, tenant_token: str) -> List[Tuple[str, List[str]]]:
+    """Ordered contact 'slots' (display names) for the ring prompt list — fe/fpms/pms only.
+
+    * fe / fpms -> today / tomorrow / day-after duty, each slot labelled with its date. The 1st slot
+      is who the ring actually calls; the next two are shown so the group sees who's up next.
+    * pms       -> First / Second / Third Level of the current week (side-by-side level columns).
+
+    Reads the roster sheet ONCE (parsing today/+1/+2 off the same rows for fe/fpms). Returns ``[]``
+    when the command has no roster or the sheet read fails. Names only — no directory lookup: the
+    list is for visibility, the actual VC ring resolves open_ids via ``resolve_duty_open_ids``."""
+    c = (cmd or "").strip().lower()
+    reg = _ROSTER.get(c)
+    if not reg:
+        return []
+    prefix, parser = reg
+    token, sheet_id, sheet_name, rng = _roster_env(prefix)
+    if not token:
+        return []
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            return []
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        log.warning("duty_roster: %s contact-slots read failed err=%s", c, err)
+        return []
+    today = datetime.date.today()
+
+    def _uniq(names: List[str]) -> List[str]:
+        out: List[str] = []
+        seen: Set[str] = set()
+        for nm in names:
+            key = (nm or "").strip()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
+    if c == "pms":
+        return [(lbl, [nm]) for lbl, nm in parse_pms_levels(rows, today)]
+
+    slots: List[Tuple[str, List[str]]] = []
+    for offset in (0, 1, 2):
+        d = today + datetime.timedelta(days=offset)
+        slots.append((_slot_date_label(offset, d), _uniq(parser(rows, d))))
+    return slots
 
 
 # --------------------------------------------------------------------------------------------------
