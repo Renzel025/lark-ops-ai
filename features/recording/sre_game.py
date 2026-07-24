@@ -170,13 +170,15 @@ def _egame_norm(s: Any) -> str:
     return re.sub(r"\s+", " ", str(s if s is not None else "").strip().lower())
 
 
-def parse_egame_contacts(rows: List[List[Any]], game_name: str) -> List[str]:
-    """Ordered contact NAMES for an e-game under the 'EGAME' section: find the group whose games-header
-    row (slash-separated) lists ``game_name`` as an EXACT token, then return the contact rows below it
-    (until the next games-header, a run of blanks, or the next section). 'Bakunawa' != 'Bakunawa 2'."""
-    target = _egame_norm(game_name)
-    if not target:
-        return []
+def _egame_squash(s: Any) -> str:
+    """Normalized name with RUNS of the same char collapsed ('makilling' -> 'makiling'), so a
+    doubled-letter typo still matches. Used only as a fallback + only when it's UNAMBIGUOUS."""
+    return re.sub(r"(.)\1+", r"\1", _egame_norm(s))
+
+
+def _egame_groups(rows: List[List[Any]]) -> List[Tuple[List[str], List[str]]]:
+    """``[(game_display_names, contact_names), …]`` for each group under the 'EGAME' section (a
+    slash-separated games-header row followed by its contact rows)."""
     start = -1
     for i, row in enumerate(rows):
         if _up(row[0] if row else "") == "EGAME":
@@ -184,37 +186,62 @@ def parse_egame_contacts(rows: List[List[Any]], game_name: str) -> List[str]:
             break
     if start < 0:
         return []
+    groups: List[Tuple[List[str], List[str]]] = []
     n = len(rows)
     i = start + 1
     while i < n:
         col_a = str((rows[i][0] if rows[i] else "") or "").strip()
-        up = _up(col_a)
-        if col_a and any(e in up for e in _EGAME_SECTION_ENDS):
+        if col_a and any(e in _up(col_a) for e in _EGAME_SECTION_ENDS):
             break  # left the EGAME section
         if col_a and "/" in col_a:  # a games-header row
-            games = {_egame_norm(g) for g in col_a.split("/") if g.strip()}
-            if target in games:
-                names: List[str] = []
-                blanks = 0
-                j = i + 1
-                while j < n:
-                    ca = str((rows[j][0] if rows[j] else "") or "").strip()
-                    if not ca:
-                        blanks += 1
-                        if blanks >= 2:
-                            break
-                        j += 1
-                        continue
-                    blanks = 0
-                    if any(e in _up(ca) for e in _EGAME_SECTION_ENDS) or "/" in ca:
-                        break  # next group / next section
-                    nm = _duty._clean_person_name(ca)
-                    if nm:
-                        names.append(nm)
+            display = [g.strip() for g in col_a.split("/") if g.strip()]
+            names: List[str] = []
+            blanks = 0
+            j = i + 1
+            while j < n:
+                ca = str((rows[j][0] if rows[j] else "") or "").strip()
+                if not ca:
+                    blanks += 1
+                    if blanks >= 2:
+                        break
                     j += 1
-                return names
+                    continue
+                blanks = 0
+                if any(e in _up(ca) for e in _EGAME_SECTION_ENDS) or "/" in ca:
+                    break  # next group / next section
+                nm = _duty._clean_person_name(ca)
+                if nm:
+                    names.append(nm)
+                j += 1
+            groups.append((display, names))
+            i = j
+            continue
         i += 1
-    return []
+    return groups
+
+
+def egame_game_names(rows: List[List[Any]]) -> List[str]:
+    """All EGAME game names (display, in order) — shown as a hint when a typed name doesn't match."""
+    out: List[str] = []
+    for display, _names in _egame_groups(rows):
+        out.extend(display)
+    return out
+
+
+def parse_egame_contacts(rows: List[List[Any]], game_name: str) -> List[str]:
+    """Ordered contact NAMES for the e-game whose EGAME games-header lists ``game_name``. Match is
+    case/space-insensitive and EXACT ('Bakunawa' != 'Bakunawa 2'); as a fallback a doubled-letter typo
+    ('Maria Makiling' vs the sheet's 'Maria Makilling') is tolerated when it's UNAMBIGUOUS."""
+    target = _egame_norm(game_name)
+    if not target:
+        return []
+    groups = _egame_groups(rows)
+    for display, names in groups:
+        if target in {_egame_norm(g) for g in display}:
+            return names
+    tsq = _egame_squash(game_name)
+    squashed = [names for display, names in groups if tsq in {_egame_squash(g) for g in display}]
+    return squashed[0] if len(squashed) == 1 else []
 
 
 def resolve_egame_contacts(game_name: str, tenant_token: str) -> List[Tuple[str, str]]:
@@ -617,10 +644,10 @@ def start_egame_escalation(
         return
     pairs = resolve_egame_contacts(g, tok)
     if not pairs:
-        _reply(
-            command_message_id, token,
-            f"No EGAME contacts found for '{g}'. Check the exact game name in the 'EGAME' section.",
-        )
+        rows = _duty._read_shift_rows(tok)
+        avail = egame_game_names(rows) if rows else []
+        hint = (" Available games: " + ", ".join(avail) + ".") if avail else " Check the 'EGAME' section."
+        _reply(command_message_id, token, f"No EGAME contacts found for '{g}'.{hint}")
         return
     _begin_escalation(
         f"egame:{_egame_norm(g)}", g, f"{g} (EGAME) check persons", pairs, session_source, notify_chat,
