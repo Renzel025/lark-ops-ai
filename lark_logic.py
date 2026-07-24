@@ -1034,7 +1034,7 @@ def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
     (e.g. "@bot pms is down"), only slash-prefixed tokens count, so casual chat can never page.
     (@mentions are already stripped from ``ring_raw``; tagged targets come from mention_open_ids.)
     """
-    from features.recording.sre_game import is_sre_game_command
+    from features.recording.sre_game import is_sre_game_command, is_po_game_command
 
     toks = [t for t in (ring_raw or "").split() if t]
 
@@ -1042,7 +1042,7 @@ def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
         return tok.lstrip("/").strip().lower()
 
     def _known(c: str) -> bool:
-        return bool(is_sre_game_command(c) or c == "c" or RING_CMD_RE.match(c))
+        return bool(is_sre_game_command(c) or is_po_game_command(c) or c == "c" or RING_CMD_RE.match(c))
 
     has_prose = any(not _known(_cmd(t)) for t in toks)
     game: List[str] = []
@@ -1055,7 +1055,7 @@ def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
         c = _cmd(tok)
         if not c:
             continue
-        if is_sre_game_command(c):
+        if is_sre_game_command(c) or is_po_game_command(c):
             if c not in gseen:
                 gseen.add(c)
                 game.append(c)
@@ -1197,11 +1197,16 @@ def process_message(
                 len(_direct),
                 chat_id[-8:] if chat_id else "",
             )
-            from features.recording.sre_game import start_sre_game_escalation
+            from features.recording.sre_game import (
+                is_po_game_command as _is_po,
+                start_po_game_escalation,
+                start_sre_game_escalation,
+            )
             from features.recording.vc_ring import handle_ring_commands_batch
 
             for _gc in _game_cmds:
-                start_sre_game_escalation(
+                _start_game = start_po_game_escalation if _is_po(_gc) else start_sre_game_escalation
+                _start_game(
                     _gc,
                     session_source,
                     notify_chat,

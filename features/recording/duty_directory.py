@@ -44,6 +44,13 @@ _SRE_CACHE: Dict[str, Set[str]] = {}
 _SRE_CACHE_TS = 0.0
 _SRE_LOCK = threading.RLock()
 
+# Name-alias tab (SHEET NAME -> REAL NAME): {normalized_sheet_name: real_name}, TTL-cached. Maps roster
+# shortcut names to the real name used in the OpenID directory. Empty when unconfigured.
+_ALIAS_CACHE: Dict[str, str] = {}
+_ALIAS_CACHE_TS = 0.0
+_ALIAS_LOADED = False
+_ALIAS_LOCK = threading.RLock()
+
 
 def normalize_name(name: str) -> str:
     """Case/space-insensitive key so 'Guan  Zhong' and 'guan zhong' match the same row."""
@@ -137,17 +144,79 @@ def get_directory(tenant_token: str) -> Dict[str, str]:
         return dict(_DIR_CACHE)
 
 
+def _alias_cfg() -> Tuple[str, str, str, str]:
+    _config.reload_env_runtime()
+    # Same spreadsheet as the OpenID directory; a different ?sheet= (the "Real names" tab).
+    token = (os.getenv("DUTY_DIRECTORY_SHEET_TOKEN") or "").strip()
+    sheet_id = (os.getenv("DUTY_DIRECTORY_ALIAS_SHEET_ID") or "").strip()
+    sheet_name = (os.getenv("DUTY_DIRECTORY_ALIAS_SHEET_NAME") or "Real names").strip()
+    rng = (os.getenv("DUTY_DIRECTORY_ALIAS_RANGE") or "A:B").strip()
+    return token, sheet_id, sheet_name, rng
+
+
+def _fetch_alias_map(tenant_token: str) -> Dict[str, str]:
+    token, sheet_id, sheet_name, rng = _alias_cfg()
+    if not token:
+        return {}
+    if not sheet_id:
+        sheet_id = _lark.resolve_sheet_id(tenant_token, token, sheet_name)
+        if not sheet_id:
+            return {}
+    rows, err = _lark.read_sheets_values_batch(tenant_token, token, f"{sheet_id}!{rng}")
+    if err or not rows:
+        return {}
+    header = list(rows[0] or [])
+    ci_short = _col_index(header, "sheet name", "shortcut", "alias")
+    ci_real = _col_index(header, "real name", "real", "full name")
+    if ci_short < 0:
+        ci_short = 0  # default: col A = sheet name, col B = real name
+    if ci_real < 0:
+        ci_real = 1
+    out: Dict[str, str] = {}
+    for r in rows[1:]:
+        cells = [str(c or "").strip() for c in (r or [])]
+        short = normalize_name(cells[ci_short] if ci_short < len(cells) else "")
+        real = (cells[ci_real] if ci_real < len(cells) else "").strip()
+        if short and real:
+            out[short] = real
+    log.info("duty_directory: loaded %s name aliases (sheet-name -> real-name)", len(out))
+    return out
+
+
+def get_alias_map(tenant_token: str) -> Dict[str, str]:
+    """``{normalized_sheet_name: real_name}`` from the optional Real-names tab, TTL-cached (empty
+    result is cached too, so an unconfigured alias tab doesn't re-hit the API every lookup)."""
+    global _ALIAS_CACHE, _ALIAS_CACHE_TS, _ALIAS_LOADED
+    now = time.time()
+    with _ALIAS_LOCK:
+        if _ALIAS_LOADED and (now - _ALIAS_CACHE_TS) < _DIR_TTL_SEC:
+            return dict(_ALIAS_CACHE)
+    mp = _fetch_alias_map(tenant_token)
+    with _ALIAS_LOCK:
+        _ALIAS_CACHE = mp
+        _ALIAS_CACHE_TS = now
+        _ALIAS_LOADED = True
+        return dict(_ALIAS_CACHE)
+
+
+def apply_alias(tenant_token: str, name: str) -> str:
+    """Map a roster SHEET NAME (shortcut) to its REAL NAME via the alias tab; ``name`` unchanged when
+    there is no alias (or the tab is unconfigured)."""
+    return get_alias_map(tenant_token).get(normalize_name(name)) or name
+
+
 def resolve_open_id_for_name(tenant_token: str, name: str) -> str:
-    """Directory ``open_id`` for a roster name, or '' when unknown."""
-    return get_directory(tenant_token).get(normalize_name(name), "")
+    """Directory ``open_id`` for a roster name (SHEET NAME -> REAL NAME via the alias tab first), or ''."""
+    real = apply_alias(tenant_token, name)
+    return get_directory(tenant_token).get(normalize_name(real), "")
 
 
 def resolve_open_ids_for_names(tenant_token: str, names) -> Dict[str, str]:
-    """``{original_name: open_id}`` for the names that are in the directory (others omitted)."""
+    """``{original_name: open_id}`` for the names in the directory (alias-mapped first; others omitted)."""
     mp = get_directory(tenant_token)
     out: Dict[str, str] = {}
     for nm in names or []:
-        oid = mp.get(normalize_name(nm))
+        oid = mp.get(normalize_name(apply_alias(tenant_token, nm)))
         if oid:
             out[nm] = oid
     return out
