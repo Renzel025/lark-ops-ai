@@ -361,16 +361,14 @@ def parse_po_game_managers(rows: List[List[Any]], game_name: str) -> List[str]:
         if target not in game_lines:
             continue
         names: List[str] = []
+        raw_cells: List[str] = []
         for col in pm_cols:
-            names.extend(_strip_at_names(row[col] if col < len(row) else ""))
-        seen: set = set()
-        out: List[str] = []
-        for nm in names:
-            k = _duty._norm_name(nm)
-            if k and k not in seen:
-                seen.add(k)
-                out.append(nm)
-        return out
+            cell = row[col] if col < len(row) else ""
+            raw_cells.append(str(cell)[:40])
+            names.extend(_strip_at_names(cell))
+        # Keep EVERY PM slot (1st/2nd/3rd), including repeats — the operator wants to see all of them.
+        log.info("po_game: %r pm_cols=%s raw=%r -> names=%s", game_name, pm_cols, raw_cells, names)
+        return names
     return []
 
 
@@ -411,14 +409,19 @@ def resolve_po_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, str
     rows = _read_game_issue_rows(tenant_token)
     if not rows:
         return []
-    names: List[str] = []
-    seen: set = set()
-    for game in games:
-        for nm in parse_po_game_managers(rows, game):
-            k = _duty._norm_name(nm)
-            if k and k not in seen:
-                seen.add(k)
-                names.append(nm)
+    if len(games) == 1:
+        # Single game: show ALL its PM slots (1st/2nd/3rd), including repeats — no dedup.
+        names = parse_po_game_managers(rows, games[0])
+    else:
+        # Multi-game token (pogm/pogz): MERGE the games' PMs, deduped so a shared PM isn't listed twice.
+        names = []
+        seen: set = set()
+        for game in games:
+            for nm in parse_po_game_managers(rows, game):
+                k = _duty._norm_name(nm)
+                if k and k not in seen:
+                    seen.add(k)
+                    names.append(nm)
     return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in names]
 
 
