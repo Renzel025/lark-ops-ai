@@ -295,7 +295,7 @@ def _post_ring_card(
         _lark.post_card_to_chat(notify_chat, token, card)
 
 
-def _duty_contact_list_md(c: str, tok: str) -> str:
+def _duty_contact_list_md(c: str, tok: str, *, skip_first: bool = False) -> str:
     """Numbered contact-list block for a duty command, e.g. for fe/fpms::
 
           1. Alice — today (Jul 24)
@@ -304,23 +304,27 @@ def _duty_contact_list_md(c: str, tok: str) -> str:
 
     fe/fpms show today/tomorrow/day-after duty; pms shows First/Second/Third Level of this week; the
     SRE variants (sfpms/spms/scpms/sfe) list everyone who covers that team (no dates — the SRE Handler
-    tab is dateless). Empty string when ``c`` has no such list or nothing resolves (sheet miss) — the
-    caller then falls back to its plain one-line @mention status."""
+    tab is dateless). ``skip_first`` drops the 1st entry (the contact already shown/called at the top of
+    the card) and keeps the ORIGINAL numbering (2., 3., …) so the block reads as the "other duties".
+    Empty string when ``c`` has no list, nothing resolves (sheet miss), or skip_first left nothing."""
     from features.recording import duty_roster as _duty
 
     try:
         if _duty.is_roster_command(c):
-            lines: List[str] = []
-            for n, (label, names) in enumerate(_duty.resolve_duty_contact_slots(c, tok), start=1):
-                who = ", ".join(names) if names else "(no one listed)"
-                lines.append(f"{n}. {who} — {label}")
-            return "\n".join(lines)
-        if _duty.is_sre_command(c):
-            names = _duty.resolve_sre_team_person_names(c, tok)
-            return "\n".join(f"{n}. {nm}" for n, nm in enumerate(names, start=1))
+            items = [
+                f"{n}. {(', '.join(names) if names else '(no one listed)')} — {label}"
+                for n, (label, names) in enumerate(_duty.resolve_duty_contact_slots(c, tok), start=1)
+            ]
+        elif _duty.is_sre_command(c):
+            items = [f"{n}. {nm}" for n, nm in enumerate(_duty.resolve_sre_team_person_names(c, tok), start=1)]
+        else:
+            return ""
     except Exception as e:  # pragma: no cover - never let a sheet hiccup break the ring
         log.warning("ring: contact-list failed cmd=%s err=%s", c, e)
-    return ""
+        return ""
+    if skip_first:
+        items = items[1:]
+    return "\n".join(items)
 
 
 def _ring_display_label(c: str) -> str:
@@ -353,9 +357,12 @@ def handle_ring_commands_batch(
         log.info("ring batch ignored (P0_VC_RING_ENABLED off) cmds=%s", cmds)
         return
     tok = (tenant_token or token or "").strip()
-    lines: List[str] = []
+    # TWO sections: the TOP groups every command's "who's being called NOW" line (team — @1st contact),
+    # so the contacted people sit together; the BOTTOM lists each team's OTHER duties (2nd, 3rd …) for
+    # reference, paged via /c.
+    top_lines: List[str] = []
+    bottom_blocks: List[str] = []
     any_ringing = False
-    saw_list = False
     for raw in cmds:
         c = (raw or "").strip().lower()
         if not c:
@@ -365,10 +372,10 @@ def handle_ring_commands_batch(
         )
         disp = _ring_display_label(c)
         if not wired:
-            lines.append(f"{disp} — not wired up yet")
+            top_lines.append(f"{disp} — not wired up yet")
             continue
         if not targets:
-            lines.append(f"{disp} — no one on duty / not configured")
+            top_lines.append(f"{disp} — no one on duty / not configured")
             continue
         if c == "m":
             _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
@@ -378,30 +385,32 @@ def handle_ring_commands_batch(
             session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
-        # Header line names the team and @mentions the FIRST contact being called now (today's duty /
-        # First Level / 1st SRE handler); the numbered list below shows the full roster for reference,
-        # and /c pages anyone else on it.
-        block = _duty_contact_list_md(c, tok)
-        if block:
-            saw_list = True
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
         head = f"{disp} — {ats}" if ats else disp
         if status == "no_session":
-            lines.append(f"{disp} — no active meeting")
-        elif status == "disabled":
-            lines.append(f"{disp} — ring disabled")
-        elif status == "queued_oauth":
-            lines.append(f"{head}\n{block}\n(queued; waiting for host authorization)"
-                         if block else f"{head} (queued; waiting for host authorization)")
+            top_lines.append(f"{disp} — no active meeting")
+            continue
+        if status == "disabled":
+            top_lines.append(f"{disp} — ring disabled")
+            continue
+        if status == "queued_oauth":
+            top_lines.append(f"{head} (queued; waiting for host authorization)")
         else:  # ringing
-            lines.append(f"{head}\n{block}" if block else head)
+            top_lines.append(head)
             any_ringing = True
-    if not lines or not token:
+        # BOTTOM: this team's other duties (2nd onward — the 1st is already the @mention above).
+        others = _duty_contact_list_md(c, tok, skip_first=True)
+        if others:
+            bottom_blocks.append(f"{disp}\n{others}")
+    if not top_lines or not token:
         return
-    if saw_list:
-        lines.append(_CONTACT_LIST_NOTE)
+    parts = ["\n".join(top_lines)]  # top: one line per command, grouped (no blank lines between)
+    if bottom_blocks:
+        parts.append("Other duties (tap /c @name to call):\n\n" + "\n\n".join(bottom_blocks))
+    if bottom_blocks or any_ringing:
+        parts.append(_CONTACT_LIST_NOTE)
     header = "Calling selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
-    body = "\n\n".join(lines)
+    body = "\n\n".join(parts)
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
     _post_ring_card(mid, notify_chat, token, header, body, template="blue" if any_ringing else "grey")
@@ -493,19 +502,19 @@ def handle_ring_command(
         template = "orange"
     else:  # ringing
         # Title names the team; the body @mentions the FIRST contact being called now, then (for
-        # fe/fpms/pms/SRE) the numbered roster + the /c reminder. The ring still calls only the resolved
+        # fe/fpms/pms/SRE) the team's OTHER duties + the /c reminder. The ring calls only the resolved
         # duty (above); the rest are shown for visibility. <at id=ou_xxx></at> is the card mention form.
         template = "blue"
-        block = _duty_contact_list_md(c, tok)
         when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
         title = f"Calling {label} {when}into the meeting now"
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
-        if block:
-            body = f"{ats}\n{block}\n\n{_CONTACT_LIST_NOTE}" if ats else f"{block}\n\n{_CONTACT_LIST_NOTE}"
-        elif ats:
-            body = ats
-        else:
-            body = "Paging the duty into the meeting now."
+        others = _duty_contact_list_md(c, tok, skip_first=True)
+        parts = [ats] if ats else []
+        if others:
+            parts.append("Other duties (tap /c @name to call):\n\n" + others)
+        if others or _duty.is_roster_command(c) or _duty.is_sre_command(c):
+            parts.append(_CONTACT_LIST_NOTE)
+        body = "\n\n".join(parts) if parts else "Paging the duty into the meeting now."
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     # Reply target: the caller-supplied message (mixed command → the /srebac thread) wins; otherwise the
