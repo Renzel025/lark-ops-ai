@@ -1122,25 +1122,26 @@ def build_help_commands_card() -> Dict[str, Any]:
 
 def _ring_commands_guide_md() -> str:
     """VC ring-command cheat-sheet (DM guide, shown before the overview card). Rendered by the card's
-    markdown component (headings / lists / inline code)."""
-    return """### Call Commands
+    markdown component; section titles are **bold** (not # headings) so the font matches the overview
+    card — Lark renders markdown headings much larger than body text."""
+    return """**Call Commands**
 
 Type these commands in the incident group **while the P0 meeting is running** to call people into the meeting. The bot will automatically contact the **current on-duty** members of the respective teams.
 
-#### Developer Duty
+**Developer Duty**
 
 * `/fe` — Frontend
 * `/fpms` — FPMS
 * `/pms` — PMS
 * `/cpms` — CPMS
 
-#### OM Duty
+**OM Duty**
 
 * `/scpms`, `/sfpms`, `/sfe`, `/spms` — CPMS / FPMS / FE / PMS SRE
 * `/dba` — DBA
 * `/sosm` — LiveSlot SRE
 
-#### Direct Commands
+**Direct Commands**
 
 * `/c @Name` — Calls the tagged person(s).
 * `/m` — Calls the Major P0 contact list **@Bk @Yang @Koo @YC @Wennie @Eden @Jun Meng @Jayden Liu**
@@ -1148,9 +1149,9 @@ Type these commands in the incident group **while the P0 meeting is running** to
 
 ---
 
-### Additional Commands for **Game urgent-游戏紧急群**
+**Additional Commands for Game urgent-游戏紧急群**
 
-#### SRE Game (rings the primary SRE contact)
+**SRE Game (rings the primary SRE contact)**
 
 * `/srebac` — Baccarat
 * `/srer` — Roulette
@@ -1163,7 +1164,7 @@ Type these commands in the incident group **while the P0 meeting is running** to
 * `/sredb` — Drop Ball
 * `/sreib` — In Between
 
-#### PO Product Manager (rings the primary Product Manager)
+**PO Product Manager (rings the primary Product Manager)**
 
 * `/pobac` — Baccarat
 * `/pobt` — Baccarat Tournament
@@ -1187,17 +1188,17 @@ Type these commands in the incident group **while the P0 meeting is running** to
 * `/pogz` — Tongits Plus/Texas Poker / Tongits Joker/Pusoy Plus/Lucky 9 Plus
 * `/po <game>` — any other game by its exact name (e.g. `/po Baccarat (if all tables are maintenance)`)
 
-#### EGAME SRE
+**EGAME SRE**
 
 * `/segame <game>` — For example: `/segame Bakunawa` (works with any EGAME title using its exact game name).
 
 ---
 
-### Reply Thread
+**Reply Thread**
 
 Use `/c @Name` in the reply thread to call additional people from the contact list. Once a contact joins the meeting, the bot automatically confirms their attendance—no reply is required.
 
-### Combining Commands
+**Combining Commands**
 
 You can combine multiple commands in a single message — just one leading slash. For example:
 
@@ -1205,7 +1206,7 @@ You can combine multiple commands in a single message — just one leading slash
 * `/c @Name1 @Name2 @Name3`
 * `/cpms fpms /c @Name1 @Name2`
 
-### If a Command Doesn't Work
+**If a Command Doesn't Work**
 
 If any command is not working, you can always use the `/c` command to call people directly. For example:
 
