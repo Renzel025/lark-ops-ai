@@ -51,20 +51,26 @@ SRE_GAME_CMD_RE = re.compile(
 # PO (Product-manager) game family — /po<game>, parallels /sre<game> but reads the SEPARATE
 # "Game Issue Emergency Contact" sheet and rings that game's PRODUCT MANAGERS (1st/2nd/3rd PM columns).
 # Token → the EXACT game name as written in that sheet's "Game" column.
-PO_GAME_HEADERS: Dict[str, str] = {
-    # Table / OTG games
-    "pobac": "Baccarat", "pobact": "Baccarat Tournament",
-    "pobacm": "Baccarat (if all tables are maintenance)",
-    "por": "Roulette", "podt": "Dragon Tiger", "posic": "Sic Bo", "pobl": "Black Jack",
-    "popai": "Pai Gow", "pocg": "Color Game", "popp": "Pula Puti", "podb": "Drop Ball",
-    "poib": "InBetween", "pohan": "Hantak",
-    # Live / slot / sports / gamezone
-    "poosm": "OSM", "poegs": "EGS", "poevo": "Evo Live Games", "poeeze": "EEZE Live Game",
-    "pomlv": "Marble Race: Las Vegas", "pomm": "Marble 5vs5: Monaco",
-    "popt": "Playtech Live Game", "posport": "SportBet/Ebet", "potong": "Tongits Plus/ Texas Poker",
+# Fixed /po<game> shortcut -> the exact game name(s) in the Game Issue sheet. A few tokens cover TWO
+# games (pogm = both Marble games; pogz = both Gamezone/Tongits lines) — their PMs are merged.
+PO_GAME_HEADERS: Dict[str, List[str]] = {
+    "pobac": ["Baccarat"], "pobt": ["Baccarat Tournament"], "por": ["Roulette"],
+    "podt": ["Dragon Tiger"], "posic": ["Sic Bo"], "pobl": ["Black Jack"], "popai": ["Pai Gow"],
+    "pocg": ["Color Game"], "popp": ["Pula Puti"], "podb": ["Drop Ball"], "poib": ["InBetween"],
+    "poht": ["Hantak"], "poosm": ["OSM"], "poegs": ["EGS"], "poev": ["Evo Live Games"],
+    "poez": ["EEZE Live Game"], "pogm": ["Marble Race: Las Vegas", "Marble 5vs5: Monaco"],
+    "popt": ["Playtech Live Game"], "posb": ["SportBet/Ebet"],
+    "pogz": ["Tongits Plus/ Texas Poker", "Tongits Joker / Pusoy Plus/ Lucky 9 Plus"],
 }
-PO_GAME_LABEL: Dict[str, str] = dict(PO_GAME_HEADERS)
-# Built from the keys so the token list stays in sync; ^…$ anchors so 'por' never matches 'posport'.
+PO_GAME_LABEL: Dict[str, str] = {
+    "pobac": "Baccarat", "pobt": "Baccarat Tournament", "por": "Roulette", "podt": "Dragon Tiger",
+    "posic": "Sic Bo", "pobl": "Black Jack", "popai": "Pai Gow", "pocg": "Color Game",
+    "popp": "Pula Puti", "podb": "Drop Ball", "poib": "InBetween", "poht": "Hantak",
+    "poosm": "OSM", "poegs": "EGS", "poev": "Evo Live Games", "poez": "EEZE Live Game",
+    "pogm": "Marble (Las Vegas / Monaco)", "popt": "Playtech Live Game", "posb": "SportBet/Ebet",
+    "pogz": "Gamezone (Tongits / Pusoy / Lucky 9)",
+}
+# Built from the keys so the token list stays in sync; ^…$ anchors so 'por' never matches 'posb'.
 PO_GAME_CMD_RE = re.compile(r"^(?:" + "|".join(PO_GAME_HEADERS) + r")$", re.IGNORECASE)
 
 
@@ -397,9 +403,23 @@ def resolve_po_game_contacts_by_name(game_name: str, tenant_token: str) -> List[
 
 
 def resolve_po_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, str]]:
-    """Ordered ``[(name, open_id)]`` product managers for a FIXED ``/po<game>`` command token."""
-    game = PO_GAME_HEADERS.get((cmd or "").strip().lower())
-    return resolve_po_game_contacts_by_name(game, tenant_token) if game else []
+    """Ordered ``[(name, open_id)]`` product managers for a FIXED ``/po<game>`` token — MERGES the PMs
+    of every game the token maps to (most map to one; pogm/pogz map to two), deduped, in order."""
+    games = PO_GAME_HEADERS.get((cmd or "").strip().lower())
+    if not games:
+        return []
+    rows = _read_game_issue_rows(tenant_token)
+    if not rows:
+        return []
+    names: List[str] = []
+    seen: set = set()
+    for game in games:
+        for nm in parse_po_game_managers(rows, game):
+            k = _duty._norm_name(nm)
+            if k and k not in seen:
+                seen.add(k)
+                names.append(nm)
+    return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in names]
 
 
 def _ordinal(n: int) -> str:
