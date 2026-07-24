@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
 from features.session import session as _session
@@ -273,6 +274,22 @@ def _resolve_ring(
 _CONTACT_LIST_NOTE = "/c @checkperson — use this if you want to contact someone else in the shift"
 
 
+def _post_ring_card(
+    reply_mid: str, notify_chat: str, token: str, title: str, body_md: str, *, template: str = "blue"
+) -> None:
+    """Post a duty-ring status as an interactive card (``build_ring_status_card``): title in the
+    coloured header, ``body_md`` as one ``lark_md`` div. Threaded under ``reply_mid`` (the command
+    message) when set, else posted to ``notify_chat``. No-op when there's nothing to say."""
+    if not token or not (body_md or "").strip():
+        return
+    card = _cards.build_ring_status_card(title, body_md, header_template=template)
+    mid = (reply_mid or "").strip()
+    if mid:
+        _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
+    else:
+        _lark.post_card_to_chat(notify_chat, token, card)
+
+
 def _duty_contact_list_md(c: str, tok: str) -> str:
     """Numbered contact-list block for a duty command, e.g. for fe/fpms::
 
@@ -291,11 +308,11 @@ def _duty_contact_list_md(c: str, tok: str) -> str:
             lines: List[str] = []
             for n, (label, names) in enumerate(_duty.resolve_duty_contact_slots(c, tok), start=1):
                 who = ", ".join(names) if names else "(no one listed)"
-                lines.append(f"  {n}. {who} — {label}")
+                lines.append(f"{n}. {who} — {label}")
             return "\n".join(lines)
         if _duty.is_sre_command(c):
             names = _duty.resolve_sre_team_person_names(c, tok)
-            return "\n".join(f"  {n}. {nm}" for n, nm in enumerate(names, start=1))
+            return "\n".join(f"{n}. {nm}" for n, nm in enumerate(names, start=1))
     except Exception as e:  # pragma: no cover - never let a sheet hiccup break the ring
         log.warning("ring: contact-list failed cmd=%s err=%s", c, e)
     return ""
@@ -378,13 +395,10 @@ def handle_ring_commands_batch(
     if saw_list:
         lines.append(_CONTACT_LIST_NOTE)
     header = "Calling selected duty persons into the meeting now…" if any_ringing else "Selected duty commands:"
-    msg = header + "\n\n" + "\n\n".join(lines)
+    body = "\n\n".join(lines)
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
-    if mid:
-        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
-    else:
-        _lark.post_text_to_chat(notify_chat, token, msg)
+    _post_ring_card(mid, notify_chat, token, header, body, template="blue" if any_ringing else "grey")
 
 
 def handle_ring_command(
@@ -414,14 +428,9 @@ def handle_ring_command(
     tok = (tenant_token or token or "").strip()
     _reply_mid = (reply_to_message_id or "").strip()
 
-    def _out_text(text: str) -> None:
-        """Post a plain-text status: threaded under the command message when mixed-invoked, else the group."""
-        if not token:
-            return
-        if _reply_mid:
-            _lark.post_text_reply_to_message(_reply_mid, token, text, reply_in_thread=True)
-        else:
-            _lark.post_text_to_chat(notify_chat, token, text)
+    def _out(title: str, body: str, *, template: str = "grey") -> None:
+        """Post a status card threaded under the command message when mixed-invoked, else to the group."""
+        _post_ring_card(_reply_mid, notify_chat, token, title, body, template=template)
 
     # Master gate: with VC ring disabled (prod default), silently ignore — no sheet reads, no reply.
     # This is the single choke point for every ring command (single and multi), so prod stays a no-op.
@@ -434,10 +443,10 @@ def handle_ring_command(
     )
     if not wired:
         # Recognized by RING_CMD_RE (e.g. cpms / pms) but no roster parser/config wired yet.
-        _out_text(f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.")
+        _out("Not wired up yet", f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.")
         return
     if not targets:
-        _out_text(f"No {label} configured yet ({unset_hint}). Ask an admin to set it.")
+        _out("Not configured", f"No {label} configured yet ({unset_hint}). Ask an admin to set it.", template="orange")
         return
 
     if c == "m":
@@ -466,31 +475,32 @@ def handle_ring_command(
         return
     is_ring_announcement = False
     if status == "disabled":
-        msg = "VC ring is disabled (set P0_VC_RING_ENABLED=1)."
+        title, body, template = "VC ring disabled", "Set P0_VC_RING_ENABLED=1 to enable ring commands.", "grey"
     elif status == "no_session":
-        msg = "No active meeting here yet — start a meeting first, then run this command."
+        title, body, template = "No active meeting", "Start a P0 meeting first, then run this command.", "orange"
     elif status == "no_targets":
-        msg = f"No valid {label} to call."
+        title, body, template = "Nothing to call", f"No valid {label} to call.", "orange"
     elif status == "queued_oauth":
-        msg = (
-            f"Queued a call to {label} — it will ring once the meeting host finishes the "
-            "one-time Lark authorization (the host just got a DM)."
-        )
+        title = "Queued — waiting for host authorization"
+        body = (f"{label} will ring once the meeting host finishes the one-time Lark authorization "
+                "(the host just got a DM).")
+        template = "orange"
     else:  # ringing
         # fe/fpms/pms: numbered today/tomorrow/day-after (or First/Second/Third Level) list; SRE
         # variants: everyone who covers the team. Plus the /c reminder. The ring still calls only the
-        # resolved duty (above); the rest are shown for visibility. Falls back to the @mention line if
-        # the sheet read misses (block == "").
+        # resolved duty (above); the rest are shown for visibility. Falls back to @mentions if the
+        # sheet read misses (block == "").
+        template = "blue"
         block = _duty_contact_list_md(c, tok)
+        when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
+        title = f"Calling {label} {when}into the meeting now…"
         if block:
-            msg = f"Calling {label} into the meeting now…\n\n{block}\n\n{_CONTACT_LIST_NOTE}"
-        elif targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
+            body = f"{block}\n\n{_CONTACT_LIST_NOTE}"
+        elif targets:
             # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
-            ats = " ".join(f'<at id={oid}></at>' for oid in targets)
-            when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
-            msg = f"Calling {label} {when}into the meeting now… {ats}"
+            body = " ".join(f"<at id={oid}></at>" for oid in targets)
         else:
-            msg = f"Calling {label} into the meeting now…"
+            body = "Paging the duty into the meeting now…"
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     # Reply target: the caller-supplied message (mixed command → the /srebac thread) wins; otherwise the
@@ -505,13 +515,9 @@ def handle_ring_command(
         _session.P0_SESSIONS[session_source] = sess
         if _session._session_disk.enabled():
             _session._session_disk.save_session(session_source, sess)
-    # Plain-text status (no "Inviting check person" card header) — threaded under the reply target:
-    # the /srebac command message for a mixed command, else the meeting-link message. The <at id=…>
-    # mentions still render in a text message.
-    if mid:
-        _lark.post_text_reply_to_message(mid, token, msg, reply_in_thread=True)
-    else:
-        _lark.post_text_to_chat(notify_chat, token, msg)
+    # Status card (title in the coloured header, body a lark_md div where <at id=…> mentions render) —
+    # threaded under the reply target: the command message for a mixed command, else the meeting-link one.
+    _post_ring_card(mid, notify_chat, token, title, body, template=template)
 
 
 def _filter_ring_targets(
