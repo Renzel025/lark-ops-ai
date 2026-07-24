@@ -744,6 +744,19 @@ def resolve_sre_team_person_names(cmd: str, tenant_token: str) -> List[str]:
     return _dir.get_sre_team_person_names(tenant_token, want)
 
 
+def resolve_sre_team_first_open_id(cmd: str, tenant_token: str) -> Tuple[str, str]:
+    """``(name, open_id)`` of the FIRST person (sheet order) covering ``cmd``'s SRE team — the one the
+    ring calls now (the rest are backups reachable via /c, and match the '1. …' shown in the card).
+    Returns ``("", "")`` when none resolve."""
+    from features.recording import duty_directory as _dir
+
+    names = resolve_sre_team_person_names(cmd, tenant_token)
+    if not names:
+        return "", ""
+    nm = names[0]
+    return nm, _dir.resolve_open_id_for_name(tenant_token, nm)
+
+
 def resolve_sre_duty_open_ids(cmd: str, tenant_token: str) -> Tuple[List[str], List[str]]:
     """``(open_ids, unresolved_names)`` for an SRE command: SRE-tab handlers for the team, optionally
     intersected with today's duty shift, then name -> open_id via the OpenID directory tab."""

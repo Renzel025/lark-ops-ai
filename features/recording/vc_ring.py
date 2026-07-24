@@ -242,12 +242,17 @@ def _resolve_ring(
         return (_config.get_p0_vc_ring_escalation_open_ids(),
                 "escalation contacts", "P0_VC_RING_ESCALATION_OPEN_IDS", True)
     if _duty.is_sre_command(c):
-        targets, _u = _duty.resolve_sre_duty_open_ids(c, tok)
         team = _duty.COMMAND_TEAM[c]
+        # Ring only the FIRST team member (sheet order) — matches the "1. …" shown in the card; the rest
+        # are backups paged via /c. Fall back to the on-shift/env-stub resolver's 1st when unresolved.
+        _nm, oid = _duty.resolve_sre_team_first_open_id(c, tok)
+        targets = [oid] if oid else []
         if not targets:
-            oid = _duty.get_duty_open_id(team)
-            if oid:
-                targets = [oid]
+            alt, _u = _duty.resolve_sre_duty_open_ids(c, tok)
+            if not alt:
+                fb = _duty.get_duty_open_id(team)
+                alt = [fb] if fb else []
+            targets = alt[:1]
         return (targets, f"duty SRE {team}",
                 f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
                 f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback", True)
@@ -373,28 +378,29 @@ def handle_ring_commands_batch(
             session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
-        # fe/fpms/pms show a numbered today/tomorrow/day-after (or level) list; SRE variants list
-        # everyone who covers the team — instead of @mentions. The ring still calls only the resolved
-        # duty (today's duty / First Level / SRE handler), resolved above.
+        # Header line names the team and @mentions the FIRST contact being called now (today's duty /
+        # First Level / 1st SRE handler); the numbered list below shows the full roster for reference,
+        # and /c pages anyone else on it.
         block = _duty_contact_list_md(c, tok)
         if block:
             saw_list = True
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
+        head = f"{disp} — {ats}" if ats else disp
         if status == "no_session":
             lines.append(f"{disp} — no active meeting")
         elif status == "disabled":
             lines.append(f"{disp} — ring disabled")
         elif status == "queued_oauth":
-            lines.append(f"{disp}\n{block}\n  (queued; waiting for host authorization)"
-                         if block else f"{disp} — {ats} (queued; waiting for host authorization)")
+            lines.append(f"{head}\n{block}\n(queued; waiting for host authorization)"
+                         if block else f"{head} (queued; waiting for host authorization)")
         else:  # ringing
-            lines.append(f"{disp}\n{block}" if block else f"{disp} — {ats}")
+            lines.append(f"{head}\n{block}" if block else head)
             any_ringing = True
     if not lines or not token:
         return
     if saw_list:
         lines.append(_CONTACT_LIST_NOTE)
-    header = "Calling selected duty persons into the meeting now…" if any_ringing else "Selected duty commands:"
+    header = "Calling selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
     body = "\n\n".join(lines)
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
@@ -486,21 +492,20 @@ def handle_ring_command(
                 "(the host just got a DM).")
         template = "orange"
     else:  # ringing
-        # fe/fpms/pms: numbered today/tomorrow/day-after (or First/Second/Third Level) list; SRE
-        # variants: everyone who covers the team. Plus the /c reminder. The ring still calls only the
-        # resolved duty (above); the rest are shown for visibility. Falls back to @mentions if the
-        # sheet read misses (block == "").
+        # Title names the team; the body @mentions the FIRST contact being called now, then (for
+        # fe/fpms/pms/SRE) the numbered roster + the /c reminder. The ring still calls only the resolved
+        # duty (above); the rest are shown for visibility. <at id=ou_xxx></at> is the card mention form.
         template = "blue"
         block = _duty_contact_list_md(c, tok)
         when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
-        title = f"Calling {label} {when}into the meeting now…"
+        title = f"Calling {label} {when}into the meeting now"
+        ats = " ".join(f"<at id={oid}></at>" for oid in targets)
         if block:
-            body = f"{block}\n\n{_CONTACT_LIST_NOTE}"
-        elif targets:
-            # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
-            body = " ".join(f"<at id={oid}></at>" for oid in targets)
+            body = f"{ats}\n{block}\n\n{_CONTACT_LIST_NOTE}" if ats else f"{block}\n\n{_CONTACT_LIST_NOTE}"
+        elif ats:
+            body = ats
         else:
-            body = "Paging the duty into the meeting now…"
+            body = "Paging the duty into the meeting now."
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
     # Reply target: the caller-supplied message (mixed command → the /srebac thread) wins; otherwise the
