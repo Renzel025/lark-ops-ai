@@ -409,7 +409,7 @@ def handle_ring_commands_batch(
         parts.append("Other duties (tap /c @name to call):\n\n" + "\n\n".join(bottom_blocks))
     if bottom_blocks or any_ringing:
         parts.append(_CONTACT_LIST_NOTE)
-    header = "Calling selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
+    header = "Calling today's selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
     body = "\n\n".join(parts)
     sess = _session.P0_SESSIONS.get(session_source) or {}
     mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
