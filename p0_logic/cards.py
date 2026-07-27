@@ -1126,7 +1126,7 @@ def _ring_commands_guide_md() -> str:
     card — Lark renders markdown headings much larger than body text."""
     return """**Call Commands**
 
-Type these commands in the incident group **while the P0 meeting is running** to call people into the meeting. The bot will automatically contact the **current on-duty** members of the respective teams.
+Type these commands in the incident group **while the P1/P0 meeting is running** to call people into the meeting. The bot will automatically contact the **current on-duty** members of the respective teams.
 
 **Developer Duty**
 
@@ -1221,7 +1221,7 @@ def build_ring_commands_guide_card() -> Dict[str, Any]:
         "config": {"enable_forward": True},
         "header": {
             "template": "turquoise",
-            "title": {"tag": "plain_text", "content": "P0 Invite Commands — call and invite people into the meeting"},
+            "title": {"tag": "plain_text", "content": "P1/P0 Invite Commands — call and invite people into the meeting"},
         },
         "body": {
             "elements": [
