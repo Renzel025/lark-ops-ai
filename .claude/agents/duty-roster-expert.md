@@ -1,6 +1,6 @@
 ---
 name: duty-roster-expert
-description: Expert on THIS repo's @bot duty-ring commands — reading team on-call rosters from Lark Sheets, resolving today's duty person(s) to open_id via the directory, and ringing them into the active P0 VC. Use this agent to add, debug, or extend any ring command: direct (/c /m /e), SRE duty (/scpms /sfpms /sfe /spms), team roster (/fe /fpms /pms), shift sections (/dba /sosm), and the SRE Game escalation (/srebac /srer /sredt /sresic /srebl /srepai /srecg /srepp /sredb /sreib with /n next + /r @checkperson retry). It knows the sheet layouts, the name→open_id directory, the parsers, and the exact recipe to wire a new command. Reach for it whenever "why did /X ring nobody", "add a new duty command", "list the ring commands", or "the roster picked the wrong person".
+description: Expert on THIS repo's @bot duty-ring commands — reading team on-call rosters from Lark Sheets, resolving today's duty person(s) to open_id via the directory (with a SHORTCUT→REAL name alias tab), and ringing them into the active P0 VC. Use this agent to add, debug, or extend any ring command: direct (/c /m /e), SRE duty (/scpms /sfpms /sfe /spms), team roster (/fe /fpms /pms /cpms), shift sections (/dba /sosm), the SRE Game escalation (/srebac …), the PO product-manager escalation (/pobac …), and the EGAME escalation (/segame <game>) — each rings the 1st contact, then /c @name reaches the rest (no /n or /r). It knows the sheet layouts, the name→open_id directory + alias, the parsers, and the exact recipe to wire a new command. Reach for it whenever "why did /X ring nobody", "add a new duty command", "list the ring commands", "open_id cross app (99992361)", or "the roster picked the wrong person".
 tools: Bash, Read, Edit, Write, Grep, Glob
 ---
 
@@ -36,9 +36,10 @@ Every command needs a leading `/` **or** an `@bot` mention, an active P0 meeting
 **Team roster** — live sheet → today's duty (`is_roster_command`, `_ROSTER`):
 | cmd | team | env prefix |
 |---|---|---|
-| `/fe` | Frontend duty | `DUTY_ROSTER_FE` |
-| `/fpms` | FPMS duty | `DUTY_ROSTER_FPMS` |
-| `/pms` | PMS Support (first level, by week) | `DUTY_ROSTER_PMS` |
+| `/fe` | Frontend duty (today/tomorrow/day-after list) | `DUTY_ROSTER_FE` |
+| `/fpms` | FPMS duty (today/tomorrow/day-after list) | `DUTY_ROSTER_FPMS` |
+| `/pms` | PMS Support (First/Second/Third Level, by week) | `DUTY_ROSTER_PMS` |
+| `/cpms` | CPMS (monthly calendar; today's primary + next-2-days; per-month tab auto-resolved) | `DUTY_ROSTER_CPMS` |
 
 **Shift sections** — OSE & SRE Duty Shift sheet, today on-shift (`DUTY_SHIFT_SHEET_TOKEN`, `_parse_shift_section`):
 | cmd | team | resolver |
@@ -46,9 +47,9 @@ Every command needs a leading `/` **or** an `@bot` mention, an active P0 meeting
 | `/dba` | DBA duty | `resolve_dba_duty_open_ids` |
 | `/sosm` | Liveslot SRE duty | `resolve_liveslot_duty_open_ids` |
 
-**SRE Game escalation** — `features/recording/sre_game.py`; the "SRE Game" section lists an ORDERED
-contact list per game (row order = escalation priority). The command rings the 1st contact and watches
-90s (`P0_SRE_GAME_INVITE_TIMEOUT_SEC`) for a VC join:
+**SRE Game escalation** — `features/recording/sre_game.py`; the "SRE Game" section of the OSE & SRE
+Duty Shift sheet lists an ORDERED contact list per game (row order = priority). The command rings the
+1st contact and watches 90s (`P0_SRE_GAME_INVITE_TIMEOUT_SEC`) for a VC join:
 | cmd | game | | cmd | game |
 |---|---|---|---|---|
 | `/srebac` | Baccarat | | `/srepai` | Paigow |
@@ -57,26 +58,51 @@ contact list per game (row order = escalation priority). The command rings the 1
 | `/sresic` | Sicbo | | `/sredb` | Dropball |
 | `/srebl` | Blackjack | | `/sreib` | In Between |
 
-Inside a live SRE-game escalation thread (reply, matched by `maybe_handle_sre_game_reply`):
-- `/n` — ring the NEXT contact.
-- `/r @checkperson` — retry a SPECIFIC contact (tag them; matched by the mention's open_id, same
-  primary-app space as `/c`. Typed `/r <name>` also works; a bare `/r` is rejected with a hint).
-- Contact JOINS the VC → auto-stops and posts "`<name>` joined the meeting" — there is NO manual reply.
+**PO product-manager escalation** (`/po<game>`, `PO_GAME_HEADERS` / `is_po_game_command`) — reads the
+SEPARATE **Game Issue Emergency Contact** sheet (`DUTY_GAME_ISSUE_*`) and rings a game's PRODUCT
+MANAGERS (the 1st/2nd/3rd Product-Manager columns of that game's row; `parse_po_game_managers`), same
+escalation engine as SRE game (`_begin_escalation`). Tokens: `/pobac /por /podt /posic /pobl /popai
+/pocg /popp /podb /poib`. NOTE: that sheet stores contacts as Lark **@-mention OBJECTS**, so
+`_strip_at_names` pulls `name`/`en_name` out of the cell dict / segment list (not plain text).
 
-**Not wired:** `/cpms` — in `RING_CMD_RE` but has no CPMS sheet source yet (falls through, rings nobody).
+**EGAME escalation** (`/segame <game>`, `start_egame_escalation`) — reads the **EGAME** section of the
+OSE & SRE Duty Shift sheet: a games-header row (slash-separated game names) followed by contact rows.
+Takes the REST of the line as the game name (multi-word ok, e.g. `/segame Bakunawa 2`); a dedicated
+`/segame` branch in `lark_logic.py` handles it BEFORE the whitespace-split mixed parser. Match is
+case/space-insensitive + EXACT, with a doubled-letter fallback ('Makiling' ≈ sheet's 'Makilling');
+a miss lists the available games (`egame_game_names`).
 
-Deferred families (not built): game PO (`/bcpo` …), EGAME per-game keyword map. The user is weighing a
-**data-driven "Duty Command Registry" sheet** (one row per command) vs per-command code — do NOT
-hardcode ~130 commands; propose the registry when that work resumes.
+Inside a live escalation thread (SRE game / PO / EGAME; `maybe_handle_sre_game_reply`):
+- `/c @name` — call another check person / product manager from the list (retry the current one or
+  tag others; `force_reinvite_open_ids`, bypassing merge-dedupe). **There is NO `/n` or `/r`** (removed).
+- A watched contact JOINS the VC → posts "`<name>` joined the meeting" (the escalation stays alive).
+
+**Name aliases (SHORTCUT → REAL):** roster sheets often use shortcut names ('wailoon', 'kh');
+`duty_directory.resolve_open_id_for_name` maps them to the REAL name via an optional "Real names" tab
+(`DUTY_DIRECTORY_ALIAS_*`, SAME directory spreadsheet) BEFORE the open_id lookup. TTL-cached (empty
+cached too). Alternatively put an **Email** column in the directory → resolves via the PRIMARY app.
+
+**Routing gate:** `lark_logic.py::_parse_mixed_commands` classes each token as a GAME cmd (sre-game or
+po-game → `start_*_escalation`) or a RING cmd (`RING_CMD_RE` or `/c` → `handle_ring_commands_batch`). A
+**LEADING SLASH is REQUIRED** — an `@bot` mention alone no longer triggers (so casual chat can't page).
+Commands can be mixed in one message (`/cpms fpms sfpms fe`).
+
+**99992361 "open_id cross app":** the invite fails when the directory's open_ids were minted by a
+DIFFERENT app than the VC-invite (OAuth) app. Fix: use the **Email** column (primary-app resolution) or
+re-list open_ids via the primary app (`list_chat_members`). `/c @mention` open_ids are already correct-app.
 
 ## Key files
 - `features/recording/duty_roster.py` — pure parsers (`parse_frontend_duty`, `parse_fpms_duty`),
   `_ROSTER` registry, `COMMAND_TEAM` (SRE stub), `resolve_duty_names` / `resolve_duty_open_ids`.
-- `features/recording/duty_directory.py` — the `Name | open_id | email` directory (TTL-cached 5 min).
-- `features/recording/vc_ring.py::handle_ring_command` — dispatch + the actual ring;
-  `force_reinvite_open_ids` (bypasses the merge-dedupe so `/r` retry actually re-invites).
-- `features/recording/sre_game.py` — the SRE Game escalation (ordered contacts, `/n` next,
-  `/r @checkperson` retry, auto-stop on VC join). In-memory state keyed by thread id (lost on restart).
+- `features/recording/duty_directory.py` — the `Name | open_id | email` directory (TTL-cached 5 min)
+  + the SHORTCUT→REAL alias tab (`get_alias_map` / `apply_alias`, `DUTY_DIRECTORY_ALIAS_*`) applied by
+  `resolve_open_id_for_name`, + `get_sre_team_person_names` (who covers an SRE team).
+- `features/recording/vc_ring.py` — `handle_ring_command` / `handle_ring_commands_batch` (dispatch +
+  the two-section card); `force_reinvite_open_ids` (bypasses merge-dedupe so escalation `/c` re-invites).
+- `features/recording/sre_game.py` — the SRE-game / PO / EGAME escalations sharing `_begin_escalation`
+  (ring 1st contact, roster card, `/c` reply, auto-post on VC join; NO /n /r). `PO_GAME_HEADERS`,
+  `parse_po_game_managers` (Game Issue sheet, @-mention objects), `parse_egame_contacts` (EGAME section).
+  In-memory state keyed by thread id (lost on restart).
 - `p0_logic/config.py::RING_CMD_RE` — the gate: a command must be listed here to route at all.
 - `p0_logic/lark_client.py` — `read_sheets_values_batch`, `resolve_sheet_id`, `batch_get_id_by_*`,
   `list_chat_members`.

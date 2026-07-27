@@ -1121,27 +1121,97 @@ def build_help_commands_card() -> Dict[str, Any]:
 
 
 def _ring_commands_guide_md() -> str:
-    """VC ring-command cheat-sheet (DM guide, shown before the overview card). Plain text — no bold
-    markers or emojis, matching the ring status cards' style."""
-    return (
-        "Type these in the incident group (with the P0 meeting running) to call people into the meeting.\n\n"
-        "Duty / on-call (today's on-shift)\n"
-        "• /dba — DBA duty\n"
-        "• /sosm — Liveslot SRE duty\n"
-        "• /fe — Frontend duty\n"
-        "• /fpms — FPMS duty\n"
-        "• /pms — PMS support (first level)\n"
-        "• /scpms /sfpms /sfe /spms — SRE duty (CPMS / FPMS / FE / PMS)\n\n"
-        "Direct\n"
-        "• /c @Name — call the people you tag\n"
-        "• /m — major-P0 check persons\n"
-        "• /e — escalation contacts\n\n"
-        "Game SRE escalation (calls the 1st contact, then escalate)\n"
-        "• /srebac Baccarat · /srer Roulette · /sredt Dragon Tiger · /sresic Sicbo · /srebl Blackjack\n"
-        "• /srepai Paigow · /srecg Colorgame · /srepp Pulaputi · /sredb Dropball · /sreib In Between\n"
-        "• In the reply thread: /n next contact · /r @checkperson retry a specific one\n"
-        "  (when they join the meeting it auto-confirms — no reply needed)"
-    )
+    """VC ring-command cheat-sheet (DM guide, shown before the overview card). Rendered by the card's
+    markdown component; section titles are **bold** (not # headings) so the font matches the overview
+    card — Lark renders markdown headings much larger than body text."""
+    return """**Call Commands**
+
+Type these commands in the incident group **while the P1/P0 meeting is running** to call people into the meeting. The bot will automatically contact the **current on-duty** members of the respective teams.
+
+**Developer Duty**
+
+* `/fe` — Frontend
+* `/fpms` — FPMS
+* `/pms` — PMS
+* `/cpms` — CPMS
+
+**OM Duty**
+
+* `/scpms`, `/sfpms`, `/sfe`, `/spms` — CPMS / FPMS / FE / PMS SRE
+* `/dba` — DBA
+* `/sosm` — LiveSlot SRE
+
+**Direct Commands**
+
+* `/c @Name` — Calls the tagged person(s).
+* `/m` — Calls the Major P0 contact list **@Bk @Yang @Koo @YC @Wennie @Eden @Jun Meng @Jayden Liu**
+* `/e` — No response → Escalate to @Wei Siong @Adrian Chong
+
+---
+
+**Additional Commands for Game urgent-游戏紧急群**
+
+**SRE Game (rings the primary SRE contact)**
+
+* `/srebac` — Baccarat
+* `/srer` — Roulette
+* `/sredt` — Dragon Tiger
+* `/sresic` — Sic Bo
+* `/srebl` — Blackjack
+* `/srepai` — Pai Gow
+* `/srecg` — Color Game
+* `/srepp` — Pula Puti
+* `/sredb` — Drop Ball
+* `/sreib` — In Between
+* `/sre <game>` — any game by its name (e.g. `/sre Baccarat`)
+
+**PO Product Manager (rings the primary Product Manager)**
+
+* `/pobac` — Baccarat
+* `/pobt` — Baccarat Tournament
+* `/por` — Roulette
+* `/podt` — Dragon Tiger
+* `/posic` — Sic Bo
+* `/pobl` — Blackjack
+* `/popai` — Pai Gow
+* `/pocg` — Color Game
+* `/popp` — Pula Puti
+* `/podb` — Drop Ball
+* `/poib` — In Between
+* `/poht` — Hantak
+* `/poosm` — OSM
+* `/poegs` — EGS
+* `/poev` — Evo Live Games
+* `/poez` — EEZE Live Game
+* `/pogm` — Marble Race: Las Vegas / Marble 5vs5: Monaco
+* `/popt` — Playtech Live Game
+* `/posb` — SportBet/Ebet
+* `/pogz` — Tongits Plus/Texas Poker / Tongits Joker/Pusoy Plus/Lucky 9 Plus
+* `/po <game>` — any other game by its exact name (e.g. `/po Baccarat (if all tables are maintenance)`)
+
+**EGAME SRE**
+
+* `/segame <game>` — For example: `/segame Bakunawa` (works with any EGAME title using its exact game name).
+
+---
+
+**Reply Thread**
+
+Use `/c @Name` in the reply thread to call additional people from the contact list. Once a contact joins the meeting, the bot automatically confirms their attendance—no reply is required.
+
+**Combining Commands**
+
+You can combine multiple commands in a single message — just one leading slash. For example:
+
+* `/cpms fpms sfpms fe`
+* `/c @Name1 @Name2 @Name3`
+* `/cpms fpms /c @Name1 @Name2`
+
+**If a Command Doesn't Work**
+
+If any command is not working, you can always use the `/c` command to call people directly. For example:
+
+`/c @Renzel Hernandez @Name1 @Name2`"""
 
 
 def build_ring_commands_guide_card() -> Dict[str, Any]:
@@ -1151,14 +1221,12 @@ def build_ring_commands_guide_card() -> Dict[str, Any]:
         "config": {"enable_forward": True},
         "header": {
             "template": "turquoise",
-            "title": {"tag": "plain_text", "content": "P0 Ring Commands — call people into the meeting"},
+            "title": {"tag": "plain_text", "content": "P1/P0 Invite Commands — call and invite people into the meeting"},
         },
         "body": {
             "elements": [
-                {
-                    "tag": "div",
-                    "text": {"tag": "lark_md", "content": _ring_commands_guide_md()},
-                },
+                # schema-2.0 markdown component renders headings / lists / inline `code` (lark_md does not).
+                {"tag": "markdown", "content": _ring_commands_guide_md()},
             ]
         },
     }

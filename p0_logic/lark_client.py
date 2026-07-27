@@ -1271,9 +1271,11 @@ def read_sheets_values_batch(tenant_token: str, spreadsheet_token: str, range_st
     return [], last or "values_batch_get failed"
 
 
-def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str = "") -> str:
+def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str = "", *, strict: bool = False) -> str:
     """Sheet_id for a spreadsheet via ``sheets/v3 .../sheets/query`` — match ``sheet_name`` (title)
-    else the FIRST sheet. Use when the URL has no ``?sheet=`` (single-tab sheets)."""
+    else the FIRST sheet. Use when the URL has no ``?sheet=`` (single-tab sheets). With ``strict=True``
+    and a ``sheet_name`` that no tab matches, return "" instead of the first sheet (used to probe for a
+    dynamic tab, e.g. the CURRENT month's CPMS tab)."""
     if not tenant_token or not spreadsheet_token:
         return ""
     headers = {"Authorization": f"Bearer {tenant_token}"}
@@ -1291,6 +1293,8 @@ def resolve_sheet_id(tenant_token: str, spreadsheet_token: str, sheet_name: str 
                         for s in sheets:
                             if isinstance(s, dict) and str(s.get("title") or "").strip() == want:
                                 return str(s.get("sheet_id") or "").strip()
+                        if strict:
+                            return ""  # no tab titled `want` — caller probes other candidates
                     return str((sheets[0] or {}).get("sheet_id") or "").strip()
                 last = f"{base} code=0 but no sheets in response"
             else:

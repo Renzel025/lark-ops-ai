@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
-from p0_logic import cards as _cards
 from features.session import session as _session
 from . import vc_user_oauth as _oauth
 
@@ -177,12 +177,6 @@ def invite_open_ids_into_active_meeting(
     return "queued_oauth"
 
 
-def meeting_link_for(session_source: str) -> str:
-    """The active VC meeting link (join URL) for this incident chat, or '' when there is no session."""
-    sess = _session.P0_SESSIONS.get((session_source or "").strip()) or {}
-    return str(sess.get("link") or "").strip()
-
-
 def force_reinvite_open_ids(
     chat_id: str,
     open_ids: List[str],
@@ -227,6 +221,207 @@ def force_reinvite_open_ids(
     return "ringing" if ok else "failed"
 
 
+def _resolve_ring(
+    c: str,
+    tok: str,
+    *,
+    direct_open_ids: Optional[List[str]] = None,
+    operator_open_id: str = "",
+) -> Tuple[List[str], str, str, bool]:
+    """Resolve a ring command to ``(targets, label, unset_hint, wired)``. ``wired`` is False for a
+    RING_CMD_RE command with no parser/config yet (cpms/pms). Shared by the single and batch handlers."""
+    from features.recording import duty_roster as _duty
+
+    if c == "c":
+        return (_filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id),
+                "the tagged people", "tag at least one person, e.g. /c @Name", True)
+    if c == "m":
+        return (_major_check_person_ring_open_ids(tok),
+                "major-P0 check persons", "P0_MAJOR_CHECK_PERSON_IDS", True)
+    if c == "e":
+        return (_config.get_p0_vc_ring_escalation_open_ids(),
+                "escalation contacts", "P0_VC_RING_ESCALATION_OPEN_IDS", True)
+    if _duty.is_sre_command(c):
+        team = _duty.COMMAND_TEAM[c]
+        # Ring only the FIRST team member (sheet order) — matches the "1. …" shown in the card; the rest
+        # are backups paged via /c. Fall back to the on-shift/env-stub resolver's 1st when unresolved.
+        _nm, oid = _duty.resolve_sre_team_first_open_id(c, tok)
+        targets = [oid] if oid else []
+        if not targets:
+            alt, _u = _duty.resolve_sre_duty_open_ids(c, tok)
+            if not alt:
+                fb = _duty.get_duty_open_id(team)
+                alt = [fb] if fb else []
+            targets = alt[:1]
+        return (targets, f"duty SRE {team}",
+                f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
+                f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback", True)
+    if c == "dba":
+        targets, _u = _duty.resolve_dba_duty_open_ids(tok)
+        return (targets, "DBA duty",
+                "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
+                "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet", True)
+    if c == "sosm":
+        targets, _u = _duty.resolve_liveslot_duty_open_ids(tok)
+        return (targets, "liveslot SRE duty",
+                "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
+                "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet", True)
+    if _duty.is_roster_command(c):
+        targets, _u = _duty.resolve_duty_open_ids(c, tok)
+        return (targets, f"{c.upper()} duty",
+                f"DUTY_ROSTER_{c.upper()}_SHEET_TOKEN/_SHEET_ID and the duty directory "
+                f"(DUTY_DIRECTORY_SHEET_TOKEN)", True)
+    return ([], f"/{c}", "", False)
+
+
+# Reminder shown under the fe/fpms/pms contact list: the ring calls only the 1st contact (today's
+# duty / First Level); use /c to page anyone else shown in the list.
+_CONTACT_LIST_NOTE = (
+    "**commands**\n**/c @name** — use this if you want to contact someone else in the provided list"
+)
+
+
+def _post_ring_card(
+    reply_mid: str, notify_chat: str, token: str, title: str, body_md: str, *, template: str = "blue"
+) -> None:
+    """Post a duty-ring status as an interactive card (``build_ring_status_card``): title in the
+    coloured header, ``body_md`` as one ``lark_md`` div. Threaded under ``reply_mid`` (the command
+    message) when set, else posted to ``notify_chat``. No-op when there's nothing to say."""
+    if not token or not (body_md or "").strip():
+        return
+    card = _cards.build_ring_status_card(title, body_md, header_template=template)
+    mid = (reply_mid or "").strip()
+    if mid:
+        _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
+    else:
+        _lark.post_card_to_chat(notify_chat, token, card)
+
+
+def _duty_contact_list_md(c: str, tok: str) -> str:
+    """Full numbered contact list for a duty command, e.g. for fe/fpms::
+
+          1. Alice — today (Jul 24)
+          2. Bob — tomorrow (Jul 25)
+          3. Carol — Jul 26
+
+    fe/fpms show today/tomorrow/day-after duty; pms shows First/Second/Third Level of this week; the
+    SRE variants (sfpms/spms/scpms/sfe) list EVERYONE who covers that team (no dates — the SRE Handler
+    tab is dateless). Numbered from 1 and includes the 1st contact (the one being called), so the block
+    is the complete roster. Empty string when ``c`` has no list or nothing resolves (sheet miss)."""
+    from features.recording import duty_roster as _duty
+
+    try:
+        if _duty.is_roster_command(c):
+            items = [
+                f"{n}. {(', '.join(names) if names else '(no one listed)')} — {label}"
+                for n, (label, names) in enumerate(_duty.resolve_duty_contact_slots(c, tok), start=1)
+            ]
+        elif _duty.is_sre_command(c):
+            items = [f"{n}. {nm}" for n, nm in enumerate(_duty.resolve_sre_team_person_names(c, tok), start=1)]
+        else:
+            return ""
+    except Exception as e:  # pragma: no cover - never let a sheet hiccup break the ring
+        log.warning("ring: contact-list failed cmd=%s err=%s", c, e)
+        return ""
+    return "\n".join(items)
+
+
+def _ring_display_label(c: str) -> str:
+    """Short label for the consolidated batch message (e.g. scpms -> 'SRE CPMS', fe -> 'FE')."""
+    from features.recording import duty_roster as _duty
+
+    if _duty.is_sre_command(c):
+        return f"SRE {_duty.COMMAND_TEAM[c]}"
+    return {
+        "c": "Tagged people", "m": "Major check persons", "e": "Escalation contacts",
+        "dba": "DBA", "sosm": "Liveslot SRE",
+    }.get(c, c.upper())
+
+
+def handle_ring_commands_batch(
+    cmds: List[str],
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    operator_open_id: str = "",
+    tenant_token: str = "",
+    direct_open_ids: Optional[List[str]] = None,
+    reply_to_message_id: str = "",
+) -> None:
+    """Ring MULTIPLE duty/direct commands and post ONE consolidated status ("Calling selected duty
+    persons …") — one line per command — instead of a separate reply per command. Used for mixed
+    commands like ``/srebac sfpms spms cpms fe`` so the duty rings collapse into a single prompt."""
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("ring batch ignored (P0_VC_RING_ENABLED off) cmds=%s", cmds)
+        return
+    tok = (tenant_token or token or "").strip()
+    # TWO sections: the TOP groups every command's "who's being called NOW" line (team — @1st contact),
+    # so the contacted people sit together; the BOTTOM lists each team's OTHER duties (2nd, 3rd …) for
+    # reference, paged via /c.
+    top_lines: List[str] = []
+    bottom_blocks: List[str] = []
+    any_ringing = False
+    for raw in cmds:
+        c = (raw or "").strip().lower()
+        if not c:
+            continue
+        targets, label, _hint, wired = _resolve_ring(
+            c, tok, direct_open_ids=direct_open_ids, operator_open_id=operator_open_id
+        )
+        disp = _ring_display_label(c)
+        if not wired:
+            top_lines.append(f"**{disp}** — not wired up yet")
+            continue
+        if not targets:
+            top_lines.append(f"**{disp}** — no one on duty / not configured")
+            continue
+        if c == "m":
+            _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
+        else:
+            _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
+        # Direct /c (tagged people) ALWAYS re-invites: a human explicitly asked to call them, so bypass
+        # the merge-dedupe that would SILENTLY no-op a re-ring of someone already targeted this session
+        # (yet still report "ringing"). Duty/roster rings keep the deduping path (don't spam on-call).
+        _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
+        status = _ring_fn(
+            session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
+        )
+        log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
+        ats = " ".join(f"<at id={oid}></at>" for oid in targets)
+        head = f"**{disp}** — {ats}" if ats else f"**{disp}**"
+        if status == "no_session":
+            top_lines.append(f"**{disp}** — no active meeting")
+            continue
+        if status == "disabled":
+            top_lines.append(f"**{disp}** — ring disabled")
+            continue
+        if status == "failed":
+            top_lines.append(f"{head} — ring failed (is the meeting host/inviter in the VC?)")
+            continue
+        if status == "queued_oauth":
+            top_lines.append(f"{head} (queued; waiting for host authorization)")
+        else:  # ringing
+            top_lines.append(head)
+            any_ringing = True
+        # BOTTOM: this team's FULL duty list (all contacts, numbered from 1, incl. the one called above).
+        roster_md = _duty_contact_list_md(c, tok)
+        if roster_md:
+            bottom_blocks.append(f"**{disp}**\n{roster_md}")
+    if not top_lines or not token:
+        return
+    parts = ["\n".join(top_lines)]  # top: one line per command, grouped (no blank lines between)
+    if bottom_blocks:
+        parts.append("\n\n".join(bottom_blocks))
+    if bottom_blocks or any_ringing:
+        parts.append(_CONTACT_LIST_NOTE)
+    header = "Calling today's selected duty persons into the meeting now" if any_ringing else "Selected duty commands:"
+    body = "\n\n".join(parts)
+    sess = _session.P0_SESSIONS.get(session_source) or {}
+    mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
+    _post_ring_card(mid, notify_chat, token, header, body, template="blue" if any_ringing else "grey")
+
+
 def handle_ring_command(
     cmd: str,
     session_source: str,
@@ -236,17 +431,27 @@ def handle_ring_command(
     operator_open_id: str = "",
     tenant_token: str = "",
     direct_open_ids: Optional[List[str]] = None,
+    reply_to_message_id: str = "",
 ) -> None:
     """Handle a ring command (m / e / scpms / sfpms / sfe / fe / fpms, or ``c`` for a direct tag-ring).
 
     Pages the resolved people into the already-active meeting for ``session_source`` and
     posts a status reply to ``notify_chat``. Anyone in the group may run these. For ``c`` the
     targets come from ``direct_open_ids`` (the message @mentions) — no sheet/directory needed.
+
+    ``reply_to_message_id`` overrides the reply target (default = the meeting-link message): a mixed
+    command like ``/srebac sfpms cpms`` passes the command's own message id so every duty-ring status
+    lands in the SAME thread as the /srebac escalation card, not the separate meeting-link thread.
     """
     from features.recording import duty_roster as _duty
 
     c = (cmd or "").strip().lower()
     tok = (tenant_token or token or "").strip()
+    _reply_mid = (reply_to_message_id or "").strip()
+
+    def _out(title: str, body: str, *, template: str = "grey") -> None:
+        """Post a status card threaded under the command message when mixed-invoked, else to the group."""
+        _post_ring_card(_reply_mid, notify_chat, token, title, body, template=template)
 
     # Master gate: with VC ring disabled (prod default), silently ignore — no sheet reads, no reply.
     # This is the single choke point for every ring command (single and multi), so prod stays a no-op.
@@ -254,89 +459,30 @@ def handle_ring_command(
         log.info("ring cmd ignored (P0_VC_RING_ENABLED off) cmd=%s", c)
         return
 
-    if c == "c":
-        # Model A — direct tag-ring: invite the tagged people (filters out the bot + operator).
-        targets = _filter_ring_targets(direct_open_ids or [], operator_open_id=operator_open_id)
-        label = "the tagged people"
-        unset_hint = "tag at least one person, e.g. /c @Name"
-    elif c == "m":
-        # Reuse the existing major-P0 check-person list (P0_MAJOR_CHECK_PERSON_IDS),
-        # resolved to open_ids (also handles user_id entries).
-        targets = _major_check_person_ring_open_ids(tok)
-        label = "major-P0 check persons"
-        unset_hint = "P0_MAJOR_CHECK_PERSON_IDS"
-    elif c == "e":
-        targets = _config.get_p0_vc_ring_escalation_open_ids()
-        label = "escalation contacts"
-        unset_hint = "P0_VC_RING_ESCALATION_OPEN_IDS"
-    elif _duty.is_sre_command(c):
-        # SRE duty: SRE handler tab (Name|Handler) -> names whose Handler covers this team ->
-        # directory -> open_id. When DUTY_SRE_SHIFT_SHEET_TOKEN is set, also intersect with today's
-        # on-shift duty shift. Falls back to the P0_VC_RING_DUTY_<TEAM>_OPEN_ID env stub if empty.
-        targets, _unresolved = _duty.resolve_sre_duty_open_ids(c, tok)
-        team = _duty.COMMAND_TEAM[c]
-        if not targets:
-            oid = _duty.get_duty_open_id(team)
-            if oid:
-                targets = [oid]
-        label = f"duty SRE {team}"
-        unset_hint = (
-            f"the SRE handler tab (DUTY_DIRECTORY_SRE_SHEET_ID) + the duty directory "
-            f"(DUTY_DIRECTORY_SHEET_TOKEN), or the P0_VC_RING_DUTY_{team}_OPEN_ID fallback"
-        )
-    elif c == "dba":
-        # DBA: today's on-shift DBA people from the 'DBA' section of the OSE & SRE Duty Shift sheet.
-        targets, _unresolved = _duty.resolve_dba_duty_open_ids(tok)
-        label = "DBA duty"
-        unset_hint = (
-            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
-            "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
-        )
-    elif c == "sosm":
-        # Liveslot SRE: today's on-shift people from the 'Liveslot' section of the OSE & SRE Duty Shift sheet.
-        targets, _unresolved = _duty.resolve_liveslot_duty_open_ids(tok)
-        label = "liveslot SRE duty"
-        unset_hint = (
-            "DUTY_SHIFT_SHEET_TOKEN (OSE & SRE Duty Shift) + the duty directory "
-            "(DUTY_DIRECTORY_SHEET_TOKEN); share the bot on the sheet"
-        )
-    elif _duty.is_roster_command(c):
-        # fe / fpms: read the team roster sheet live -> today's duty name(s) -> directory -> open_id.
-        targets, _unresolved = _duty.resolve_duty_open_ids(c, tok)
-        label = f"{c.upper()} duty"
-        unset_hint = (
-            f"DUTY_ROSTER_{c.upper()}_SHEET_TOKEN/_SHEET_ID and the duty directory "
-            f"(DUTY_DIRECTORY_SHEET_TOKEN)"
-        )
-    else:
+    targets, label, unset_hint, wired = _resolve_ring(
+        c, tok, direct_open_ids=direct_open_ids, operator_open_id=operator_open_id
+    )
+    if not wired:
         # Recognized by RING_CMD_RE (e.g. cpms / pms) but no roster parser/config wired yet.
-        if token:
-            _lark.post_text_to_chat(
-                notify_chat,
-                token,
-                f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.",
-            )
+        _out("Not wired up yet", f"'/{c}' is not wired up yet — its roster parser/sheet config is still pending.")
         return
-
     if not targets:
-        if token:
-            _lark.post_text_to_chat(
-                notify_chat,
-                token,
-                f"No {label} configured yet ({unset_hint}). Ask an admin to set it.",
-            )
+        _out("Not configured", f"No {label} configured yet ({unset_hint}). Ask an admin to set it.", template="orange")
         return
 
     if c == "m":
         # Register the major check persons on the session so the VC-join "joined" prompt fires for
         # this manual flow too (Issue Watch registers them on auto-declare; @bot m did not).
-        _register_major_check_persons_for_join_prompt(session_source, targets)
+        _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
     elif _duty.is_roster_command(c) or _duty.is_sre_command(c) or c in ("c", "dba", "sosm"):
         # Watch today's fe/fpms/pms/SRE/DBA/liveslot duty (or the /c tagged people) so their VC-join
         # posts a "joined" reply in the meeting thread.
-        _register_join_watch_open_ids(session_source, targets)
+        _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
 
-    status = invite_open_ids_into_active_meeting(
+    # Direct /c always re-invites (bypass merge-dedupe) so a manual re-ring actually re-fires and the
+    # returned status reflects the real invite result; duty/roster keep the deduping path.
+    _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
+    status = _ring_fn(
         session_source,
         targets,
         tenant_token=tok,
@@ -353,27 +499,41 @@ def handle_ring_command(
         return
     is_ring_announcement = False
     if status == "disabled":
-        msg = "VC ring is disabled (set P0_VC_RING_ENABLED=1)."
+        title, body, template = "VC ring disabled", "Set P0_VC_RING_ENABLED=1 to enable ring commands.", "grey"
     elif status == "no_session":
-        msg = "No active meeting here yet — start a meeting first, then run this command."
+        title, body, template = "No active meeting", "Start a P0 meeting first, then run this command.", "orange"
     elif status == "no_targets":
-        msg = f"No valid {label} to call."
+        title, body, template = "Nothing to call", f"No valid {label} to call.", "orange"
     elif status == "queued_oauth":
-        msg = (
-            f"Queued a call to {label} — it will ring once the meeting host finishes the "
-            "one-time Lark authorization (the host just got a DM)."
-        )
+        title = "Queued — waiting for host authorization"
+        body = (f"{label} will ring once the meeting host finishes the one-time Lark authorization "
+                "(the host just got a DM).")
+        template = "orange"
+    elif status == "failed":
+        title = "Ring failed"
+        body = (f"Couldn't invite {label} into the meeting. Make sure the meeting host/inviter is "
+                "in the VC, then try again.")
+        template = "red"
     else:  # ringing
-        msg = f"Calling {label} into the meeting now…"
-        # Tag the target(s) by name for fe/fpms/pms/SRE/DBA/liveslot + /c.
-        # Card lark_md mention form is <at id=ou_xxx></at> (NOT the text-message <at user_id="...">).
-        if targets and (c in ("c", "dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)):
-            ats = " ".join(f'<at id={oid}></at>' for oid in targets)
-            when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
-            msg = f"Calling {label} {when}into the meeting now… {ats}"
+        # Title names the team; the body @mentions the FIRST contact being called now, then (for
+        # fe/fpms/pms/SRE) the team's OTHER duties + the /c reminder. The ring calls only the resolved
+        # duty (above); the rest are shown for visibility. <at id=ou_xxx></at> is the card mention form.
+        template = "blue"
+        when = "today " if (c in ("dba", "sosm") or _duty.is_roster_command(c) or _duty.is_sre_command(c)) else ""
+        title = f"Calling {label} {when}into the meeting now"
+        ats = " ".join(f"<at id={oid}></at>" for oid in targets)
+        roster_md = _duty_contact_list_md(c, tok)
+        parts = [ats] if ats else []
+        if roster_md:
+            parts.append(roster_md)
+        if roster_md or _duty.is_roster_command(c) or _duty.is_sre_command(c):
+            parts.append(_CONTACT_LIST_NOTE)
+        body = "\n\n".join(parts) if parts else "Paging the duty into the meeting now."
         is_ring_announcement = True
     sess = _session.P0_SESSIONS.get(session_source) or {}
-    mid = str(sess.get("meeting_invite_message_id") or "").strip()
+    # Reply target: the caller-supplied message (mixed command → the /srebac thread) wins; otherwise the
+    # meeting-link message so standalone ring status still groups under the meeting notice.
+    mid = (reply_to_message_id or "").strip() or str(sess.get("meeting_invite_message_id") or "").strip()
     # Dedupe the major-check-person "calling" announcement: auto-ring-on-join (_try_ring_session)
     # and this `@bot m` command both announce the same thing. Post it only once per meeting.
     if c == "m" and is_ring_announcement:
@@ -383,17 +543,9 @@ def handle_ring_command(
         _session.P0_SESSIONS[session_source] = sess
         if _session._session_disk.enabled():
             _session._session_disk.save_session(session_source, sess)
-    # Render the status/prompt as a clean interactive card (header + lark_md body) instead of
-    # plain text, so bold/mentions render and there are no literal markdown asterisks.
-    if status in ("disabled", "no_session", "no_targets"):
-        card_title, card_template = "Inviting check person", "orange"
-    else:
-        card_title, card_template = "Inviting check person", "blue"
-    card = _cards.build_ring_status_card(card_title, msg, header_template=card_template)
-    if mid:
-        _lark.post_card_reply_to_message(mid, token, card, reply_in_thread=True)
-    else:
-        _lark.post_card_to_chat(notify_chat, token, card)
+    # Status card (title in the coloured header, body a lark_md div where <at id=…> mentions render) —
+    # threaded under the reply target: the command message for a mixed command, else the meeting-link one.
+    _post_ring_card(mid, notify_chat, token, title, body, template=template)
 
 
 def _filter_ring_targets(
@@ -464,8 +616,19 @@ def _major_check_person_ring_open_ids(
     return out
 
 
+def _set_join_prompt_reply_mid(sess: Dict[str, Any], reply_mid: str) -> bool:
+    """Record the message the VC-join "joined / already in the meeting" prompt should reply to (the
+    command message when a ring command drove it) so that prompt lands in the SAME thread as the
+    command, not the meeting-link thread. Returns True if it changed."""
+    mid = (reply_mid or "").strip()
+    if not mid or sess.get("join_prompt_reply_mid") == mid:
+        return False
+    sess["join_prompt_reply_mid"] = mid
+    return True
+
+
 def _register_major_check_persons_for_join_prompt(
-    session_source: str, ring_open_ids: List[str]
+    session_source: str, ring_open_ids: List[str], *, reply_mid: str = ""
 ) -> None:
     """
     Populate ``major_check_person_open_ids`` / ``_user_ids`` on the session so the VC-join "joined"
@@ -483,34 +646,41 @@ def _register_major_check_persons_for_join_prompt(
     existing_uids = set(sess.get("major_check_person_user_ids") or [])
     merged_oids = existing_oids | oids
     merged_uids = existing_uids | uids
-    if merged_oids == existing_oids and merged_uids == existing_uids:
-        return  # nothing new to register
-    sess["major_check_person_open_ids"] = sorted(merged_oids)
-    sess["major_check_person_user_ids"] = sorted(merged_uids)
+    changed = _set_join_prompt_reply_mid(sess, reply_mid)
+    if merged_oids != existing_oids or merged_uids != existing_uids:
+        sess["major_check_person_open_ids"] = sorted(merged_oids)
+        sess["major_check_person_user_ids"] = sorted(merged_uids)
+        changed = True
     if "major_check_person_join_prompted" not in sess:
         sess["major_check_person_join_prompted"] = []
+        changed = True
+    if not changed:
+        return
     _session.P0_SESSIONS[session_source] = sess
     if _session._session_disk.enabled():
         _session._session_disk.save_session(session_source, sess)
 
 
-def _register_join_watch_open_ids(session_source: str, open_ids: List[str]) -> None:
+def _register_join_watch_open_ids(session_source: str, open_ids: List[str], *, reply_mid: str = "") -> None:
     """Add ``open_ids`` to the session join-watch set so ``maybe_prompt_major_check_person_joined``
     posts a "joined" thread reply when any of them joins the VC. Used by the fe/fpms duty ring
-    (open_id only — resolved from the roster directory). Preserves the ``join_prompted`` dedupe."""
+    (open_id only — resolved from the roster directory). Preserves the ``join_prompted`` dedupe.
+    ``reply_mid`` (the command message) routes that join prompt to the command thread."""
     sess = _session.P0_SESSIONS.get(session_source)
     if not sess:
         return
     add = {x for x in (open_ids or []) if x}
-    if not add:
-        return
     existing = set(sess.get("major_check_person_open_ids") or [])
     merged = existing | add
-    if merged == existing:
-        return
-    sess["major_check_person_open_ids"] = sorted(merged)
+    changed = _set_join_prompt_reply_mid(sess, reply_mid)
+    if merged != existing:
+        sess["major_check_person_open_ids"] = sorted(merged)
+        changed = True
     if "major_check_person_join_prompted" not in sess:
         sess["major_check_person_join_prompted"] = []
+        changed = True
+    if not changed:
+        return
     _session.P0_SESSIONS[session_source] = sess
     if _session._session_disk.enabled():
         _session._session_disk.save_session(session_source, sess)
