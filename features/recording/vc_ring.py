@@ -380,7 +380,11 @@ def handle_ring_commands_batch(
             _register_major_check_persons_for_join_prompt(session_source, targets, reply_mid=reply_to_message_id)
         else:
             _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
-        status = invite_open_ids_into_active_meeting(
+        # Direct /c (tagged people) ALWAYS re-invites: a human explicitly asked to call them, so bypass
+        # the merge-dedupe that would SILENTLY no-op a re-ring of someone already targeted this session
+        # (yet still report "ringing"). Duty/roster rings keep the deduping path (don't spam on-call).
+        _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
+        status = _ring_fn(
             session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
         )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
@@ -391,6 +395,9 @@ def handle_ring_commands_batch(
             continue
         if status == "disabled":
             top_lines.append(f"**{disp}** — ring disabled")
+            continue
+        if status == "failed":
+            top_lines.append(f"{head} — ring failed (is the meeting host/inviter in the VC?)")
             continue
         if status == "queued_oauth":
             top_lines.append(f"{head} (queued; waiting for host authorization)")
@@ -472,7 +479,10 @@ def handle_ring_command(
         # posts a "joined" reply in the meeting thread.
         _register_join_watch_open_ids(session_source, targets, reply_mid=reply_to_message_id)
 
-    status = invite_open_ids_into_active_meeting(
+    # Direct /c always re-invites (bypass merge-dedupe) so a manual re-ring actually re-fires and the
+    # returned status reflects the real invite result; duty/roster keep the deduping path.
+    _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
+    status = _ring_fn(
         session_source,
         targets,
         tenant_token=tok,
@@ -499,6 +509,11 @@ def handle_ring_command(
         body = (f"{label} will ring once the meeting host finishes the one-time Lark authorization "
                 "(the host just got a DM).")
         template = "orange"
+    elif status == "failed":
+        title = "Ring failed"
+        body = (f"Couldn't invite {label} into the meeting. Make sure the meeting host/inviter is "
+                "in the VC, then try again.")
+        template = "red"
     else:  # ringing
         # Title names the team; the body @mentions the FIRST contact being called now, then (for
         # fe/fpms/pms/SRE) the team's OTHER duties + the /c reminder. The ring calls only the resolved
