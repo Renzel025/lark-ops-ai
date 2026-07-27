@@ -1163,6 +1163,7 @@ Type these commands in the incident group **while the P0 meeting is running** to
 * `/srepp` — Pula Puti
 * `/sredb` — Drop Ball
 * `/sreib` — In Between
+* `/sre <game>` — any game by its name (e.g. `/sre Baccarat`)
 
 **PO Product Manager (rings the primary Product Manager)**
 

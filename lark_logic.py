@@ -1201,6 +1201,25 @@ def process_message(
             )
             return
 
+        # /sre <game> — SRE Game escalation by free-text game name (e.g. /sre Baccarat), same as the fixed
+        # /srebac tokens but for any game. First=="sre" only (a fixed /srebac has first=="srebac").
+        if _ring_is_slash and _ring_first == "sre":
+            _after = _ring_raw.lstrip("/").strip().split(None, 1)
+            _game = _after[1].strip() if len(_after) > 1 else ""
+            from features.recording.sre_game import start_sre_game_escalation_by_name
+
+            start_sre_game_escalation_by_name(
+                _game,
+                session_source,
+                notify_chat,
+                token,
+                command_message_id=message_id,
+                thread_root=root_id,
+                operator_open_id=user_id,
+                tenant_token=tenant_token or token,
+            )
+            return
+
         # Mixed commands in ONE message: "/srebac sfpms cpms" or "/scpms /fpms /c @Juan @Maria" — fire
         # EACH into the active meeting. SRE-game commands (srebac …) start an escalation; duty/direct
         # commands (scpms, fpms, dba, /c …) page their people. A LEADING SLASH is REQUIRED to trigger

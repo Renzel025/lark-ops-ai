@@ -155,7 +155,7 @@ def parse_sre_game_contacts(rows: List[List[Any]], header_kw: str) -> List[str]:
 
 
 def resolve_sre_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, str]]:
-    """Ordered ``[(name, open_id)]`` for a game command (open_id '' when not in the directory)."""
+    """Ordered ``[(name, open_id)]`` for a fixed game command (open_id '' when not in the directory)."""
     c = (cmd or "").strip().lower()
     kw = SRE_GAME_HEADERS.get(c)
     if not kw:
@@ -163,6 +163,25 @@ def resolve_sre_game_contacts(cmd: str, tenant_token: str) -> List[Tuple[str, st
     rows = _duty._read_shift_rows(tenant_token)
     if not rows:
         return []
+    return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in parse_sre_game_contacts(rows, kw)]
+
+
+def _sre_game_lookup(game_name: str) -> Tuple[str, str]:
+    """``(display_label, header_keyword)`` for a FREE-TEXT SRE-game name (``/sre <game>``): match a known
+    label (e.g. 'Dragon Tiger' -> its 'DRAGON TIGER' header), else use the typed name uppercased."""
+    g = _egame_norm(game_name)
+    for cmd, label in SRE_GAME_LABEL.items():
+        if _egame_norm(label) == g:
+            return label, SRE_GAME_HEADERS[cmd]
+    return (game_name or "").strip(), _up(game_name)
+
+
+def resolve_sre_game_contacts_by_name(game_name: str, tenant_token: str) -> List[Tuple[str, str]]:
+    """Ordered ``[(name, open_id)]`` for a free-text SRE game name (any game in the 'SRE Game' section)."""
+    rows = _duty._read_shift_rows(tenant_token)
+    if not rows:
+        return []
+    _label, kw = _sre_game_lookup(game_name)
     return [(nm, _dir.resolve_open_id_for_name(tenant_token, nm)) for nm in parse_sre_game_contacts(rows, kw)]
 
 
@@ -675,6 +694,43 @@ def start_sre_game_escalation(
     _begin_escalation(
         c, label, f"SRE {label} check persons", pairs, session_source, notify_chat, token,
         command_message_id=command_message_id, thread_root=thread_root,
+        operator_open_id=operator_open_id, tok=tok,
+    )
+
+
+def start_sre_game_escalation_by_name(
+    game_name: str,
+    session_source: str,
+    notify_chat: str,
+    token: str,
+    *,
+    command_message_id: str,
+    thread_root: str = "",
+    operator_open_id: str = "",
+    tenant_token: str = "",
+) -> None:
+    """Ring the 1st SRE contact for a FREE-TEXT game name (``/sre <game>``, e.g. ``/sre Baccarat``) from
+    the 'SRE Game' section; same escalation engine as the fixed ``/srebac`` tokens."""
+    if not _config.get_p0_vc_ring_enabled():
+        log.info("sre_game: by-name ignored (P0_VC_RING_ENABLED off) game=%r", game_name)
+        return
+    g = (game_name or "").strip()
+    tok = (tenant_token or token or "").strip()
+    if not g:
+        _reply(command_message_id, token, "Usage: /sre <game>, e.g. /sre Baccarat")
+        return
+    label, _kw = _sre_game_lookup(g)
+    pairs = resolve_sre_game_contacts_by_name(g, tok)
+    if not pairs:
+        _reply(
+            command_message_id, token,
+            f"No SRE contacts found for '{g}' in the 'SRE Game' section. "
+            f"Games: {', '.join(SRE_GAME_LABEL.values())}.",
+        )
+        return
+    _begin_escalation(
+        f"sre:{_egame_norm(g)}", label, f"SRE {label} check persons", pairs, session_source, notify_chat,
+        token, command_message_id=command_message_id, thread_root=thread_root,
         operator_open_id=operator_open_id, tok=tok,
     )
 
