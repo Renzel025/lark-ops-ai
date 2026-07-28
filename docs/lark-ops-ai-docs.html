@@ -1,0 +1,1428 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lark-ops-ai — System Documentation</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+        .flow-dim { opacity: 0.18; filter: grayscale(1); pointer-events: none; transition: opacity 0.35s ease, filter 0.35s ease; }
+        .node-card { transition: box-shadow 0.2s ease; }
+        .node-card:hover { box-shadow: 0 12px 28px -8px rgb(15 23 42 / 0.15); }
+        .diagram-canvas { min-width: 1280px; }
+  :root {
+    --bg: #f6f8fb; --surface: #ffffff; --ink: #16202c; --muted: #5c6b7d;
+    --line: #dbe3ec; --line-strong: #c3cedb; --accent: #0f8f86; --accent-soft: #e2f1ef;
+    --link: #1f6feb; --sev: #c53b3b; --sev-soft: #fbe9e8; --panel: #eef2f5;
+    --code-bg: #eef2f6; --warn: #b5730b; --warn-soft: #fbf0dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d131a; --surface: #141d27; --ink: #e7edf4; --muted: #93a3b4;
+      --line: #24303c; --line-strong: #33414f; --accent: #34c3b6; --accent-soft: #12332f;
+      --link: #6ea8ff; --sev: #f0736e; --sev-soft: #3a1f1e; --panel: #101922;
+      --code-bg: #10191f; --warn: #e0a53f; --warn-soft: #2e2410;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f8fb; --surface: #ffffff; --ink: #16202c; --muted: #5c6b7d;
+    --line: #dbe3ec; --line-strong: #c3cedb; --accent: #0f8f86; --accent-soft: #e2f1ef;
+    --link: #1f6feb; --sev: #c53b3b; --sev-soft: #fbe9e8; --panel: #eef2f5;
+    --code-bg: #eef2f6; --warn: #b5730b; --warn-soft: #fbf0dc;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d131a; --surface: #141d27; --ink: #e7edf4; --muted: #93a3b4;
+    --line: #24303c; --line-strong: #33414f; --accent: #34c3b6; --accent-soft: #12332f;
+    --link: #6ea8ff; --sev: #f0736e; --sev-soft: #3a1f1e; --panel: #101922;
+    --code-bg: #10191f; --warn: #e0a53f; --warn-soft: #2e2410;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 24px 72px; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .12em; color: var(--accent); text-transform: uppercase; }
+  h1 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.12; margin: 10px 0 12px; letter-spacing: -.02em; text-wrap: balance; }
+  .lede { color: var(--muted); font-size: 16px; max-width: 70ch; margin: 0; }
+  .lede code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: .88em; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 28px 0 22px; }
+  .tab { appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+    font: inherit; font-size: 13px; font-weight: 600; padding: 8px 15px; border-radius: 9px; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .panel { display: none; }
+  .panel.active { display: block; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .panel.active { animation: none; } }
+
+  /* ---- hand-built flowchart, on a fixed light canvas (reads the same in both themes) ---- */
+  .canvas { background: #f4f7fa; border: 1px solid #d3dde7; border-radius: 16px; padding: 30px 20px 24px; overflow-x: auto; }
+  .chart { display: flex; flex-direction: column; align-items: center; min-width: 340px; }
+  .fnode { width: min(560px, 100%); background: #ffffff; border: 1px solid #c3cedb; border-radius: 12px;
+    padding: 13px 18px; text-align: center; box-shadow: 0 1px 2px rgba(20,40,60,.05); }
+  .fnode .nt { font-family: ui-monospace, monospace; font-weight: 700; font-size: 14px; color: #16202c; }
+  .fnode .nb { font-size: 12.5px; color: #5c6b7d; margin-top: 3px; }
+  .fnode .nb code, .fnode .nt code { background: #eef2f6; padding: 0 4px; border-radius: 4px; font-size: .92em; }
+  .fnode.start { background: #0f8f86; border-color: #0c7a72; }
+  .fnode.start .nt { color: #fff; font-size: 13.5px; letter-spacing: .04em; }
+  .fnode.start .nb { color: #d6efeb; }
+  .fnode.start .nb code { background: rgba(255,255,255,.16); color: #fff; }
+  .fnode.ext { background: #e2f1ef; border-color: #0f8f86; }
+  .fnode.ext .nt { color: #0a4a45; }
+  .fnode.ext .nb { color: #2c665f; }
+  .fnode.ext .nb code { background: rgba(15,143,134,.14); color: #0a4a45; }
+
+  .fnode.resolve { width: min(600px, 100%); text-align: left; }
+  .fnode.resolve .nt { text-align: center; color: #16202c; }
+  .rlist { margin-top: 11px; display: flex; flex-direction: column; }
+  .ri { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; font-size: 12.5px;
+    border-top: 1px dashed #dbe3ec; padding: 7px 0; }
+  .ri:first-child { border-top: none; }
+  .ri .k { font-family: ui-monospace, monospace; color: #0f8f86; font-weight: 700; font-size: 12.5px; white-space: nowrap; }
+  .ri .v { color: #5c6b7d; text-align: right; }
+  .ri .v b { color: #34423d; font-weight: 600; }
+
+  .conn { width: 0; height: 30px; border-left: 2px solid #9aa8b6; position: relative; }
+  .conn::after { content: ""; position: absolute; bottom: -2px; left: 50%; transform: translateX(-50%);
+    border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid #9aa8b6; }
+  .conn .lbl { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 11px;
+    color: #5c6b7d; background: #f4f7fa; padding: 1px 6px; white-space: nowrap; border-radius: 4px; }
+
+  .reqs { margin-top: 22px; width: min(560px, 100%); font-size: 12px; color: #4a5a68; background: #eaeef3;
+    border: 1px dashed #b6c2ce; border-radius: 10px; padding: 10px 14px; text-align: center; }
+  .reqs b { color: #16202c; }
+  .reqs code { background: #dde4eb; padding: 0 4px; border-radius: 4px; font-size: 11.5px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--muted); margin-bottom: 16px; align-items: center; }
+  .sw { display: inline-block; width: 20px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 6px; border: 1px solid; }
+  .hint { font-size: 13px; color: var(--muted); margin: 16px 2px 0; max-width: 78ch; }
+  .hint code { background: var(--code-bg); padding: 0 5px; border-radius: 4px; font-size: 12px; }
+
+  .cardbox { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+  h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 0 0 14px; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .scroll { overflow-x: auto; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+  td code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 12px; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .who { color: var(--muted); }
+
+  .scripts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 640px) { .scripts { grid-template-columns: 1fr; } }
+  .srow { border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; background: var(--surface); }
+  .srow .fn { font-family: ui-monospace, monospace; font-size: 12.5px; font-weight: 700; color: var(--accent); }
+  .srow .rl { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+
+  .gotcha { display: flex; gap: 11px; padding: 13px 15px; border-radius: 11px; background: var(--sev-soft);
+    border: 1px solid color-mix(in srgb, var(--sev) 30%, transparent); margin-bottom: 10px; }
+  .gotcha.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+  .gotcha .ic { font-size: 15px; line-height: 1.4; }
+  .gotcha b { font-size: 13.5px; }
+  .gotcha p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+  .gotcha code { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 4px; border-radius: 4px; font-size: 11.5px; }
+
+  .foot { margin-top: 34px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+  .foot code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  :root { --bg:#f6f8fb; --surface:#ffffff; --ink:#16202c; --muted:#5c6b7d; --line:#dbe3ec; --line-strong:#c3cedb;
+    --accent:#0f8f86; --accent-soft:#e2f1ef; --link:#1f6feb; --sev:#c53b3b; --sev-soft:#fbe9e8; --panel:#eef2f5;
+    --code-bg:#eef2f6; --warn:#b5730b; --warn-soft:#fbf0dc; }
+  @media (prefers-color-scheme:dark){ :root{ --bg:#0d131a; --surface:#141d27; --ink:#e7edf4; --muted:#93a3b4; --line:#24303c;
+    --line-strong:#33414f; --accent:#34c3b6; --accent-soft:#12332f; --link:#6ea8ff; --sev:#f0736e; --sev-soft:#3a1f1e;
+    --panel:#101922; --code-bg:#10191f; --warn:#e0a53f; --warn-soft:#2e2410; } }
+  :root[data-theme="light"]{ --bg:#f6f8fb;--surface:#ffffff;--ink:#16202c;--muted:#5c6b7d;--line:#dbe3ec;--line-strong:#c3cedb;--accent:#0f8f86;--accent-soft:#e2f1ef;--link:#1f6feb;--sev:#c53b3b;--sev-soft:#fbe9e8;--panel:#eef2f5;--code-bg:#eef2f6;--warn:#b5730b;--warn-soft:#fbf0dc; }
+  :root[data-theme="dark"]{ --bg:#0d131a;--surface:#141d27;--ink:#e7edf4;--muted:#93a3b4;--line:#24303c;--line-strong:#33414f;--accent:#34c3b6;--accent-soft:#12332f;--link:#6ea8ff;--sev:#f0736e;--sev-soft:#3a1f1e;--panel:#101922;--code-bg:#10191f;--warn:#e0a53f;--warn-soft:#2e2410; }
+  *{box-sizing:border-box;} body{margin:0;background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 72px;}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.12em;color:var(--accent);text-transform:uppercase;}
+  h1{font-size:clamp(26px,3.4vw,38px);line-height:1.12;margin:10px 0 12px;letter-spacing:-.02em;text-wrap:balance;}
+  .lede{color:var(--muted);font-size:16px;max-width:72ch;margin:0;} .lede code{background:var(--code-bg);padding:1px 6px;border-radius:5px;font-size:.88em;}
+  code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:28px 0 22px;}
+  .tab{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);font:inherit;font-size:13px;font-weight:600;padding:8px 15px;border-radius:9px;cursor:pointer;}
+  .tab[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .tab:focus-visible{outline:2px solid var(--link);outline-offset:2px;}
+  .panel{display:none;} .panel.active{display:block;animation:fade .25s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion:reduce){.panel.active{animation:none;}}
+  .canvas{background:#f4f7fa;border:1px solid #d3dde7;border-radius:16px;padding:28px 18px 22px;overflow-x:auto;}
+  .chart{display:flex;flex-direction:column;align-items:center;min-width:320px;}
+  .fnode{width:min(600px,100%);background:#fff;border:1px solid #c3cedb;border-radius:12px;padding:12px 17px;text-align:center;box-shadow:0 1px 2px rgba(20,40,60,.05);}
+  .fnode .nt{font-family:ui-monospace,monospace;font-weight:700;font-size:13.5px;color:#16202c;}
+  .fnode .nb{font-size:12px;color:#5c6b7d;margin-top:3px;} .fnode .nb code,.fnode .nt code{background:#eef2f6;padding:0 4px;border-radius:4px;font-size:.92em;}
+  .fnode.start{background:#0f8f86;border-color:#0c7a72;} .fnode.start .nt{color:#fff;} .fnode.start .nb{color:#d6efeb;} .fnode.start .nb code{background:rgba(255,255,255,.16);color:#fff;}
+  .fnode.ext{background:#e2f1ef;border-color:#0f8f86;} .fnode.ext .nt{color:#0a4a45;} .fnode.ext .nb{color:#2c665f;} .fnode.ext .nb code{background:rgba(15,143,134,.14);color:#0a4a45;}
+  .fnode.dec{background:#fdeecb;border-color:#b5730b;} .fnode.dec .nt{color:#5a3d06;}
+  .fnode.list{text-align:left;width:min(600px,100%);} .fnode.list .nt{text-align:center;}
+  .fnl{margin-top:9px;display:flex;flex-direction:column;} .fnl .li{display:flex;justify-content:space-between;gap:12px;font-size:12px;border-top:1px dashed #dbe3ec;padding:6px 0;} .fnl .li:first-child{border-top:none;}
+  .fnl .k{font-family:ui-monospace,monospace;color:#0f8f86;font-weight:700;white-space:nowrap;} .fnl .v{color:#5c6b7d;text-align:right;}
+  .conn{width:0;height:26px;border-left:2px solid #9aa8b6;position:relative;} .conn::after{content:"";position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid #9aa8b6;}
+  .conn .lbl{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:11px;color:#5c6b7d;background:#f4f7fa;padding:1px 6px;white-space:nowrap;border-radius:4px;}
+  .reqs{margin-top:20px;width:min(600px,100%);font-size:12px;color:#4a5a68;background:#eaeef3;border:1px dashed #b6c2ce;border-radius:10px;padding:10px 14px;text-align:center;} .reqs b{color:#16202c;} .reqs code{background:#dde4eb;padding:0 4px;border-radius:4px;font-size:11.5px;}
+  .hint{font-size:13px;color:var(--muted);margin:16px 2px 0;max-width:80ch;} .hint code{background:var(--code-bg);padding:0 5px;border-radius:4px;font-size:12px;}
+  .cardbox{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px 22px;}
+  h2.sec{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 14px;font-weight:700;}
+  table{width:100%;border-collapse:collapse;font-size:13px;} .scroll{overflow-x:auto;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;} th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700;}
+  td code{background:var(--code-bg);padding:1px 6px;border-radius:5px;font-size:12px;} tr:last-child td{border-bottom:none;} .who{color:var(--muted);} .n{color:var(--accent);font-weight:700;font-family:ui-monospace,monospace;}
+  .scripts{display:grid;grid-template-columns:1fr 1fr;gap:10px;} @media (max-width:640px){.scripts{grid-template-columns:1fr;}}
+  .srow{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--surface);} .srow .fn{font-family:ui-monospace,monospace;font-size:12.5px;font-weight:700;color:var(--accent);} .srow .rl{font-size:12.5px;color:var(--muted);margin-top:3px;}
+  .stack{display:flex;flex-direction:column;gap:14px;}
+  .gotcha{display:flex;gap:11px;padding:13px 15px;border-radius:11px;background:var(--sev-soft);border:1px solid color-mix(in srgb,var(--sev) 30%,transparent);margin-bottom:10px;}
+  .gotcha.warn{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 32%,transparent);} .gotcha .ic{font-size:15px;line-height:1.4;} .gotcha b{font-size:13.5px;} .gotcha p{margin:2px 0 0;font-size:12.5px;color:var(--muted);} .gotcha code{background:color-mix(in srgb,var(--ink) 8%,transparent);padding:0 4px;border-radius:4px;font-size:11.5px;}
+  .foot{margin-top:34px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;} .foot code{background:var(--code-bg);padding:1px 5px;border-radius:4px;}
+  .topnav{display:flex;flex-wrap:wrap;gap:6px;position:sticky;top:0;z-index:50;background:var(--bg);padding:11px 20px;border-bottom:1px solid var(--line);align-items:center;}
+  .topnav .brand{font-weight:800;font-size:14px;letter-spacing:-.01em;margin-right:8px;color:var(--ink);}
+  .navbtn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;}
+  .navbtn[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .navbtn:focus-visible{outline:2px solid var(--link);outline-offset:2px;}
+  .page{display:none;} .page.active{display:block;}
+</style></head><body>
+  <nav class="topnav">
+    <span class="brand">lark-ops-ai docs</span>
+    <button class="navbtn" aria-selected="true" data-go="home">Deployment</button>
+    <button class="navbtn" aria-selected="false" data-go="session">P0 Session</button>
+    <button class="navbtn" aria-selected="false" data-go="overview">Overview</button>
+    <button class="navbtn" aria-selected="false" data-go="issue">Issue Watch</button>
+    <button class="navbtn" aria-selected="false" data-go="ring">VC Ring</button>
+    <button class="navbtn" aria-selected="false" data-go="grafana">Grafana</button>
+    <button class="navbtn" aria-selected="false" data-go="recording">Recording</button>
+    <button class="navbtn" aria-selected="false" data-go="monitoring">Monitoring</button>
+  </nav>
+<section class="page active bg-slate-100 min-h-screen font-sans text-slate-800 antialiased" data-page="home">
+
+    <div class="max-w-[1500px] mx-auto px-4 sm:px-6 py-8">
+        <header class="mb-6 flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 mb-1">lark-ops-ai · docs</p>
+                <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                    Deployment: Lark Cloud → Your server (ECS Aliyun) → Groq / Claude / Lark API
+                </h1>
+                <p class="text-slate-600 mt-2 text-sm max-w-4xl leading-relaxed">
+                    Lark Cloud pushes webhooks to your domain. nginx terminates TLS and forwards to
+                    <code class="text-xs bg-white px-1.5 py-0.5 rounded border">lark-ops-ai.service</code>
+                    (uvicorn on port 8000). Your Python code then calls outbound APIs to reply in Lark and run AI.
+                </p>
+            </div>
+            <div class="flex flex-wrap gap-2 bg-white p-1.5 rounded-xl shadow-sm border border-slate-200 shrink-0 h-fit">
+                <button type="button" data-flow="all" class="flow-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-white transition-colors">Full flow</button>
+                <button type="button" data-flow="inbound" class="flow-btn px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-sky-50 transition-colors">Inbound</button>
+                <button type="button" data-flow="outbound" class="flow-btn px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-purple-50 transition-colors">Outbound</button>
+                <button type="button" data-flow="features" class="flow-btn px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-emerald-50 transition-colors">Features</button>
+            </div>
+        </header>
+
+        <div class="flex flex-wrap gap-6 items-center bg-white border border-slate-200 px-4 py-3 rounded-xl shadow-sm mb-6 text-sm">
+            <span class="font-bold text-slate-700">Legend</span>
+            <span class="flex items-center gap-2"><span class="inline-block w-10 h-1 bg-blue-500 rounded"></span> Inbound — Lark Cloud → your HTTPS URL</span>
+            <span class="flex items-center gap-2"><span class="inline-block w-10 h-0.5 border-t-2 border-dashed border-purple-500"></span> Outbound — your server → internet APIs</span>
+            <span class="flex items-center gap-2"><span class="inline-block w-10 h-0.5 border-t-2 border-dashed border-emerald-500"></span> Optional — same server, local HTTP (lark-forwarder)</span>
+        </div>
+
+        <!-- Main deployment row -->
+        <div id="panel-flow" class="overflow-x-auto pb-6">
+            <div class="diagram-canvas relative mx-auto pt-14 pb-4">
+
+                <div id="zone-lark-cloud" class="absolute top-0 left-0 w-[280px] h-[560px] border-2 border-dashed border-slate-400 bg-slate-200/40 rounded-3xl z-0">
+                    <div class="absolute top-3 left-4 text-[10px] font-bold uppercase tracking-wide text-slate-700 bg-white border border-slate-300 px-2 py-1 rounded-md">Lark Cloud (SaaS)</div>
+                </div>
+
+                <div id="zone-vps" class="absolute top-0 left-[300px] w-[680px] h-[560px] border-2 border-dashed border-sky-300 bg-sky-50/50 rounded-3xl z-0">
+                    <div class="absolute top-3 left-4 text-[10px] font-bold uppercase tracking-wide text-sky-800 bg-sky-100 border border-sky-200 px-2 py-1 rounded-md">Your server (ECS Aliyun) — inbound</div>
+                </div>
+
+                <div class="relative z-10 flex flex-row items-start gap-0">
+
+                    <!-- Lark Cloud -->
+                    <div id="seg-lark" class="flow-seg shrink-0 w-[260px] pt-8">
+                        <div class="bg-slate-900 text-white rounded-2xl p-5 shadow-xl border border-slate-600 node-card">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-2xl" aria-hidden="true">☁️</span>
+                                <div>
+                                    <h2 class="font-bold text-base leading-tight">Lark / Feishu Cloud</h2>
+                                    <p class="text-[10px] text-slate-400">Groups · DM · VC · Cards</p>
+                                </div>
+                            </div>
+                            <p class="text-[10px] text-slate-400 mb-3 mt-2">Events pushed to your webhook URL:</p>
+                            <ul class="space-y-1 text-[10px] font-mono text-slate-300">
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">im.message.receive_v1</li>
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">card.action.trigger</li>
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">vc.meeting.join_meeting_v1</li>
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">vc.meeting.leave_meeting_v1</li>
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">vc.meeting.meeting_ended_v1</li>
+                                <li class="bg-slate-800/90 px-2 py-1 rounded border border-slate-700">vc.meeting.recording_ready_v1</li>
+                            </ul>
+                            <p class="mt-3 pt-3 border-t border-slate-600 text-[10px] text-slate-400">
+                                POST <span class="text-emerald-400">HTTPS</span> → your domain
+                            </p>
+                            <p class="text-[9px] text-sky-300/90 mt-1 font-mono break-all">/lark/webhook</p>
+                            <p class="text-[9px] text-amber-300/90 mt-2">Browser OAuth (VC ring): GET /vc/oauth/callback</p>
+                        </div>
+                    </div>
+
+                    <div id="seg-a1" class="flow-seg shrink-0 w-20 flex flex-col items-center pt-32">
+                        <span class="text-[9px] font-bold text-sky-800 bg-sky-100 px-2 py-0.5 rounded-full mb-2">TLS 443</span>
+                        <div class="w-full h-1.5 bg-blue-500 rounded relative">
+                            <span class="absolute -right-1 -top-1 w-0 h-0 border-y-[7px] border-l-[11px] border-y-transparent border-l-blue-500"></span>
+                        </div>
+                        <span class="text-[9px] text-slate-500 mt-2 font-mono">1</span>
+                    </div>
+
+                    <!-- Your server — ECS Aliyun (e.g. OSE-bot-dev) -->
+                    <div id="seg-vps" class="flow-seg shrink-0 w-[640px] pt-8">
+                        <div class="border-4 border-sky-500 rounded-[2rem] bg-gradient-to-br from-sky-50 to-white p-5 pt-10 shadow-lg relative">
+                            <div class="absolute top-3 left-5 right-5 flex justify-between items-center">
+                                <span class="text-[10px] font-extrabold uppercase tracking-wide text-sky-950 bg-sky-200 border border-sky-400 px-2.5 py-1 rounded-lg">Your server (ECS Aliyun)</span>
+                                <span class="text-[9px] text-sky-900/90 font-mono">public IP :443 → nginx</span>
+                            </div>
+
+                            <div class="flex flex-row items-stretch gap-4">
+                                <div class="w-[170px] bg-white rounded-2xl p-4 border-2 border-emerald-500 shadow-sm node-card flex flex-col">
+                                    <h3 class="font-bold text-emerald-800 text-sm mb-2">nginx</h3>
+                                    <p class="text-[11px] text-slate-600 flex-1">SSL termination, reverse proxy</p>
+                                    <p class="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 text-center mt-2">→ 127.0.0.1:8000</p>
+                                </div>
+
+                                <div class="flex flex-col justify-center w-10 shrink-0">
+                                    <div class="w-full h-1 bg-blue-500 rounded relative">
+                                        <span class="absolute -right-1 -top-[5px] w-0 h-0 border-y-[6px] border-l-[10px] border-y-transparent border-l-blue-500"></span>
+                                    </div>
+                                    <span class="text-[9px] text-slate-500 mt-1 text-center">2</span>
+                                </div>
+
+                                <div class="flex-1 bg-white rounded-2xl p-4 border-2 border-blue-600 shadow-md node-card">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <h3 class="font-bold text-blue-900 text-sm">uvicorn + FastAPI</h3>
+                                        <span class="bg-blue-100 text-blue-700 text-[9px] font-bold px-1.5 rounded">main.py</span>
+                                    </div>
+                                    <p class="text-[10px] font-mono bg-slate-100 px-2 py-1 rounded text-slate-800 mb-2 text-center">POST /lark/webhook · reply code 0 fast</p>
+                                    <p class="text-[10px] text-slate-600 mb-2">Background: <code class="text-[9px]">_process_lark_payload</code></p>
+                                    <div class="grid grid-cols-2 gap-1 text-[9px]">
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">lark_logic.py</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">handlers.py</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">session.py</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">issue_watch.py</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">vc_ring.py</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">vc_recording_fanout</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">graph_screenshot</code>
+                                        <code class="bg-slate-50 px-1 py-0.5 border rounded">bitable_adjustments</code>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-4 grid grid-cols-2 gap-3">
+                                <div class="bg-amber-50 border border-amber-300 rounded-xl px-3 py-2 text-[10px]">
+                                    <span class="font-bold text-amber-950 uppercase">systemd</span>
+                                    <span class="font-mono text-amber-900 ml-2">lark-ops-ai.service</span>
+                                    <p class="text-amber-900/80 mt-1">WorkingDir: /root/lark-ops-ai-dev · port 8000</p>
+                                </div>
+                                <div id="seg-forwarder" class="bg-emerald-50 border border-dashed border-emerald-400 rounded-xl px-3 py-2 text-[10px] node-card">
+                                    <span class="font-bold text-emerald-900">Optional: lark-forwarder</span>
+                                    <span class="font-mono ml-1">:8010</span>
+                                    <p class="text-emerald-800/90 mt-1">Overview bot posts to broadcast group (2nd Lark app)</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="seg-a2" class="flow-seg shrink-0 w-16 flex flex-col items-center pt-32">
+                        <span class="text-[9px] font-bold text-purple-800 bg-purple-100 px-1.5 py-0.5 rounded-full mb-2">egress</span>
+                        <div class="w-full h-0.5 border-t-2 border-dashed border-purple-500 relative">
+                            <span class="absolute -right-1 -top-[5px] w-0 h-0 border-y-[6px] border-l-[11px] border-y-transparent border-l-purple-500"></span>
+                        </div>
+                        <span class="text-[9px] text-slate-500 mt-2 font-mono">3</span>
+                    </div>
+
+                    <!-- Outbound clouds -->
+                    <div id="seg-out" class="flow-seg shrink-0 w-[300px] pt-8">
+                        <div class="rounded-3xl border-2 border-dashed border-purple-300 bg-purple-50/50 p-4 shadow-sm space-y-2">
+                            <p class="text-[10px] font-bold uppercase text-purple-800 tracking-widest border-b border-purple-200 pb-2">Outbound — external clouds</p>
+
+                            <div class="bg-white rounded-xl p-3 border-2 border-purple-400 node-card">
+                                <div class="flex items-center gap-1 mb-1"><span>☁️</span><h3 class="font-bold text-slate-800 text-sm">Groq Cloud</h3></div>
+                                <p class="text-[9px] font-mono text-slate-500">api.groq.com</p>
+                                <p class="text-[10px] text-slate-600 mt-1">Overview text, OCR on screenshots, wiki Q&amp;A, Issue Watch failover</p>
+                            </div>
+
+                            <div class="bg-white rounded-xl p-3 border-2 border-violet-400 node-card">
+                                <div class="flex items-center gap-1 mb-1"><span>☁️</span><h3 class="font-bold text-slate-800 text-sm">Anthropic Cloud</h3></div>
+                                <p class="text-[9px] font-mono text-slate-500">api.anthropic.com</p>
+                                <p class="text-[10px] text-slate-600 mt-1">Issue Watch classify (optional, Claude first when key set)</p>
+                            </div>
+
+                            <div class="bg-white rounded-xl p-3 border-2 border-emerald-500 node-card">
+                                <div class="flex items-center gap-1 mb-1"><span>☁️</span><h3 class="font-bold text-slate-800 text-sm">Lark Open Platform</h3></div>
+                                <p class="text-[9px] font-mono text-slate-500">open-sg.larksuite.com</p>
+                                <p class="text-[10px] text-slate-600 mt-1">IM, VC reserve/end, cards PATCH, urgent ring, recording permissions, Bitable</p>
+                            </div>
+
+                            <div class="bg-white rounded-xl p-3 border border-slate-300 node-card opacity-90">
+                                <h3 class="font-bold text-slate-700 text-xs">2nd Lark app (optional)</h3>
+                                <p class="text-[10px] text-slate-600 mt-1">Overview bot via lark-forwarder — posts to broadcast group</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature matrix -->
+        <div id="panel-features" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 mb-6">
+            <h2 class="text-lg font-bold text-slate-900 mb-1">Features inside lark-ops-ai (p0_logic)</h2>
+            <p class="text-sm text-slate-600 mb-4">All triggered after Lark Cloud sends an event to your webhook — not separate servers unless noted. <span class="font-semibold text-blue-600">Click a card to open its flow-chart page.</span></p>
+            <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="session">
+                    <p class="font-semibold text-slate-900">P0 Session lifecycle <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">Keyword / AI declare → VC reserve → participants → end / cancel + log wrap-up</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="session">
+                    <p class="font-semibold text-slate-900">Ongoing reminder + buzz <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">DM duty + 加急 at major 5-min / minor 10-min while the P0 meeting is still active (session.py)</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="overview">
+                    <p class="font-semibold text-slate-900">Overview builder <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">DM draft + OCR → bilingual preview → Send to group + forwarder broadcast</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="overview">
+                    <p class="font-semibold text-slate-900">Bitable deploy / ops cards <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">On declare / after Send — query deploy + ops Bitable tables, post paged cards</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="issue">
+                    <p class="font-semibold text-slate-900">Issue Watch <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">Claude → Groq → keyword classify → threshold → alert DM + buzz; human Declare P0</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="ring">
+                    <p class="font-semibold text-slate-900">VC Ring <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">Page today's duty into the live VC (/c /m /fe /srebac); fixed-inviter OAuth</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="grafana">
+                    <p class="font-semibold text-slate-900">Grafana screenshot <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">Render-API / Playwright capture on P0 or on-demand → post images</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="recording">
+                    <p class="font-semibold text-slate-900">Recording fan-out <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">recording_ready → owner-OAuth permissions → card + link to hub groups</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card cursor-pointer hover:border-blue-400" data-go="monitoring">
+                    <p class="font-semibold text-slate-900">Monitoring / log alerts <span class="text-blue-500 float-right">→</span></p>
+                    <p class="text-xs text-slate-600 mt-1">Root-logger ERROR alerts + P0 session Claude wrap-up → monitoring chat</p>
+                </div>
+                <div class="border border-slate-200 rounded-xl p-3 node-card opacity-90">
+                    <p class="font-semibold text-slate-700">Wiki AI (optional)</p>
+                    <p class="text-xs text-slate-600 mt-1">Separate group — wiki_ai_logic + Groq + linked Docx (no dedicated page)</p>
+                </div>
+            </div>
+        </div>
+
+        <footer class="text-center text-xs text-slate-500 border-t border-slate-200 pt-6 space-y-2 max-w-3xl mx-auto">
+            <p>In-memory state (P0_SESSIONS, drafts) is lost on restart. Service name: lark-ops-ai.service — not lark-ops-ai-dev.service.</p>
+            <div class="flex justify-center gap-4 text-[10px] font-mono">
+                <span class="bg-slate-200 px-2 py-1 rounded">diagram v3</span>
+                <span class="bg-slate-200 px-2 py-1 rounded">ECS Aliyun</span>
+            </div>
+        </footer>
+    </div>
+</section>
+<section class="page" data-page="session">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>P0 Session lifecycle — declare → meeting → end</h1>
+  <p class="lede">The spine every other feature hangs on. A P0/P1 declaration reserves a Lark VC meeting, posts the join link, DMs duty, tracks who joins/leaves, and tears the session down on <b>end</b>, <b>cancel</b>, or the VC closing on its own — writing a log wrap-up each time.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; APIs</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <!-- FLOW -->
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">Declare</div><div class="nb">typed <code>p0</code> · keyword + AI triage · <code>p1</code> Yes/No card · Issue Watch</div></div>
+      <div class="conn"><span class="lbl">dedupe + exclusive lock</span></div>
+      <div class="fnode"><div class="nt">session.py · start_p0</div><div class="nb">single-meeting guard (active / disk / cooldown) unless multi-mode</div></div>
+      <div class="conn"></div>
+      <div class="fnode ext"><div class="nt">lark_client · create_vc_reserve</div><div class="nb"><code>POST vc/v1/reserves/apply</code> · auto-record → join link + meeting_no</div></div>
+      <div class="conn"><span class="lbl">build P0_SESSIONS state</span></div>
+      <div class="fnode list"><div class="nt">post &amp; hand-off</div>
+        <div class="fnl">
+          <div class="li"><span class="k">meeting notice</span><span class="v">link unfurl to group (+ boss/hub fan-out for P0)</span></div>
+          <div class="li"><span class="k">DM duty</span><span class="v">ring cheat-sheet + green Build-overview card</span></div>
+          <div class="li"><span class="k">hooks</span><span class="v">Bitable deploy/ops cards · Grafana screenshot</span></div>
+          <div class="li"><span class="k">timer</span><span class="v">auto-cancel if no external joins</span></div>
+          <div class="li"><span class="k">ongoing buzz</span><span class="v">DM duty + 加急 at 5 / 10 min if still active</span></div>
+        </div>
+      </div>
+      <div class="conn"><span class="lbl">VC events → main.py</span></div>
+      <div class="fnode"><div class="nt">join / leave → participants.py</div><div class="nb">bind meeting_id · add/remove name · fire ring &amp; check-person hooks</div></div>
+      <div class="conn"><span class="lbl">end · cancel · native-ended</span></div>
+      <div class="fnode ext"><div class="nt">end_p0_session / cancel_p0_session</div><div class="nb">end VC · flip card to terminal · schedule recording fan-out · log summary</div></div>
+      <div class="reqs">Session key = <code>chat_id</code> (or <code>chat_id#meeting_no</code> for concurrent meetings). State in <code>P0_SESSIONS</code> + optional disk (<code>P0_SHARED_STATE_DIR</code>) for multi-replica + crash recovery.</div>
+    </div></div>
+    <p class="hint">Three tear-down paths converge on <code>end_p0_session</code>: a typed <b>end</b>, a typed <b>cancel</b> (recalls the link, drops the overview DM), and the native <b>meeting_ended_v1</b> event (skips the now-404 <code>/end</code> call). Cancel pre-registers the meeting so the ensuing native-ended event doesn't double-post a card.</p>
+  </section>
+
+  <!-- STEPS -->
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Ordered flow — every step, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>main.py · _process_lark_payload</code></td><td>decrypt AES event, classify <code>im.message.receive_v1</code>, return 200, dispatch to background</td><td class="who">Lark</td></tr>
+          <tr><td class="n">2</td><td><code>lark_logic.py · process_message</code></td><td>route text; P0/P1 keyword match + guards (negation, ignore-list, active session), then AI triage</td><td class="who">Groq (triage)</td></tr>
+          <tr><td class="n">3</td><td><code>_try_consume_keyword_trigger_dedupe</code></td><td>drop duplicate Lark deliveries (same create_time + text) before declaring</td><td class="who">—</td></tr>
+          <tr><td class="n">4</td><td><code>session.py · start_p0</code></td><td>take <code>exclusive_lock(chat_id)</code>; single-meeting guard (active / disk / cooldown) unless multi-mode</td><td class="who">—</td></tr>
+          <tr><td class="n">5</td><td><code>lark_client · create_vc_reserve</code></td><td><code>POST vc/v1/reserves/apply</code> with owner + auto_record → link, reserve_id, meeting_no. Empty link → abort</td><td class="who">Lark VC</td></tr>
+          <tr><td class="n">6</td><td><code>session.py · start_p0</code></td><td>build <code>P0_SESSIONS[key]</code> (priority, start_epoch, link, ids, participants=[], ring seeds); seed host placeholder</td><td class="who">—</td></tr>
+          <tr><td class="n">7</td><td><code>_post_meeting_link_unfurl_notice</code></td><td>plain-text "🚨 P0 meeting created" + raw URL (native VC unfurl) to the meeting-card chat; store <code>meeting_invite_message_id</code></td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">8</td><td><code>_fanout_p0_meeting_created_link_notice</code></td><td>(P0 only) same notice to boss/hub groups; store <code>fanout_link_mids</code> for later recall</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">9</td><td><code>session_disk.save_session</code> + DM hooks</td><td>persist row; DM duty the ring guide + green Build-overview card; Bitable + Grafana hooks (each guarded by mid-flight cancel)</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">10</td><td><code>schedule_vc_auto_cancel_if_no_external_joins</code></td><td>spawn a daemon timer tagged with a run_id</td><td class="who">—</td></tr>
+          <tr><td class="n">10b</td><td><code>schedule_p0_ongoing_dm_buzz</code></td><td><b>Ongoing reminder + buzz:</b> arm major (5 min) / minor (10 min) timers → if the meeting is still active, DM the duty a reminder card (<code>build_p0_ongoing_dm_buzz_card</code>) naming <code>P0_ONGOING_CONTACT_NAMES</code> + a Lark 加急. Run-id-guarded; stops when the session ends</td><td class="who">Lark IM + 加急</td></tr>
+          <tr><td class="n">11</td><td><code>main.py · vc.meeting.join_meeting_v1</code></td><td><code>bind_live_meeting_id</code>, count external join (open_id ≠ trigger), strip host placeholder, <code>add_meeting_participant</code>; fire ring / check-person / sre_game hooks</td><td class="who">Lark VC</td></tr>
+          <tr><td class="n">12</td><td><code>main.py · vc.meeting.leave_meeting_v1</code></td><td><code>participants.remove_meeting_participant(name)</code></td><td class="who">Lark VC</td></tr>
+          <tr><td class="n">13</td><td><code>schedule_vc_auto_cancel…worker</code></td><td>timer fires: if <code>vc_external_join_count == 0</code> and run_id current → <code>cancel_p0_session</code>. Skips if anyone joined</td><td class="who">—</td></tr>
+          <tr><td class="n">14</td><td><code>session.py · end_p0_session</code></td><td>typed "end": <code>PATCH vc/v1/meetings/{id}/end</code>, flip invite card to "ended", pop session, schedule recording fan-out, <code>summarize_session_logs</code></td><td class="who">Lark VC/IM</td></tr>
+          <tr><td class="n">15</td><td><code>session.py · cancel_p0_session</code></td><td>typed "cancel": pre-mark cancelled, recall <code>fanout_link_mids</code>, post "cancelled" notice, drop deferred overview DM, log summary</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">16</td><td><code>main.py · vc.meeting.meeting_ended_v1</code></td><td>native close → <code>end_p0_session_by_meeting_ref(skip_vc_end=True)</code>; guarded by "recently cancelled"</td><td class="who">Lark VC</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- SCRIPTS -->
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">features/session/session.py</span><div class="rl"><code>start_p0</code>, <code>end_p0_session</code>, <code>cancel_p0_session</code>, timers — the lifecycle core.</div></div>
+          <div class="srow"><span class="fn">features/session/participants.py</span><div class="rl">add/remove/format the VC participant list.</div></div>
+          <div class="srow"><span class="fn">features/session/session_disk.py</span><div class="rl">disk persistence + <code>exclusive_lock</code> + stale age-out.</div></div>
+          <div class="srow"><span class="fn">lark_logic.py</span><div class="rl">declare routing, keyword + AI triage, end/cancel commands.</div></div>
+          <div class="srow"><span class="fn">main.py</span><div class="rl">webhook + the <code>vc.meeting.*</code> events → session hooks.</div></div>
+          <div class="srow"><span class="fn">p0_logic/lark_client.py</span><div class="rl"><code>create_vc_reserve</code>, <code>end_vc_meeting</code>, IM post/patch/recall.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl">meeting-link notice + terminal (ended/cancelled) cards.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">all env getters (groups, auto-cancel, multi-mode, persistence).</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark APIs used</h2>
+        <table>
+          <thead><tr><th>Purpose</th><th>Endpoint</th><th>Scope</th></tr></thead>
+          <tbody>
+            <tr><td>Create meeting</td><td><code>POST vc/v1/reserves/apply</code> (auto_record)</td><td class="who">vc:reserve</td></tr>
+            <tr><td>End meeting</td><td><code>PATCH vc/v1/meetings/{id}/end</code></td><td class="who">vc:meeting</td></tr>
+            <tr><td>Active meeting id</td><td><code>GET vc/v1/reserves/{id}/get_active_meeting</code></td><td class="who">vc:reserve</td></tr>
+            <tr><td>Cancel (no join)</td><td><code>DELETE vc/v1/reserves/{id}</code></td><td class="who">vc:reserve</td></tr>
+            <tr><td>Notices / DMs</td><td><code>POST/PATCH im/v1/messages</code> + recall</td><td class="who">im:message</td></tr>
+            <tr><td>Inbound events</td><td><code>vc.meeting.{join,leave,ended,recording_ready}_v1</code></td><td class="who">event sub</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>vc:reserve</code></td><td class="who">bot tenant</td><td>create the meeting (<code>reserves/apply</code>)</td></tr>
+            <tr><td><code>vc:meeting</code> · <code>vc:meeting:readonly</code></td><td class="who">bot tenant</td><td>end meeting · read meeting info</td></tr>
+            <tr><td><code>vc:meeting.meetingevent:read</code></td><td class="who">event sub</td><td>join / leave / ended events</td></tr>
+            <tr><td><code>im:message</code> · <code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>meeting notice, DMs, fan-out</td></tr>
+            <tr><td><code>im:message:update</code> · <code>im:message:recall</code></td><td class="who">bot tenant</td><td>flip card to "ended" · recall links on cancel</td></tr>
+            <tr><td><code>contact:user.base:readonly</code></td><td class="who">bot tenant</td><td>resolve the host's display name</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">Create/end run on the <b>bot tenant token</b>. Confirm <code>im:message:update</code>/<code>:recall</code> are granted — the card flip to "ended" &amp; the cancel-recall need them. Full list: <code>docs/IT_LARK_DEV_APP_CHECKLIST.md</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- GOTCHAS -->
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha"><div><b>Stale sessions block all future declares.</b><p>A natively-ended VC (no typed end/cancel) never runs <code>delete_session</code>, so <code>sessions/&lt;chat&gt;.json</code> lingers and the single-meeting guard rejects new declares. Aged out at <code>P0_SESSION_DISK_MAX_AGE_HOURS</code> (default 12), or <code>rm</code> the file.</p></div></div>
+      <div class="gotcha warn"><div><b>Auto-cancel needs open_ids on the join event.</b><p><code>vc_external_join_count</code> only increments for a join carrying an <code>open_id ≠ trigger</code>. A real-but-anonymous join can't stop the empty-room auto-cancel. The timer is guarded by a run_id so stale reschedules are ignored.</p></div></div>
+      <div class="gotcha"><div><b>Cancel ≠ End.</b><p>Cancel recalls the join link everywhere + <b>drops</b> the deferred overview-builder DM; end flips the card to "ended" + <b>flushes</b> it. Both post a log wrap-up. Cancel's API force-end is opt-in (<code>P0_VC_CANCEL_API_END_ENABLED</code>) because tenant tokens get 99991663 — default cancel just recalls the link and lets the VC close when people leave.</p></div></div>
+      <div class="gotcha warn"><div><b>Double-declare / double-end.</b><p>Dedupe at declare (<code>_try_consume_keyword_trigger_dedupe</code>) AND cross-process via <code>exclusive_lock(chat_id)</code>. Cancel pre-registers <code>_mark_meeting_cancelled</code> so the Lark-fired <code>meeting_ended_v1</code> doesn't post a redundant "ended" card over the "cancelled" one.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>features/session/session.py</code>. · State: <code>P0_SESSIONS</code> + <code>P0_SHARED_STATE_DIR</code>. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<section class="page" data-page="overview">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>Overview builder — draft → preview → send</h1>
+  <p class="lede">Turns pasted text + screenshots (DM'd to the bot) into a bilingual incident overview. The draft accrues per operator, an AI preview is generated, and on <b>Send</b> it posts to the incident group — optionally re-broadcast by a second Lark app via the forwarder — plus deploy/ops Bitable cards.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; deps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <!-- FLOW -->
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">Trigger</div><div class="nb">P0 declare DMs green card · operator DMs text/images · <code>coe</code>/<code>cog</code></div></div>
+      <div class="conn"></div>
+      <div class="fnode"><div class="nt">handlers · handle_dm_generate_overview</div><div class="nb">route DM → resolve target group / existing draft</div></div>
+      <div class="conn"><span class="lbl">text · images</span></div>
+      <div class="fnode ext"><div class="nt">drafts · add_text / add_image</div><div class="nb">clean text · OCR images (Claude → Groq vision) → per-operator draft on disk</div></div>
+      <div class="conn"><span class="lbl">preview (auto ~6s or button)</span></div>
+      <div class="fnode ext"><div class="nt">_build_preview_from_draft</div><div class="nb">support map (Lark Sheets) + bilingual issue/impact (Claude → Groq) — in parallel</div></div>
+      <div class="conn"></div>
+      <div class="fnode"><div class="nt">preview card → operator DM</div><div class="nb">Send · Edit · Generate again · Cancel</div></div>
+      <div class="conn"><span class="lbl">Send</span></div>
+      <div class="fnode dec"><div class="nt">try_claim_overview_send</div><div class="nb">atomic send-lock — no double post · resolve routing (primary + broadcast)</div></div>
+      <div class="conn"></div>
+      <div class="fnode list"><div class="nt">post targets</div>
+        <div class="fnl">
+          <div class="li"><span class="k">primary</span><span class="v">blue overview card → incident / overview group</span></div>
+          <div class="li"><span class="k">broadcast</span><span class="v">forwarder → 2nd Lark app → broadcast group</span></div>
+          <div class="li"><span class="k">bitable</span><span class="v">deploy 📦 + ops 🔴 cards</span></div>
+        </div>
+      </div>
+      <div class="reqs">The forwarder (<code>lark-forwarder/forwarder.py</code>) is a <b>separate</b> FastAPI + separate Lark app — used only when <code>LARK_OVERVIEW_FORWARDER_ENABLED</code> + a broadcast <code>oc_</code> is mapped in <code>INCIDENT_OVERVIEW_SEND_MAP</code>.</div>
+    </div></div>
+    <p class="hint">A parallel <b>Bitable-on-declare</b> path (independent of the DM flow) posts the same deploy/ops cards the moment a P0 is declared — deduped per session so the after-overview path doesn't repost.</p>
+  </section>
+
+  <!-- STEPS -->
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Ordered flow — every step, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>session.py · start_p0</code></td><td>on P0/P1 declare, DM the operator the green "Build overview" card + seed an empty draft (target_chat, source_incident). One active card per operator; extras queue FIFO</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">2</td><td><code>main.py · lark_webhook</code></td><td>a p2p DM (<code>im.message.receive_v1</code>) extracts text + image keys, returns 200, calls <code>handle_dm_generate_overview</code> per text and per image</td><td class="who">Lark</td></tr>
+          <tr><td class="n">3</td><td><code>handlers · handle_dm_generate_overview</code></td><td>route DM: help/clear/status first; <code>coe</code>/<code>cog</code> resolves a target via <code>P0_STANDALONE_OVERVIEW_TAGS</code>/labels; else resolve target from draft → session</td><td class="who">—</td></tr>
+          <tr><td class="n">4</td><td><code>drafts · add_text / add_image</code></td><td>clean pasted text &amp; append; download image + OCR (<code>anthropic_vision_ocr</code> → <code>groq_vision_ocr</code>) stored as ocr_text; draft persisted per <code>sender_open_id</code></td><td class="who">Lark · Claude/Groq</td></tr>
+          <tr><td class="n">5</td><td><code>drafts · _build_preview_from_draft</code></td><td>button or ~6s auto-timer: build impact, then <b>in parallel</b> <code>support.build_support_request</code> (Sheets) + <code>overview_ai.overview_issue_and_zh_bilingual</code></td><td class="who">Sheets · Claude/Groq</td></tr>
+          <tr><td class="n">6</td><td><code>drafts · _save_preview</code></td><td>render bilingual markdown (<code>build_bilingual_overview_md</code>), persist the preview row</td><td class="who">—</td></tr>
+          <tr><td class="n">7</td><td><code>drafts · post_or_patch_preview_card</code></td><td>post/PATCH the preview card (Send / Edit / Generate again / Cancel) to the operator DM</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">8</td><td><code>handlers · handle_lark_card_action</code></td><td><code>card.action.trigger</code> dispatch; Edit/Generate re-PATCH; <code>send_preview</code> is the terminal path</td><td class="who">—</td></tr>
+          <tr><td class="n">9</td><td><code>drafts · try_claim_overview_send</code></td><td>atomic send-claim lock (already_sent / in_progress) so double-taps &amp; a slow forwarder can't post twice; validate all fields present</td><td class="who">—</td></tr>
+          <tr><td class="n">10</td><td><code>config · resolve_overview_send_routing</code></td><td>returns (primary_dest, broadcast_dest, use_forwarder) — forwarder only if enabled + URL + a broadcast <code>oc_</code> mapped</td><td class="who">—</td></tr>
+          <tr><td class="n">11</td><td><code>lark_client · post_card_to_chat</code></td><td>post the blue overview card to primary_dest; record the group post id for later in-place edits; confirm in the DM</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">12</td><td><code>overview_forwarder · post_overview_via_forwarder</code></td><td>(if use_forwarder) HTTP <code>POST {forwarder}/post-overview</code> with md + card + broadcast_dest; link the broadcast message_id</td><td class="who">forwarder HTTP</td></tr>
+          <tr><td class="n">13</td><td><code>forwarder.py · post_overview</code></td><td>separate service: Bearer auth, its own tenant token for the Overview app, posts the card under that app; falls back to a custom-bot webhook (text only) if no app creds</td><td class="who">Lark (2nd app)</td></tr>
+          <tr><td class="n">14</td><td><code>bitable_adjustments · maybe_post…after_overview</code></td><td>post deploy + ops cards (unless already posted on declare); optional detection fan-out; clear draft/preview, release the DM slot → next queued incident</td><td class="who">Lark Bitable/IM</td></tr>
+          <tr><td class="n">B</td><td><code>bitable_adjustments · …on_p0_declare</code></td><td>parallel path: on P0 declare, read deploy + ops Bitable tables (<code>list_bitable_records</code>, 48h window), build paged cards, post page 1 + thread the rest — deduped per session</td><td class="who">Lark Bitable/IM</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- SCRIPTS -->
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">p0_logic/handlers.py</span><div class="rl"><code>handle_dm_generate_overview</code>, card-action dispatch, <code>send_preview</code>.</div></div>
+          <div class="srow"><span class="fn">features/overview/drafts.py</span><div class="rl">draft accrual, preview build, send-claim lock, group post/edit.</div></div>
+          <div class="srow"><span class="fn">features/overview/overview_ai.py</span><div class="rl">one-shot bilingual issue + zh impact.</div></div>
+          <div class="srow"><span class="fn">features/overview/overview_forwarder.py</span><div class="rl">HTTP client to the forwarder microservice.</div></div>
+          <div class="srow"><span class="fn">features/overview/bitable_adjustments.py</span><div class="rl">deploy/ops card fetch + post, per-session dedupe.</div></div>
+          <div class="srow"><span class="fn">features/overview/deployment_card_builder.py</span><div class="rl">paged deploy/ops card JSON.</div></div>
+          <div class="srow"><span class="fn">lark-forwarder/forwarder.py</span><div class="rl"><b>separate</b> FastAPI + Overview Lark app — /post-overview, /patch, /recall.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl">green instruction · preview · overview · bilingual md.</div></div>
+          <div class="srow"><span class="fn">p0_logic/lark_client.py</span><div class="rl"><code>list_bitable_records</code>, image OCR fetch, card post/patch.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl"><code>resolve_overview_send_routing</code>, standalone-tag + forwarder + bitable getters.</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">External dependencies</h2>
+        <table>
+          <thead><tr><th>Dependency</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td>Lark IM</td><td class="who"><code>im/v1/messages</code> send/patch/recall/resources/images (DM + group cards)</td></tr>
+            <tr><td>Lark Sheets</td><td class="who">support-team map in the preview build</td></tr>
+            <tr><td>Lark Bitable</td><td class="who"><code>bitable/v1/apps/.../records</code> — deploy + ops rows</td></tr>
+            <tr><td>Anthropic (Claude)</td><td class="who">image OCR + bilingual overview one-shot (primary)</td></tr>
+            <tr><td>Groq</td><td class="who">OCR + overview fallback</td></tr>
+            <tr><td>lark-forwarder</td><td class="who">separate FastAPI + Overview app token → broadcast re-post</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>im:message</code> · <code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>DM cards + group overview card</td></tr>
+            <tr><td><code>im:message:update</code> · <code>im:message:recall</code></td><td class="who">bot tenant</td><td>patch preview in place · cancel / recall</td></tr>
+            <tr><td><code>im:resource</code></td><td class="who">bot tenant</td><td>download DM screenshots for OCR</td></tr>
+            <tr><td><code>sheets:spreadsheet:readonly</code></td><td class="who">bot tenant</td><td>support-team map</td></tr>
+            <tr><td><code>bitable:app:readonly</code></td><td class="who">bot tenant</td><td>deploy + ops rows</td></tr>
+            <tr><td><code>contact:user.base:readonly</code></td><td class="who">bot tenant</td><td>name lookups</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">The forwarder is a <b>separate app</b> — it needs its own <code>im:message</code> scopes + membership in the broadcast group.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- GOTCHAS -->
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha"><div><b>The forwarder is a second Lark app.</b><p>It keeps its own token cache and must be added to the broadcast group. With no app creds it degrades to a custom-bot webhook that posts text only and returns no <code>message_id</code> — so broadcast edit/recall silently no-op.</p></div></div>
+      <div class="gotcha warn"><div><b><code>try_claim_overview_send</code> is the only double-post guard.</b><p>Under Lark's double-delivery + a double-tap, this atomic lock + immediately recording the group post id is what stops a re-post while a slow forwarder/bitable finishes.</p></div></div>
+      <div class="gotcha"><div><b>Bitable cards can fire twice conceptually.</b><p>On P0 declare AND after overview send — deduped per session (<code>_session_bitable_already_posted</code>). A partial deploy/ops post is deliberately NOT marked complete so the after-overview path retries.</p></div></div>
+      <div class="gotcha warn"><div><b>Draft/preview state is per operator, on disk.</b><p>Card buttons carry the <code>oc_</code> scope in their value so a different replica can rebuild the preview — multi-replica deployments rely on this, not shared memory.</p></div></div>
+      <div class="gotcha"><div><b>Orphaned drafts get retargeted.</b><p>If a draft's incident session ended, it's re-pointed to the standalone source so the operator isn't told "meeting ended" while also being told to use Build overview.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>features/overview/drafts.py</code> + <code>bitable_adjustments.py</code>. · Forwarder: <code>lark-forwarder/forwarder.py</code> (separate service). · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<section class="page" data-page="issue">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>Issue Watch — major-P0 auto-detection</h1>
+  <p class="lede">Watches in-group chatter that isn't an explicit declare, classifies each message with AI, accumulates reports over a time window, and — when thresholds are crossed — DMs + buzzes duty with a red alert card. <b>Detection only alerts;</b> the meeting, reply, reaction, and ring happen only after a human clicks <b>Declare as P0</b>.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; thresholds</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">in-group message (not a declare)</div><div class="nb">→ <code>try_handle_issue_watch</code> · gated by <code>P0_ISSUE_WATCH_ENABLED</code></div></div>
+      <div class="conn"><span class="lbl">skip noise + 30s dedupe</span></div>
+      <div class="fnode ext"><div class="nt">issue_watch_ai · classify_issue_watch_message</div><div class="nb">maintenance guard → Claude → Groq → keyword fallback</div></div>
+      <div class="conn"><span class="lbl">is_incident_signal?</span></div>
+      <div class="fnode"><div class="nt">append report · count unique reporters</div><div class="nb">per <code>issue_fingerprint</code> within <code>WINDOW_MIN</code> (60m)</div></div>
+      <div class="conn"><span class="lbl">threshold?</span></div>
+      <div class="fnode dec"><div class="nt">_issue_watch_meets_alert_threshold</div><div class="nb">players ≥ N &nbsp;OR&nbsp; reporters ≥ N &nbsp;OR&nbsp; (high-conf AND ≥ solo-min)</div></div>
+      <div class="conn"><span class="lbl">pass + not in cooldown</span></div>
+      <div class="fnode ext"><div class="nt">alert card → DM duty + buzz (加急)</div><div class="nb">red "🚨 Major P0 Detection" → <code>P0_DM_INSTRUCTION_OPEN_IDS</code> · Declare / Not now buttons</div></div>
+      <div class="conn"><span class="lbl">human clicks Declare as P0</span></div>
+      <div class="fnode"><div class="nt">issue_watch_declare · handle_declare_p0</div><div class="nb">thread reply + <code>OnIt</code> reaction → <code>session.start_p0</code> → ring + check persons + auto-overview</div></div>
+      <div class="reqs">Detection does <b>not</b> reply in-group, react, create a meeting, or ring — those are all downstream of the human <b>Declare as P0</b> click.</div>
+    </div></div>
+    <p class="hint">A missing-IDs report (e.g. "players can't log in", no IDs) is held up to <code>ID_WAIT_SEC</code> (40s) for a follow-up Account/ID bubble to merge; if IDs arrive first they win and the deferred timer is cancelled.</p>
+  </section>
+
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Ordered flow — every gate, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>lark_logic · process_message</code></td><td>for a detection group, a non-declare message → <code>try_handle_issue_watch</code> (footer-stripped text, sender, message_id, create_time)</td><td class="who">—</td></tr>
+          <tr><td class="n">2</td><td><code>issue_watch · try_handle_issue_watch</code></td><td>early-out if disabled; if sender is duty + @mentions people (+ ring on), record duty mentions for VC ring</td><td class="who">—</td></tr>
+          <tr><td class="n">3</td><td><code>issue_watch · _try_player_id_followup</code></td><td>if message is mostly player IDs, merge into the most-recent report for chat+sender (≤600s) → emit merged alert, short-circuit</td><td class="who">—</td></tr>
+          <tr><td class="n">4</td><td><code>issue_watch · _should_skip_noise</code></td><td>drop maintenance/test text, too-short text, pure numbers, and the bot's own echoes</td><td class="who">—</td></tr>
+          <tr><td class="n">5</td><td><code>issue_watch · _try_consume…dedupe</code></td><td>drop duplicate webhook re-deliveries — key chat:sender:create_time:text, 30s TTL</td><td class="who">—</td></tr>
+          <tr><td class="n">6</td><td><code>issue_watch_ai · classify_issue_watch_message</code></td><td>maintenance guard first; then Claude → Groq (per provider); on failure regex <code>_keyword_classify</code>; returns is_signal, confidence, fingerprint, players</td><td class="who">Claude / Groq</td></tr>
+          <tr><td class="n">7</td><td><code>issue_watch · _prune_store + append</code></td><td>prune reports older than WINDOW_MIN, append this report, count <b>unique sender open_ids</b> for the same fingerprint</td><td class="who">—</td></tr>
+          <tr><td class="n">8</td><td><code>_issue_watch_meets_alert_threshold</code></td><td>players ≥ MIN_AFFECTED_PLAYERS OR reporters ≥ MIN_REPORTS OR (conf ≥ MIN_CONFIDENCE AND reporters ≥ MIN_SOLO_REPORTERS)</td><td class="who">—</td></tr>
+          <tr><td class="n">9</td><td><code>_already_alerted + _cooldown_active</code></td><td>skip if this message already alerted; skip if per chat:category:concern cooldown active; else set cooldown (COOLDOWN_MIN)</td><td class="who">—</td></tr>
+          <tr><td class="n">10</td><td><code>_schedule_deferred_issue_watch_alert</code></td><td>if report mentions players but 0 IDs → wait ID_WAIT_SEC (40s) for a follow-up bubble before firing</td><td class="who">—</td></tr>
+          <tr><td class="n">11</td><td><code>_send_issue_watch_alert_card</code></td><td>store alert snapshot (auto-overview); build red alert card (+ Declare / Not now buttons)</td><td class="who">—</td></tr>
+          <tr><td class="n">12</td><td><code>_send_dm_alerts</code></td><td>DM the card to each <code>P0_DM_INSTRUCTION_OPEN_IDS</code>; if buzz on, Lark 加急 (app/phone/sms); mark alerted</td><td class="who">Lark IM + 加急</td></tr>
+          <tr><td class="n">D</td><td><code>issue_watch_declare · handle_declare_p0</code></td><td>(human clicks Declare) thread reply + reaction → <code>session.start_p0</code> (VC + ring) → invite check persons → push suggested overview DM</td><td class="who">Lark · Groq</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">features/issue_watch/issue_watch.py</span><div class="rl">the window store, noise/dedupe/threshold gates, alert send.</div></div>
+          <div class="srow"><span class="fn">features/issue_watch/issue_watch_ai.py</span><div class="rl">Claude/Groq classify + keyword fallback + maintenance/negation guards.</div></div>
+          <div class="srow"><span class="fn">features/issue_watch/issue_watch_overview.py</span><div class="rl">alert snapshot cache → suggested auto-overview.</div></div>
+          <div class="srow"><span class="fn">features/issue_watch/issue_watch_declare.py</span><div class="rl">the Declare-as-P0 button → reply/reaction/start_p0/ring.</div></div>
+          <div class="srow"><span class="fn">lark_logic.py</span><div class="rl">feeds non-declare group messages into the watcher.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl"><code>build_issue_watch_alert_card</code> (red, with buttons).</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">all <code>P0_ISSUE_WATCH_*</code> threshold + toggle getters.</div></div>
+          <div class="srow"><span class="fn">p0_logic/handlers.py</span><div class="rl">card-action route for the declare/dismiss buttons.</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Thresholds &amp; toggles (defaults)</h2>
+        <table>
+          <thead><tr><th>Env</th><th>Default</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>_MIN_CONFIDENCE</code></td><td>0.88</td><td class="who">AI confidence for the solo path</td></tr>
+            <tr><td><code>_MIN_REPORTS</code></td><td>4</td><td class="who">unique reporters to alert on volume</td></tr>
+            <tr><td><code>_MIN_SOLO_REPORTERS</code></td><td>2</td><td class="who">min reporters even at high confidence</td></tr>
+            <tr><td><code>_MIN_AFFECTED_PLAYERS</code></td><td>3</td><td class="who">player IDs → "widespread"</td></tr>
+            <tr><td><code>_WINDOW_MIN</code></td><td>60</td><td class="who">report-accumulation window</td></tr>
+            <tr><td><code>_COOLDOWN_MIN</code></td><td>20</td><td class="who">per chat:category re-alert cooldown</td></tr>
+            <tr><td><code>_ID_WAIT_SEC</code></td><td>40</td><td class="who">wait for follow-up player IDs</td></tr>
+            <tr><td><code>_ENABLED / _AI_PROVIDER / _BUZZ_ENABLED</code></td><td>—</td><td class="who">master toggle · claude/groq · 加급</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>im:message.group_msg:readonly</code> · <code>.group_at_msg:readonly</code></td><td class="who">bot tenant</td><td>read the group chatter it watches</td></tr>
+            <tr><td><code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>DM the alert card</td></tr>
+            <tr><td><code>im:message.urgent</code> (+ <code>:phone</code> <code>:sms</code>)</td><td class="who">bot tenant</td><td>the 加急 buzz</td></tr>
+            <tr><td><code>im:message.reactions:write_only</code></td><td class="who">bot tenant</td><td>the OnIt reaction on Declare</td></tr>
+            <tr><td><code>contact:user.base:readonly</code></td><td class="who">bot tenant</td><td>name lookups</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">The AI classify step is an external HTTP call (Anthropic / Groq) — not a Lark scope.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha"><div><b>Solo reports rarely page alone.</b><p><code>MIN_SOLO_REPORTERS=2</code> — one high-confidence message won't alert unless a 2nd unique reporter hits the same fingerprint in the 60m window, or the player count is widespread. A named 1–2 players actively <i>blocks</i> the solo path.</p></div></div>
+      <div class="gotcha warn"><div><b>Two dedupe/cooldown layers.</b><p>(a) 30s webhook re-delivery dedupe; (b) per chat:category:concern cooldown (20m). Same issue re-reported in the window is silently suppressed — the usual "why didn't it fire again."</p></div></div>
+      <div class="gotcha"><div><b>No recipients = looks dead.</b><p>Empty <code>P0_DM_INSTRUCTION_OPEN_IDS</code> → classification still runs but the alert DM sends to nobody (logged as a warning).</p></div></div>
+      <div class="gotcha warn"><div><b>Maintenance guard runs first.</b><p>Anything about scheduled/under/back-from maintenance is dropped before the LLM ever sees it; a negation guard also suppresses "working fine / resolved / withdrew without issue."</p></div></div>
+      <div class="gotcha"><div><b>Detection ≠ action (by design).</b><p>Auto-detection only DMs + buzzes duty. The in-group reply, <code>OnIt</code> reaction, VC meeting, ring, check-person invite, and auto-overview are all downstream of a human clicking <b>Declare as P0</b>.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>features/issue_watch/issue_watch.py</code>. · Detection is DM+buzz only; the meeting is a human decision. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<section class="page" data-page="ring">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>VC Ring — paging on-call into the live P0 meeting</h1>
+  <p class="lede">Someone types <code>@bot /c @name</code> (or <code>/m</code>, <code>/fe</code>, <code>/srebac</code>…) in an incident group during an active P0 meeting. The bot resolves <b>who</b> to page, then invites them into the VC using a fixed inviter's OAuth. Here's the flow, top to bottom.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="commands">Commands</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; sheets</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <!-- ============ FLOW CHART (hand-built) ============ -->
+  <section class="panel active" data-panel="flow">
+    <div class="legend">
+      <span><span class="sw" style="background:#0f8f86;border-color:#0c7a72"></span>Lark Cloud / result</span>
+      <span><span class="sw" style="background:#ffffff;border-color:#c3cedb"></span>your scripts</span>
+      <span><span class="sw" style="background:#e2f1ef;border-color:#0f8f86"></span>external — Lark Sheets / VC API</span>
+    </div>
+
+    <div class="canvas">
+      <div class="chart">
+
+        <div class="fnode">
+          <div class="nt">On P0 declare · session._send_dm_ring_guide_card</div>
+          <div class="nb">DM the duty the <b>"P1/P0 Invite Commands"</b> guide card (<code>build_ring_commands_guide_card</code>) so they know what to type · gated by <code>P0_DM_RING_GUIDE_ENABLED</code></div>
+        </div>
+        <div class="conn"><span class="lbl">duty reads it, types a command in the group</span></div>
+
+        <div class="fnode start">
+          <div class="nt">LARK / FEISHU CLOUD</div>
+          <div class="nb">pushes <code>im.message.receive_v1</code> to your domain</div>
+        </div>
+        <div class="conn"><span class="lbl">HTTPS · TLS 443</span></div>
+
+        <div class="fnode">
+          <div class="nt">main.py · POST /lark/webhook</div>
+          <div class="nb">nginx → uvicorn · returns <code>200</code> fast, heavy work in background</div>
+        </div>
+        <div class="conn"></div>
+
+        <div class="fnode">
+          <div class="nt">lark_logic.py · process_message</div>
+          <div class="nb"><code>_parse_mixed_commands</code> — a leading slash is required</div>
+        </div>
+        <div class="conn"><span class="lbl">which command?</span></div>
+
+        <div class="fnode">
+          <div class="nt">① Resolve today's duty NAME · vc_ring._resolve_ring</div>
+          <div class="nb">each command reads <b>its own sheet</b> via <code>duty_roster.py</code> / <code>sre_game.py</code> — full map in the table below</div>
+        </div>
+        <div class="conn"><span class="lbl">duty NAME(s)</span></div>
+
+        <div class="fnode ext">
+          <div class="nt">② duty_directory.py · NAME → open_id</div>
+          <div class="nb"><b>Real names</b> alias (shortcut → real name) → <b>OpenID</b> tab (real name → <code>open_id</code>) · or email → batch_get_id</div>
+        </div>
+        <div class="conn"><span class="lbl">open_ids &nbsp;·&nbsp; /c and /m·/e skip step ②</span></div>
+
+        <div class="fnode">
+          <div class="nt">vc_ring.py · invite / force_reinvite</div>
+          <div class="nb"><code>/c</code> &amp; escalations force-reinvite (bypass dedup)</div>
+        </div>
+        <div class="conn"></div>
+
+        <div class="fnode ext">
+          <div class="nt">Lark VC API</div>
+          <div class="nb"><code>PATCH /vc/v1/meetings/invite</code> — people are rung into the VC</div>
+        </div>
+        <div class="conn"><span class="lbl">then</span></div>
+
+        <div class="fnode">
+          <div class="nt">cards.py · build_ring_status_card</div>
+          <div class="nb">one consolidated "Calling today's duty…" card, posted in the thread</div>
+        </div>
+
+        <div class="reqs">
+          ⚙️ The invite depends on two things: the inviter's <b>OAuth token</b> (<code>vc_user_oauth.py</code>) and the inviter having <b>joined the VC</b> — Lark only lets a participant invite others, so until then the rings queue.
+        </div>
+
+      </div>
+    </div>
+    <p class="hint">Two-step resolve: step ① finds the duty <b>name(s)</b> from the right sheet, step ② maps each name → <code>open_id</code>. Example — <code>/sfpms</code>: the <b>SRE Handler tab</b> lists who covers FPMS; that shortcut name is turned into the <b>real name</b> by the Real-names alias, then into an <code>open_id</code> by the OpenID tab. <code>/c</code> and <code>/m·/e</code> already carry open_ids, so they skip step ②.</p>
+
+    <div class="cardbox scroll" style="margin-top:18px">
+      <h2 class="sec">Step ① in detail — which script &amp; which sheet each command reads</h2>
+      <table>
+        <thead><tr><th>Command</th><th>Script (parser)</th><th>Sheet · tab (env token)</th><th>→ produces</th></tr></thead>
+        <tbody>
+          <tr><td><code>/c @tag</code></td><td class="who">vc_ring.py</td><td class="who">— the message @mentions</td><td>open_ids directly</td></tr>
+          <tr><td><code>/m · /e</code></td><td class="who">vc_ring.py</td><td class="who">— env lists (MAJOR_CHECK / RING_ESCALATION)</td><td>open_ids directly</td></tr>
+          <tr><td><code>/fe</code></td><td class="who">duty_roster.py · parse_frontend_duty</td><td>FE roster · "Latest Duty List" <code>DUTY_ROSTER_FE</code></td><td>today's FE name</td></tr>
+          <tr><td><code>/fpms</code></td><td class="who">duty_roster.py · parse_fpms_duty</td><td>FPMS roster <code>DUTY_ROSTER_FPMS</code></td><td>today's FPMS name</td></tr>
+          <tr><td><code>/pms</code></td><td class="who">duty_roster.py · parse_pms_duty</td><td>PMS roster <code>DUTY_ROSTER_PMS</code></td><td>this week's level</td></tr>
+          <tr><td><code>/cpms</code></td><td class="who">duty_roster.py · parse_cpms_duty</td><td>CPMS monthly tab <code>DUTY_ROSTER_CPMS</code></td><td>today's CPMS name</td></tr>
+          <tr><td><b><code>/scpms /sfpms /sfe /spms</code></b></td><td class="who"><b>duty_directory.py · get_sre_team_person_names</b></td><td><b>SRE Handler tab</b> (Name│Handler) <code>DUTY_DIRECTORY_SRE_SHEET_ID</code></td><td>SRE covering that team</td></tr>
+          <tr><td><code>/dba</code></td><td class="who">duty_roster.py · parse_dba_shift_on_duty</td><td>Shift · "FINAL OSE &amp; QA MERGE" → <b>DBA</b> section <code>DUTY_SHIFT</code></td><td>on-shift DBA</td></tr>
+          <tr><td><code>/sosm</code></td><td class="who">duty_roster.py · parse_liveslot_shift_on_duty</td><td>Shift · <b>Liveslot</b> section <code>DUTY_SHIFT</code></td><td>on-shift Liveslot SRE</td></tr>
+          <tr><td><code>/srebac …</code></td><td class="who">sre_game.py · parse_sre_game_contacts</td><td>Shift · <b>SRE Game</b> section <code>DUTY_SHIFT</code></td><td>game's 1st contact</td></tr>
+          <tr><td><code>/segame &lt;g&gt;</code></td><td class="who">sre_game.py · parse_egame_contacts</td><td>Shift · <b>EGAME</b> section <code>DUTY_SHIFT</code></td><td>e-game contact</td></tr>
+          <tr><td><code>/po&lt;game&gt;</code></td><td class="who">sre_game.py · parse_po_game_managers</td><td>"Game Issue Emergency Contact" <code>DUTY_GAME_ISSUE</code></td><td>1st product manager</td></tr>
+        </tbody>
+      </table>
+      <p class="hint" style="margin-top:12px">Every sheet-based row then passes its NAME through <b>step ②</b> — <code>duty_directory.py</code>: <b>Real names</b> alias tab (shortcut → real name) → <b>OpenID</b> tab (real name → <code>open_id</code>), or the email column → <code>batch_get_id</code>. All four SRE commands share the one <b>SRE Handler tab</b>; only the Handler value (CPMS / FPMS / FE / PMS) differs.</p>
+    </div>
+  </section>
+
+  <!-- ============ COMMANDS ============ -->
+  <section class="panel" data-panel="commands">
+    <div class="cardbox scroll">
+      <h2 class="sec">Command → who gets rung → source</h2>
+      <table>
+        <thead><tr><th>Command</th><th>Who</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><code>/c @Name…</code></td><td>the tagged people</td><td class="who">message @mentions (always re-fires)</td></tr>
+          <tr><td><code>/m</code></td><td>major check persons <b>+ DBA + SRE</b></td><td class="who">P0_MAJOR_CHECK_PERSON_IDS + P0_MAJOR_ALSO_RING_COMMANDS</td></tr>
+          <tr><td><code>/e</code></td><td>escalation contacts</td><td class="who">P0_VC_RING_ESCALATION_OPEN_IDS</td></tr>
+          <tr><td><code>/fe /fpms /pms /cpms</code></td><td>today's team duty (1st contact)</td><td class="who">team roster sheet → directory</td></tr>
+          <tr><td><code>/scpms /sfpms /sfe /spms</code></td><td>SRE handler on duty</td><td class="who">SRE handler tab (+ on-shift filter) → directory</td></tr>
+          <tr><td><code>/dba /sosm</code></td><td>DBA / Liveslot SRE on shift</td><td class="who">shift sheet section → directory</td></tr>
+          <tr><td><code>/srebac … /segame &lt;g&gt;</code></td><td>1st game contact (then <code>/c</code> for rest)</td><td class="who">shift sheet SRE Game / EGAME → directory</td></tr>
+          <tr><td><code>/po&lt;game&gt;</code></td><td>1st product manager (then <code>/c</code>)</td><td class="who">Game Issue Emergency Contact sheet → directory</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">Duty learns this list from the <b>"P1/P0 Invite Commands"</b> guide card DM'd to them on P0 declare (<code>_send_dm_ring_guide_card</code> → <code>build_ring_commands_guide_card</code>, gated by <code>P0_DM_RING_GUIDE_ENABLED</code>). Multiple commands combine in one message (<code>/cpms fpms sfpms fe</code>) → one consolidated card. Escalations ring the 1st contact and open a thread where <code>/c @name</code> reaches the rest — there is no <code>/n</code> or <code>/r</code>.</p>
+  </section>
+
+  <!-- ============ SCRIPTS ============ -->
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">main.py</span><div class="rl">Webhook + OAuth endpoints; translates VC join/leave events into ring hooks.</div></div>
+          <div class="srow"><span class="fn">lark_logic.py</span><div class="rl">Routing brain — <code>_parse_mixed_commands</code> classifies ring vs game commands.</div></div>
+          <div class="srow"><span class="fn">features/recording/vc_ring.py</span><div class="rl">The core: resolve targets, invite/force-reinvite, join-watch, status card.</div></div>
+          <div class="srow"><span class="fn">features/recording/duty_roster.py</span><div class="rl">Pure parsers for roster + shift sheets → today's duty NAMES.</div></div>
+          <div class="srow"><span class="fn">features/recording/duty_directory.py</span><div class="rl">NAME → <code>open_id</code> (alias tab first, email fallback).</div></div>
+          <div class="srow"><span class="fn">features/recording/sre_game.py</span><div class="rl">Escalations: <code>/srebac</code>, <code>/po</code>, <code>/segame</code> — ring 1st, <code>/c</code> for rest.</div></div>
+          <div class="srow"><span class="fn">features/recording/vc_user_oauth.py</span><div class="rl">Per-inviter OAuth token store on disk; auto-refresh.</div></div>
+          <div class="srow"><span class="fn">p0_logic/lark_client.py</span><div class="rl"><code>invite_users_to_vc_meeting</code> + Sheets reads.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl"><code>build_ring_status_card</code> — the consolidated reply.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">Every env getter (inviter, lists, sheet tokens, toggles).</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">External sheets (read live)</h2>
+        <table>
+          <thead><tr><th>Sheet</th><th>Env token</th><th>Feeds</th></tr></thead>
+          <tbody>
+            <tr><td>Directory — Name│open_id│email + alias</td><td><code>DUTY_DIRECTORY_SHEET_TOKEN</code></td><td class="who">every ring — name→open_id</td></tr>
+            <tr><td>Team rosters (FE/FPMS/PMS/CPMS)</td><td><code>DUTY_ROSTER_*_SHEET_TOKEN</code></td><td class="who">/fe /fpms /pms /cpms</td></tr>
+            <tr><td>Shift sheet (one file, many sections)</td><td><code>DUTY_SHIFT_SHEET_TOKEN</code></td><td class="who">/dba /sosm /scpms… /srebac /segame</td></tr>
+            <tr><td>Game Issue Emergency Contact</td><td><code>DUTY_GAME_ISSUE_SHEET_TOKEN</code></td><td class="who">/po&lt;game&gt;</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>vc:meeting</code></td><td class="who">user OAuth</td><td>the actual invite — <code>PATCH /vc/v1/meetings/{id}/invite</code></td></tr>
+            <tr><td><code>offline_access</code></td><td class="who">user OAuth</td><td>refresh token → inviter authorizes once</td></tr>
+            <tr><td><code>im:message</code> · <code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>post the ring status card + threaded reply</td></tr>
+            <tr><td><code>sheets:spreadsheet:readonly</code></td><td class="who">bot tenant</td><td>read directory / roster / shift / game-issue sheets</td></tr>
+            <tr><td><code>contact:user.base:readonly</code> · <code>contact:contact.base:readonly</code></td><td class="who">bot tenant</td><td>name lookups + email → open_id (<code>batch_get_id</code>)</td></tr>
+            <tr><td><code>im:chat:readonly</code> · <code>im:chat.members:read</code></td><td class="who">bot tenant</td><td><code>list_chat_members</code> when minting prod-app open_ids</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">The <b>invite</b> runs on the inviter's <b>user token</b> (OAuth) — <code>vc:meeting</code>. Everything else (sheets, cards) runs on the <b>bot tenant token</b>. Full app scope list: <code>docs/IT_LARK_DEV_APP_CHECKLIST.md</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GOTCHAS ============ -->
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha">
+        
+        <div><b>The inviter must be IN the VC.</b><p>Lark only lets a meeting participant invite others. The ring fires when the fixed inviter (<code>P0_VC_RING_INVITER_OPEN_ID</code>) joins the VC — until then, invites queue.</p></div>
+      </div>
+      <div class="gotcha warn">
+        
+        <div><b>open_ids are per-app (error 99992361).</b><p>The same person has a different <code>open_id</code> under each Lark app. A directory minted for the dev app fails on prod. Fix: fill the <b>email</b> column (app-independent) or re-mint prod-app open_ids.</p></div>
+      </div>
+      <div class="gotcha">
+        
+        <div><b><code>/c</code> force re-invites.</b><p>The normal path dedupes and would silently no-op a re-ring of someone already targeted this session (yet still say "ringing"). Direct <code>/c</code> and escalation <code>/c</code> bypass the dedup so a manual re-ring always re-fires.</p></div>
+      </div>
+      <div class="gotcha warn">
+        
+        <div><b>OAuth is per-server + per-app.</b><p>Authorizing on dev (<code>testdev.mybot.ink</code>) does <b>not</b> carry to prod (<code>mybot.ink</code>) — different app, different token store. The inviter authorizes once on <b>each</b> server.</p></div>
+      </div>
+      <div class="gotcha">
+        
+        <div><b>Leading slash required.</b><p>An <code>@bot</code> mention alone no longer triggers a ring. <code>/c</code> is the one exception that still wants the bot tagged so the @mentions are unambiguously the targets.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot">
+    Master gate: <code>P0_VC_RING_ENABLED=1</code>, an active P0 meeting, and the fixed inviter OAuth-authorized &amp; in the VC. · Source of truth: <code>features/recording/vc_ring.py</code>. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.
+  </div>
+</div>
+
+</section>
+<section class="page" data-page="grafana">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>Grafana screenshot — capture &amp; post the dashboard</h1>
+  <p class="lede">Captures the metrics dashboard and posts it to the incident chat. Two capture engines behind one switch: the server-side <b>Render API</b> (a reliable PNG) or headless <b>Playwright</b> Chromium. Triggered on P0 declare, on a repeat interval, or by an on-demand chat request.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; env</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">Trigger</div><div class="nb">P0 auto-capture · interval repeat · on-demand chat request</div></div>
+      <div class="conn"><span class="lbl">parse range (regex + optional AI)</span></div>
+      <div class="fnode"><div class="nt">graph_screenshot_request · try_handle…</div><div class="nb">"capturing…" text + QUEUED reaction → schedule capture</div></div>
+      <div class="conn"><span class="lbl">capture thread + watchdog</span></div>
+      <div class="fnode dec"><div class="nt">_capture_png_payloads · PATH SWITCH</div><div class="nb"><code>P0_GRAPH_SCREENSHOT_USE_RENDER_API</code></div></div>
+      <div class="conn"></div>
+      <div class="fnode list"><div class="nt">two capture engines</div>
+        <div class="fnl">
+          <div class="li"><span class="k">=1 Render API</span><span class="v">server PNG · basic auth · bare <code>&amp;kiosk</code></span></div>
+          <div class="li"><span class="k">=0 Playwright</span><span class="v">Chromium · persistent profile · kiosk enforce · panel-ready waits</span></div>
+        </div>
+      </div>
+      <div class="conn"><span class="lbl">autocrop + split into 2 bands</span></div>
+      <div class="fnode ext"><div class="nt">upload_image + post_image_to_chat</div><div class="nb">caption + 2 image messages · DONE / FAILED reaction</div></div>
+      <div class="reqs">A wall-clock <b>watchdog</b> force-kills Chromium on timeout and posts a "capture failed" notice rather than wedging. There is <b>no</b> post-capture AI/OCR of the image.</div>
+    </div></div>
+    <p class="hint">The AI here only classifies the <b>request text</b> (intent + time range like <code>30m/1h/6h</code>) — it never reads the captured image. The Render-API path degrades to Playwright on failure unless <code>_RENDER_API_STRICT=1</code>.</p>
+  </section>
+
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Ordered flow — every step, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>lark_logic / session.start_p0</code></td><td>on-demand: a chat message → <code>try_handle_graph_screenshot_request</code>; auto: P0 declare → <code>schedule_p0_graph_screenshot</code> (+ arms interval timer)</td><td class="who">Lark</td></tr>
+          <tr><td class="n">2</td><td><code>graph_screenshot_request · resolve_graph_screenshot_range_key</code></td><td>allowlist gate; regex intent/range parse; ambiguous → AI classify</td><td class="who">optional Claude/Groq</td></tr>
+          <tr><td class="n">3</td><td><code>graph_screenshot_request · try_handle…</code></td><td>post "On it — capturing…" text + QUEUED reaction → <code>schedule_on_demand_graph_screenshot</code></td><td class="who">Lark text + reaction</td></tr>
+          <tr><td class="n">4</td><td><code>graph_screenshot · schedule_…</code></td><td>if a capture is busy → enqueue &amp; return "queued"; else spawn a daemon capture thread</td><td class="who">—</td></tr>
+          <tr><td class="n">5</td><td><code>graph_screenshot · _capture_and_post_ranges_thread_body</code></td><td>claim the busy-lock; arm the wall-clock <b>watchdog</b> (force-kills Chromium on timeout)</td><td class="who">—</td></tr>
+          <tr><td class="n">6</td><td><code>graph_screenshot · _capture_png_payloads</code></td><td><b>PATH SWITCH</b> on <code>USE_RENDER_API</code></td><td class="who">—</td></tr>
+          <tr><td class="n">6a</td><td><code>_capture_via_grafana_render_api</code></td><td>Render path: derive <code>/render/d/…</code> + bare <code>&amp;kiosk</code>; <code>requests.get(url, auth=(USER,PASS))</code>; validate PNG; autocrop + split into 2 bands</td><td class="who">Grafana Render API</td></tr>
+          <tr><td class="n">6b</td><td><code>_browser_pool_acquire → _load_grafana_dashboard…</code></td><td>Playwright path: reuse pooled Chromium or cold-launch persistent profile; <code>page.goto(wait_until=load)</code>; auto-login if redirected; wait panels ready</td><td class="who">Chromium · Grafana</td></tr>
+          <tr><td class="n">7</td><td><code>_prepare_grafana_dashboard_for_capture</code></td><td>enforce kiosk (re-goto kiosk URL, collapse the left dock) when the sidebar leaks; apply zoom</td><td class="who">Grafana page</td></tr>
+          <tr><td class="n">8</td><td><code>_snap (+ blank-viewport fallback)</code></td><td>capture per mode (viewport top+bottom / full-doc / clip); split into ~2 PNG bands; blank-heuristics trigger a retry</td><td class="who">—</td></tr>
+          <tr><td class="n">9</td><td><code>post_p0_graph_screenshots_to_chat</code></td><td>build the caption, drop uniformly-blank parts, then per part <code>upload_image_bytes</code> + <code>post_image_to_chat</code></td><td class="who">Lark image + IM</td></tr>
+          <tr><td class="n">10</td><td><code>_capture_and_post</code></td><td>success → DONE reaction; empty/blank → failure notice + FAILED reaction; release busy-lock, drain the queue</td><td class="who">Lark</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">features/screenshot/graph_screenshot.py</span><div class="rl">the capture engine: both paths, browser pool, snap, post.</div></div>
+          <div class="srow"><span class="fn">features/screenshot/graph_screenshot_request.py</span><div class="rl">on-demand parse, allowlist, "capturing" + reactions.</div></div>
+          <div class="srow"><span class="fn">features/screenshot/graph_screenshot_ai.py</span><div class="rl">classifies the <b>request text</b> (intent + range) — not the image.</div></div>
+          <div class="srow"><span class="fn">scripts/grafana_playwright_login_once.py</span><div class="rl">seed the persistent Grafana login profile once.</div></div>
+          <div class="srow"><span class="fn">lark_logic.py / session.py</span><div class="rl">the on-demand + auto/interval trigger call sites.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">all <code>P0_GRAPH_SCREENSHOT_*</code> getters (incl. the render switch).</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Key env &amp; deps</h2>
+        <table>
+          <thead><tr><th>Group</th><th>Env</th></tr></thead>
+          <tbody>
+            <tr><td>Path switch</td><td><code>P0_GRAPH_SCREENSHOT_USE_RENDER_API</code> · <code>_RENDER_API_STRICT</code></td></tr>
+            <tr><td>Enable / target</td><td><code>_ENABLED</code> · <code>_ON_DEMAND</code> · <code>_URL</code> · <code>_TARGET_CHAT_ID</code> · <code>_INTERVAL_MIN</code></td></tr>
+            <tr><td>Timing / watchdog</td><td><code>_GOTO_WAIT_UNTIL=load</code> · <code>_PANEL_READY_TIMEOUT_MS</code> · <code>_ON_DEMAND_MAX_SEC</code></td></tr>
+            <tr><td>Render / kiosk</td><td><code>_RENDER_HEIGHT</code> · <code>_KIOSK</code> · <code>_VIEWPORT_ONLY</code> · <code>_ZOOM_PERCENT</code></td></tr>
+            <tr><td>Auth / session</td><td><code>_USERNAME</code> · <code>_PASSWORD</code> · <code>_PLAYWRIGHT_USER_DATA_DIR</code></td></tr>
+            <tr><td>External</td><td class="who">Grafana Render API / grafana-image-renderer · Chromium (Playwright) · Pillow · Lark image upload</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>im:resource</code></td><td class="who">bot tenant</td><td>upload the captured PNG(s)</td></tr>
+            <tr><td><code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>post the caption + image messages</td></tr>
+            <tr><td><code>im:message.reactions:write_only</code></td><td class="who">bot tenant</td><td>queued / done / failed reactions</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">Grafana itself is <b>not</b> a Lark scope — the Render API + Playwright login use basic auth (<code>_USERNAME</code> / <code>_PASSWORD</code>).</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha warn"><div><b>Grafana 11 removed <code>kiosk=tv</code> → sidebar leak.</b><p>The old value left the nav visible; both paths now append a bare <code>&amp;kiosk</code>, and the Playwright path force-re-navigates the kiosk URL + collapses the dock when it detects a leak. If the capture still shows the full UI, this is the switch to check.</p></div></div>
+      <div class="gotcha"><div><b><code>networkidle</code> hangs Grafana.</b><p>Long-poll/WebSocket streams mean it may never fire; default is <code>wait_until=load</code> + explicit grid/panel-ready waits, and a wall-clock watchdog that <b>force-kills Chromium</b> and posts a failure rather than wedging.</p></div></div>
+      <div class="gotcha warn"><div><b>Blank/black captures.</b><p>Headless-shell can't composite uPlot/canvas panels; mitigations are <code>channel=chromium</code> new-headless + SwiftShader, blank-detection that drops parts / retries viewport-only. The Render API sidesteps this entirely (server-side PNG).</p></div></div>
+      <div class="gotcha"><div><b>Stale login reads as a hang.</b><p>A redirect to the Grafana login page → blank capture; the code auto-logs-in and, on failure, points at <code>grafana_playwright_login_once.py</code>. The persistent profile is single-writer — stop the service before re-seeding.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>features/screenshot/graph_screenshot.py</code>. · Render API is the deployed path; Playwright is the fallback. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<section class="page" data-page="recording">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>VC recording fan-out — share the meeting recording</h1>
+  <p class="lede">When a VC cloud recording is ready, the bot resolves the playable URL, grants view (and optional edit) permission to the target chats/people, then posts a "recording ready" card — with a polling fallback for late or missing events.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; APIs</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">vc.meeting.recording_ready_v1</div><div class="nb">(+ poll fallback after meeting_ended / from end_p0_session)</div></div>
+      <div class="conn"></div>
+      <div class="fnode"><div class="nt">fanout_recording_to_chats</div><div class="nb">load targets · topic-substring filter · dedupe by meeting_id</div></div>
+      <div class="conn"><span class="lbl">resolve URL</span></div>
+      <div class="fnode ext"><div class="nt">_resolve_recording_url</div><div class="nb">event url or <code>GET /vc/v1/meetings/{id}/recording</code> · defer if not ready</div></div>
+      <div class="conn"><span class="lbl">grant permission (needs owner OAuth)</span></div>
+      <div class="fnode list"><div class="nt">grant view / edit</div>
+        <div class="fnl">
+          <div class="li"><span class="k">set_permission</span><span class="v">groups + users — <b>separate</b> PATCH calls</span></div>
+          <div class="li"><span class="k">tenant-wide</span><span class="v">optional whole-org view (type 3)</span></div>
+          <div class="li"><span class="k">Drive perm</span><span class="v">optional Minutes edit/full-access</span></div>
+        </div>
+      </div>
+      <div class="conn"><span class="lbl">post</span></div>
+      <div class="fnode ext"><div class="nt">post recording card → chats + users</div><div class="nb">blue "Meeting recording ready 会议录制可用" · mark done</div></div>
+      <div class="reqs">Poll fallback retries at <b>15 / 30 / 60 / 120 / 180 / 300s</b> (~11 min); the last attempt notifies with the meeting-ids even without a URL. Dedup is by <code>meeting.id</code>.</div>
+    </div></div>
+    <p class="hint">The card is posted to every <code>VC_RECORDING_FANOUT_CHAT_IDS</code> group and DM'd to each <code>VC_RECORDING_FANOUT_USER_OPEN_IDS</code> user — with view permission already granted so the link actually opens for them.</p>
+  </section>
+
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Ordered flow — every step, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>main.py · _process_lark_payload</code></td><td><code>vc.meeting.recording_ready_v1</code> arrives, 200 fast → <code>handle_vc_recording_ready_fanout</code></td><td class="who">Lark</td></tr>
+          <tr><td class="n">2</td><td><code>vc_recording_fanout · handle_…ready_fanout</code></td><td>pull topic / meeting_no / id + event url + duration → <code>fanout_recording_to_chats</code></td><td class="who">—</td></tr>
+          <tr><td class="n">3</td><td><code>fanout_recording_to_chats</code></td><td>load target chats + users; if both empty → abort (feature off)</td><td class="who">—</td></tr>
+          <tr><td class="n">4</td><td><code>fanout_recording_to_chats</code></td><td>topic-substring filter (case-insensitive); mismatch → skip</td><td class="who">—</td></tr>
+          <tr><td class="n">5</td><td><code>fanout_recording_to_chats</code></td><td>dedupe: if <code>meeting_id</code> in <code>_FANOUT_DONE</code> → return (idempotent across double-delivery + poll)</td><td class="who">—</td></tr>
+          <tr><td class="n">6</td><td><code>_resolve_recording_url</code></td><td>use event url if usable, else <code>GET /vc/v1/meetings/{id}/recording</code>; no URL &amp; not forced → defer (retry on next poll)</td><td class="who">Lark VC</td></tr>
+          <tr><td class="n">7a</td><td><code>_duty_open_id_for_recording_permission</code></td><td>resolve the meeting host (session trigger, else owner) → <code>vc_user_oauth.get_user_access_token</code> (set_permission needs a <b>user</b> token)</td><td class="who">—</td></tr>
+          <tr><td class="n">7b</td><td><code>grant_vc_recording_view_to_chat_groups</code></td><td><code>PATCH …/recording/set_permission</code> — groups (type 2) + users (type 1) as <b>separate</b> calls; optional tenant-wide (type 3); one retry with a fresh token</td><td class="who">Lark VC</td></tr>
+          <tr><td class="n">7c</td><td><code>grant_minutes_drive_collaborators</code></td><td>(optional) extract <code>/minutes/{token}</code> → <code>drive/v1/permissions/{token}/members</code> POST/PUT per member; manage-ids forced to full_access</td><td class="who">Lark Drive</td></tr>
+          <tr><td class="n">8</td><td><code>build_recording_available_card</code></td><td>schema-2.0 blue card (topic, meeting_no/id, duration, URL)</td><td class="who">—</td></tr>
+          <tr><td class="n">9</td><td><code>fanout_recording_to_chats</code></td><td>post the card to each group + DM each user; optional plain-text meta line; on any 200 → add to <code>_FANOUT_DONE</code></td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">P</td><td><code>schedule_recording_fanout_poll_after_meeting_end</code></td><td>fallback poller: retries at 15/30/60/120/180/300s; last attempt <code>force_notify</code> (ids without URL); warns if meeting &lt; 5s</td><td class="who">Lark VC/IM</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">features/recording/vc_recording_fanout.py</span><div class="rl">the whole flow: resolve URL, grant permission, post, poll.</div></div>
+          <div class="srow"><span class="fn">features/recording/vc_user_oauth.py</span><div class="rl">the host's user token for set_permission (owner OAuth).</div></div>
+          <div class="srow"><span class="fn">main.py</span><div class="rl">dispatches <code>recording_ready</code> / <code>meeting_ended</code> events.</div></div>
+          <div class="srow"><span class="fn">p0_logic/lark_client.py</span><div class="rl">recording fetch · set_permission · Drive members · IM post.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl"><code>build_recording_available_card</code> + meta text.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">all <code>VC_RECORDING_FANOUT_*</code> getters.</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark APIs &amp; env</h2>
+        <table>
+          <thead><tr><th>Purpose</th><th>Endpoint / env</th></tr></thead>
+          <tbody>
+            <tr><td>Recording URL</td><td><code>GET /vc/v1/meetings/{id}/recording</code></td></tr>
+            <tr><td>Grant view</td><td><code>PATCH …/recording/set_permission</code> (needs <code>vc:record</code>)</td></tr>
+            <tr><td>Drive upgrade</td><td><code>POST/PUT /drive/v1/permissions/{minutes}/members</code></td></tr>
+            <tr><td>Targets</td><td><code>VC_RECORDING_FANOUT_CHAT_IDS</code> · <code>_USER_OPEN_IDS</code></td></tr>
+            <tr><td>Permission</td><td><code>_SET_PERMISSION</code> · <code>_TENANT_WIDE_VIEW</code> · <code>_DRIVE_PERM</code> · <code>_MANAGE_OPEN_IDS</code></td></tr>
+            <tr><td>Filter</td><td><code>VC_RECORDING_FANOUT_TOPIC_SUBSTRING</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>vc:record:readonly</code></td><td class="who">bot tenant</td><td>fetch the recording URL</td></tr>
+            <tr><td><code>vc:record</code></td><td class="who">user OAuth</td><td>set_permission (grant view) — needs the owner's token</td></tr>
+            <tr><td><code>docs:permission.member:create</code> · <code>:update</code></td><td class="who">user OAuth</td><td>Minutes Drive edit / full-access upgrade</td></tr>
+            <tr><td><code>drive:drive</code> / <code>drive:file</code></td><td class="who">bot tenant</td><td>Drive permission members API</td></tr>
+            <tr><td><code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>post the "recording ready" card</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px"><b>set_permission needs a user token</b> (the meeting owner's OAuth) — the tenant token returns 400 / 99991663.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha warn"><div><b>set_permission needs the owner's user token, not the tenant token.</b><p>Tenant token → HTTP 400 / 99991663. The duty host must have completed VC OAuth (<code>vc:record</code> + <code>offline_access</code>) or grants silently fail — the card still posts, but recipients can't open the file.</p></div></div>
+      <div class="gotcha"><div><b>Bot must be in every fan-out group;</b><p>and user vs group set_permission are <b>separate</b> PATCH calls — mixing them with <code>user_id_type=open_id</code> is a 400.</p></div></div>
+      <div class="gotcha warn"><div><b>Topic-substring filter is a plain <code>in</code> match.</b><p>An empty filter fans out ALL meetings; a mismatch silently skips (and skips the poller). Set it to something like <code>Video meeting</code> to scope.</p></div></div>
+      <div class="gotcha"><div><b>Short meetings may have no recording.</b><p>Lark omits files under ~5s; the poller warns and gives up after ~11 min. View-only by default — edit/full-access needs the Drive path <b>and</b> the duty user to own/manage the Minutes doc.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>features/recording/vc_recording_fanout.py</code>. · Grants need the host's VC OAuth. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<section class="page" data-page="monitoring">
+<div class="wrap">
+  <div class="eyebrow">LARK-OPS-AI · FEATURE DOCS</div>
+  <h1>Monitoring / log alerts — logs → Lark</h1>
+  <p class="lede">Two flows into the monitoring chat: real-time <b>ERROR</b> log alerts via a root-logger handler, and a Claude-written <b>wrap-up</b> of a P0 session's WARNING+ logs when it ends. Diagnostics — <code>log_id</code>, Lark code, HTTP — are preserved verbatim.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="flow">Flow chart</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="steps">Steps</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="scripts">Scripts &amp; env</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="gotchas">Gotchas</button>
+  </div>
+
+  <section class="panel active" data-panel="flow">
+    <div class="canvas"><div class="chart">
+      <div class="fnode dec"><div class="nt">any module logs a record</div><div class="nb">root logger → <code>LarkMonitoringLogHandler.emit</code> (attached at startup)</div></div>
+      <div class="conn"><span class="lbl">two flows</span></div>
+      <div class="fnode list"><div class="nt">emit() branches</div>
+        <div class="fnl">
+          <div class="li"><span class="k">A · real-time</span><span class="v">level ≥ ERROR → alert now</span></div>
+          <div class="li"><span class="k">B · during P0</span><span class="v">buffer WARNING+ for the wrap-up</span></div>
+        </div>
+      </div>
+      <div class="conn"><span class="lbl">A</span></div>
+      <div class="fnode"><div class="nt">post_log_alert → dedupe / cooldown</div><div class="nb">120s window · red "🔴 Ops monitor · log ERROR" card</div></div>
+      <div class="conn"><span class="lbl">B · on P0 end/cancel</span></div>
+      <div class="fnode ext"><div class="nt">summarize_session_logs</div><div class="nb">Claude prose (Anthropic) + verbatim details (log_id / code / HTTP)</div></div>
+      <div class="conn"></div>
+      <div class="fnode ext"><div class="nt">post to P0_MONITORING_CHAT_IDS</div><div class="nb">wrap-up card, or "✅ no anomalies" when clean</div></div>
+      <div class="reqs">Real-time flow (A) uses <b>no</b> AI. Only the session wrap-up (B) calls Claude — and falls back to plain anomaly counts if there's no key.</div>
+    </div></div>
+    <p class="hint">A side-flow mirrors duty warning DMs and Bitable-post failures into the same monitoring chat, each with its own dedupe key.</p>
+  </section>
+
+  <section class="panel" data-panel="steps">
+    <div class="cardbox scroll">
+      <h2 class="sec">Both flows — every step, its script, and external calls</h2>
+      <table>
+        <thead><tr><th>#</th><th>Script · function</th><th>What happens</th><th>External</th></tr></thead>
+        <tbody>
+          <tr><td class="n">1</td><td><code>main.py · install_log_handler</code></td><td>attach one <code>LarkMonitoringLogHandler</code> to the root logger at startup; level = min(monitoring, session) floor</td><td class="who">—</td></tr>
+          <tr><td class="n">2</td><td><code>monitoring_notify · emit()</code></td><td>skip <code>uvicorn.access</code>, own <code>monitoring:</code> posts, empty msgs, bitable-fail lines (anti-loop)</td><td class="who">—</td></tr>
+          <tr><td class="n">A3</td><td><code>emit() · ERROR gate</code></td><td>real-time: <code>if levelno &lt; P0_MONITORING_LOG_MIN_LEVEL: return</code> (WARNING drops here)</td><td class="who">—</td></tr>
+          <tr><td class="n">A4</td><td><code>post_log_alert</code></td><td>build <code>dedupe_key = log:{name}:{level}:{hash}</code>; build red card (logger + verbatim message)</td><td class="who">—</td></tr>
+          <tr><td class="n">A5</td><td><code>_should_send_dedupe</code></td><td>cooldown check (<code>_ALERT_COOLDOWN_SEC</code>, 120s); duplicate in window → drop</td><td class="who">—</td></tr>
+          <tr><td class="n">A6</td><td><code>post_card_to_chat</code></td><td>post the red card to each <code>P0_MONITORING_CHAT_IDS</code></td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">B3</td><td><code>_capture_session_log_record</code></td><td>during active P0: buffer WARNING+ to <code>_SESSION_LOG_BUF</code>; optionally throw below-ERROR live cards</td><td class="who">Lark IM</td></tr>
+          <tr><td class="n">B4</td><td><code>session · end/cancel_p0_session</code></td><td>on tear-down → <code>summarize_session_logs</code> with the session's start/end window</td><td class="who">—</td></tr>
+          <tr><td class="n">B5</td><td><code>_claude_summarize_session_logs</code></td><td>de-dup lines → <code>anthropic_chat_once</code> (if key) for a 2–4 sentence summary that preserves log_id/code/HTTP</td><td class="who">Anthropic</td></tr>
+          <tr><td class="n">B6</td><td><code>summarize_session_logs</code></td><td>assemble Summary + verbatim 🔎 Details; WARNING card, or ✅ "no anomalies" when clean → monitoring chat</td><td class="who">Lark IM</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="scripts">
+    <div class="stack">
+      <div class="cardbox">
+        <h2 class="sec">Connected scripts</h2>
+        <div class="scripts">
+          <div class="srow"><span class="fn">p0_logic/monitoring_notify.py</span><div class="rl">the log handler, dedupe, real-time alert, session wrap-up.</div></div>
+          <div class="srow"><span class="fn">main.py</span><div class="rl"><code>install_log_handler</code> at startup.</div></div>
+          <div class="srow"><span class="fn">features/session/session.py</span><div class="rl">end/cancel → <code>summarize_session_logs</code>.</div></div>
+          <div class="srow"><span class="fn">p0_logic/cards.py</span><div class="rl"><code>build_monitoring_log_card</code> / duty card.</div></div>
+          <div class="srow"><span class="fn">p0_logic/handlers.py</span><div class="rl"><code>post_duty_dm</code> mirrors duty warnings.</div></div>
+          <div class="srow"><span class="fn">p0_logic/config.py</span><div class="rl">all <code>P0_MONITORING_*</code> / <code>P0_SESSION_LOG_*</code> getters.</div></div>
+        </div>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Key env (defaults)</h2>
+        <table>
+          <thead><tr><th>Env</th><th>Default</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>P0_MONITORING_CHAT_IDS</code></td><td>—</td><td class="who">destination; empty = whole feature off</td></tr>
+            <tr><td><code>P0_MONITORING_LOG_ALERTS</code></td><td>on</td><td class="who">real-time flow A</td></tr>
+            <tr><td><code>P0_MONITORING_LOG_MIN_LEVEL</code></td><td>ERROR</td><td class="who">flow-A cutoff</td></tr>
+            <tr><td><code>P0_MONITORING_ALERT_COOLDOWN_SEC</code></td><td>120</td><td class="who">shared dedupe window</td></tr>
+            <tr><td><code>P0_SESSION_LOG_SUMMARY_ENABLED</code></td><td>off</td><td class="who">flow-B buffering + wrap-up</td></tr>
+            <tr><td><code>P0_SESSION_LOG_MIN_LEVEL</code></td><td>WARNING</td><td class="who">flow-B capture floor</td></tr>
+            <tr><td><code>P0_SESSION_ERROR_TO_GROUP_ENABLED</code></td><td>off</td><td class="who">live below-ERROR throw during P0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cardbox scroll">
+        <h2 class="sec">Lark permissions (scopes)</h2>
+        <table>
+          <thead><tr><th>Scope</th><th>Token</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td><code>im:message</code> · <code>im:message:send_as_bot</code></td><td class="who">bot tenant</td><td>post alert + wrap-up cards to the monitoring chat</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">Just one scope — the alerting is internal (root-logger handler); only the card post touches Lark. The Claude wrap-up is an external HTTP call, not a scope.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="gotchas">
+    <div class="cardbox">
+      <h2 class="sec">Gotchas learned the hard way</h2>
+      <div class="gotcha warn"><div><b>ERROR vs WARNING.</b><p>Real-time alerts only fire ≥ <code>P0_MONITORING_LOG_MIN_LEVEL</code> (ERROR). Many real failures log at WARNING and won't alert in real time — they only surface via the P0 session capture (<code>P0_SESSION_LOG_MIN_LEVEL=WARNING</code>) when those session toggles are on.</p></div></div>
+      <div class="gotcha"><div><b>Handler level vs emit gate.</b><p><code>install_log_handler</code> lowers the handler threshold to the session floor so WARNING records still reach <code>emit()</code> — but the ERROR gate in <code>emit()</code> still blocks them from the real-time alert; they're only buffered/thrown via the session path.</p></div></div>
+      <div class="gotcha warn"><div><b>Shared 120s dedupe.</b><p>Identical messages (same key) are suppressed across both flows via one map — prevents floods but can hide a repeating error mid-cooldown.</p></div></div>
+      <div class="gotcha"><div><b>Anti-loop skips.</b><p>The handler ignores <code>uvicorn.access</code>, its own <code>monitoring:</code> posts, and bitable-failure lines (dedicated path) — a post failure can't re-trigger itself. New alert paths must not emit WARNING+ from inside the post path.</p></div></div>
+    </div>
+  </section>
+
+  <div class="foot">Source of truth: <code>p0_logic/monitoring_notify.py</code>. · Real-time = ERROR only; the session wrap-up covers WARNING. · Deploy: <code>git pull</code> + <code>systemctl restart lark-ops-ai</code>.</div>
+</div>
+
+</section>
+<script>
+        (function () {
+            const segs = {
+                inbound: ['seg-lark', 'seg-a1', 'seg-vps'],
+                outbound: ['seg-vps', 'seg-a2', 'seg-out', 'seg-forwarder'],
+                all: ['seg-lark', 'seg-a1', 'seg-vps', 'seg-a2', 'seg-out', 'seg-forwarder'],
+                features: []
+            };
+            const zoneLark = document.getElementById('zone-lark-cloud');
+            const zoneVps = document.getElementById('zone-vps');
+            const panelFlow = document.getElementById('panel-flow');
+            const panelFeatures = document.getElementById('panel-features');
+
+            function setDim(flow) {
+                if (flow === 'features') {
+                    panelFlow.classList.add('flow-dim');
+                    panelFeatures.classList.remove('flow-dim');
+                    if (zoneLark) zoneLark.style.opacity = '0.15';
+                    if (zoneVps) zoneVps.style.opacity = '0.15';
+                    return;
+                }
+                panelFlow.classList.remove('flow-dim');
+                panelFeatures.classList.remove('flow-dim');
+                if (flow === 'features') panelFeatures.classList.remove('flow-dim');
+
+                const activeNodes = new Set(segs[flow] || segs.all);
+                document.querySelectorAll('.flow-seg').forEach(el => {
+                    el.classList.toggle('flow-dim', !activeNodes.has(el.id));
+                });
+
+                if (zoneLark) zoneLark.style.opacity = (flow === 'outbound') ? '0.12' : '1';
+                if (zoneVps) zoneVps.style.opacity = '1';
+                if (flow === 'outbound' && zoneVps) zoneVps.style.opacity = '0.85';
+            }
+
+            document.querySelectorAll('.flow-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    const flow = this.getAttribute('data-flow');
+                    document.querySelectorAll('.flow-btn').forEach(b => {
+                        b.classList.remove('bg-slate-800', 'text-white');
+                        b.classList.add('text-slate-600');
+                    });
+                    this.classList.add('bg-slate-800', 'text-white');
+                    this.classList.remove('text-slate-600');
+                    setDim(flow);
+                });
+            });
+
+            setDim('all');
+        })();
+</script>
+<script>
+  const navbtns=[...document.querySelectorAll('.navbtn')], pages=[...document.querySelectorAll('.page')];
+  function goTo(pg){
+    navbtns.forEach(x=>x.setAttribute('aria-selected',String(x.dataset.go===pg)));
+    pages.forEach(p=>p.classList.toggle('active',p.dataset.page===pg));
+    window.scrollTo(0,0);
+  }
+  document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',()=>goTo(el.dataset.go)));
+  pages.forEach(page=>{
+    const tabs=[...page.querySelectorAll('.tab')], panels=[...page.querySelectorAll('.panel')];
+    if(!tabs.length) return;
+    tabs.forEach(t=>t.addEventListener('click',()=>{
+      tabs.forEach(x=>x.setAttribute('aria-selected',String(x===t)));
+      panels.forEach(p=>p.classList.toggle('active',p.dataset.panel===t.dataset.p));
+    }));
+  });
+</script>
+</body></html>
