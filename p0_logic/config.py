@@ -2876,6 +2876,23 @@ def get_p0_major_check_person_recipients() -> List[Tuple[str, str]]:
     return out
 
 
+def get_p0_major_also_ring_commands() -> List[str]:
+    """``P0_MAJOR_ALSO_RING_COMMANDS`` — extra duty ring commands to ALSO fire when ``/m`` is used,
+    on top of the Major check persons (e.g. ``dba,scpms,sfpms,sfe,spms`` pages today's DBA + SRE duty
+    on a major P0). Comma- or space-separated; a leading ``/`` is ignored; ``m`` itself is dropped to
+    avoid recursion. Lower-cased + de-duped. Empty when unset → ``/m`` rings only the check persons."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_MAJOR_ALSO_RING_COMMANDS") or "").strip()
+    out: List[str] = []
+    seen: set = set()
+    for tok in raw.replace(" ", ",").split(","):
+        c = tok.strip().lower().lstrip("/")
+        if c and c != "m" and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 def get_p0_issue_watch_declare_check_person_reply_text() -> str:
     """Thread reply on the concern when duty declares P0 (check-person flow)."""
     reload_env_runtime()
