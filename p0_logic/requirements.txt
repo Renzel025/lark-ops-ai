@@ -1,6 +1,29 @@
+# ════════════════════════════════════════════════════════════════════
+# Runtime dependencies for lark-ops-ai (the bot backend).
+# One command installs everything:  pip install -r p0_logic/requirements.txt
+# Targets Python 3.8 (see pyrightconfig.json). Dev/CI tooling (ruff,
+# pyright) lives in requirements-dev.txt — not here.
+# ════════════════════════════════════════════════════════════════════
+
+# --- Web / ASGI server (main.py FastAPI app + lark-forwarder) ---
+fastapi>=0.100.0
+uvicorn>=0.20.0
+
+# --- Lark SDK + AES decrypt for encrypted webhook events (main.py) ---
+lark-oapi>=1.0.0
+pycryptodome>=3.15.0
+
+# --- HTTP client + .env config loading ---
 requests>=2.25.0
 python-dotenv>=0.19.0
+
+# --- Grafana screenshot: Playwright browser + Pillow image crop/split ---
 Pillow>=9.0.0
 playwright>=1.40.0
-playwright-stealth>=2.0.3
+
+# --- Python 3.8 timezone fallback (stdlib zoneinfo is 3.9+) ---
 backports.zoneinfo>=0.2.1; python_version < "3.9"
+
+# playwright-stealth>=2.0.3   # was pinned but is NOT imported anywhere —
+#                               the capture code uses only playwright.sync_api.
+#                               Re-add only if a stealth path is actually wired.

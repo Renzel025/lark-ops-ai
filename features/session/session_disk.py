@@ -10,6 +10,7 @@ import glob
 import json
 import logging
 import os
+import threading
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from features.overview import draft_store as _ds
@@ -72,9 +73,13 @@ def save_session(chat_id: str, sess: Dict[str, Any]) -> None:
     if not enabled():
         return
     path = _path(chat_id)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    # UNIQUE tmp per writer (pid + thread): concurrent saves of the SAME session (join events,
+    # ring timers, declare all touch it) used to share one "<path>.tmp" — one thread's os.replace
+    # moved it, the other then hit "No such file or directory" on its replace. A per-writer tmp
+    # removes that race. makedirs is inside the try so a perms/FS error is logged, not raised.
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(sess, f, ensure_ascii=False)
             f.flush()
@@ -82,6 +87,11 @@ def save_session(chat_id: str, sess: Dict[str, Any]) -> None:
         os.replace(tmp, path)
     except Exception as e:
         log.warning("session_disk save failed path=%s err=%s", path, e)
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def delete_session(chat_id: str) -> None:
