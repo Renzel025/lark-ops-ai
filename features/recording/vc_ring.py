@@ -338,6 +338,25 @@ def _ring_display_label(c: str) -> str:
     }.get(c, c.upper())
 
 
+def _expand_major_also_ring(cmds: List[str]) -> List[str]:
+    """If ``/m`` is among ``cmds``, append the configured ``P0_MAJOR_ALSO_RING_COMMANDS`` (e.g. DBA + SRE
+    duty) so a major-P0 ring ALSO pages today's duty in the SAME consolidated card. Order preserved,
+    de-duped against what's already requested. No-op when ``/m`` isn't present or the env is unset."""
+    lowered = [(c or "").strip().lower() for c in cmds]
+    if "m" not in lowered:
+        return cmds
+    extras = _config.get_p0_major_also_ring_commands()
+    if not extras:
+        return cmds
+    out = list(cmds)
+    have = set(lowered)
+    for e in extras:
+        if e not in have:
+            out.append(e)
+            have.add(e)
+    return out
+
+
 def handle_ring_commands_batch(
     cmds: List[str],
     session_source: str,
@@ -351,10 +370,12 @@ def handle_ring_commands_batch(
 ) -> None:
     """Ring MULTIPLE duty/direct commands and post ONE consolidated status ("Calling selected duty
     persons …") — one line per command — instead of a separate reply per command. Used for mixed
-    commands like ``/srebac sfpms spms cpms fe`` so the duty rings collapse into a single prompt."""
+    commands like ``/srebac sfpms spms cpms fe`` so the duty rings collapse into a single prompt.
+    When ``/m`` is present, P0_MAJOR_ALSO_RING_COMMANDS (DBA + SRE duty) are folded in too."""
     if not _config.get_p0_vc_ring_enabled():
         log.info("ring batch ignored (P0_VC_RING_ENABLED off) cmds=%s", cmds)
         return
+    cmds = _expand_major_also_ring(list(cmds))
     tok = (tenant_token or token or "").strip()
     # TWO sections: the TOP groups every command's "who's being called NOW" line (team — @1st contact),
     # so the contacted people sit together; the BOTTOM lists each team's OTHER duties (2nd, 3rd …) for
@@ -457,6 +478,16 @@ def handle_ring_command(
     # This is the single choke point for every ring command (single and multi), so prod stays a no-op.
     if not _config.get_p0_vc_ring_enabled():
         log.info("ring cmd ignored (P0_VC_RING_ENABLED off) cmd=%s", c)
+        return
+
+    # /m with P0_MAJOR_ALSO_RING_COMMANDS set → route through the batch so the check persons AND the
+    # configured DBA/SRE duty ring together in ONE consolidated card.
+    if c == "m" and _config.get_p0_major_also_ring_commands():
+        handle_ring_commands_batch(
+            ["m"], session_source, notify_chat, token,
+            operator_open_id=operator_open_id, tenant_token=tenant_token,
+            direct_open_ids=direct_open_ids, reply_to_message_id=reply_to_message_id,
+        )
         return
 
     targets, label, unset_hint, wired = _resolve_ring(
