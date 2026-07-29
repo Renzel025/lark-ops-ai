@@ -607,6 +607,8 @@ def _regex_priority_keyword_intent_override(text_raw: str) -> Optional[str]:
         return "question"
     if _is_p0_thread_confirm_question(t):
         return "question"
+    if _is_p0_conditional_or_confirm_question(t):
+        return "question"
     if _is_explicit_direct_p0_declaration(t):
         return "declare_p0"
     # NOTE: the softer _is_question_about_priority (is-this-p0?, a stray '?') is deliberately NOT a
@@ -791,6 +793,10 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
         return False
     if _is_explicit_p0_negation(t):
         return False
+    # A conditional / confirmation QUESTION that merely contains "this is p0" is NOT a declaration —
+    # e.g. "may we confirm if this is p0?". Defer to the confirm path (ask first), never hard-declare.
+    if _is_p0_conditional_or_confirm_question(t):
+        return False
     if re.search(r"(?is)\bthis\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
         return True
     if re.search(r"(?is)\bthat\s+is\s+(?:a\s+)?(?:p0|priority\s*0)\b", t):
@@ -929,6 +935,34 @@ def _is_p0_thread_confirm_question(text: str) -> bool:
     if not t:
         return False
     return bool(P0_THREAD_CONFIRM_QUESTION_RE.search(t))
+
+
+def _is_p0_conditional_or_confirm_question(text: str) -> bool:
+    """A P0 keyword wrapped in a **conditional / confirmation question**, e.g.
+    "may we confirm if this is p0?", "checking if this is p0", "let's verify whether it's a p0".
+
+    The literal ``this/that/it is p0`` substring must NOT hard-declare a meeting when it sits under an
+    ``if``/``whether`` clause or a ``confirm``/``check``/``verify`` question — those are asking, not
+    declaring. Routes to the duty confirm-DM (ask first), never auto-start.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    # "... if/whether (this|that|it) is (a) p0" — the p0 phrase is the object of a conditional.
+    if re.search(
+        r"(?is)\b(?:if|whether)\s+(?:this|that|it)\s+(?:is|'s)\s+(?:a\s+)?(?:p0|priority\s*0)\b",
+        t,
+    ):
+        return True
+    # A "confirm/check/verify/clarify … if/whether …" question that mentions a P0 keyword anywhere.
+    # (Guards against "confirmed as p0" declarations — those have no if/whether.)
+    if (
+        re.search(r"(?is)\b(?:confirm|confirming|check|checking|verify|verifying|clarify|clarifying)\b", t)
+        and re.search(r"(?is)\b(?:if|whether)\b", t)
+        and P0_KEYWORD_RE.search(t)
+    ):
+        return True
+    return False
 
 
 def _strip_leading_at_mentions_for_confirm(
