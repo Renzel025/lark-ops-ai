@@ -266,11 +266,11 @@ def _activate_dm_instruction_slot(
             target_chat=target_chat,
             source_chat_label=label,
         ):
-            # This path skips the green card (posts the suggested overview instead), so post the
-            # "Calling <names>" prompt + ring guide here too — otherwise the duty never sees them on an
+            # This path skips the green card (posts the suggested overview instead), so post the ring
+            # guide + "Calling <names>" card here too — otherwise the duty never sees them on an
             # Issue-Watch-declared P0.
-            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id)
             _send_dm_ring_guide_card(oid, tok, op_uid)
+            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id, priority)
             log.info(
                 "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
                 context,
@@ -1567,11 +1567,12 @@ def _send_dm_auto_invite_calling_prompt(
     tenant_token: str,
     operator_lark_user_id: str,
     source_incident_chat_id: str,
+    priority: str = "P0",
 ) -> None:
-    """DM the duty a "Calling <names>" line naming the ``P0_VC_AUTO_INVITE_OPEN_IDS`` people being
+    """DM the duty a "Calling <names>" CARD naming the ``P0_VC_AUTO_INVITE_OPEN_IDS`` people being
     auto-rung into the VC — posted just ABOVE the ring-guide card. Capture its ``message_id`` and set the
     session's ``join_prompt_reply_mid`` so each auto-invitee's "already in the P0 meeting" reply threads
-    under THIS prompt (in the duty DM) instead of the in-group meeting notice.
+    under THIS card (in the duty DM) instead of the in-group meeting notice.
 
     Uses the **primary** tenant token so the VC-join watcher (``maybe_prompt_major_check_person_joined``,
     also primary token) can reply to it. Best-effort — never blocks the overview DM.
@@ -1605,13 +1606,20 @@ def _send_dm_auto_invite_calling_prompt(
     if not who:
         return
     text = _config.get_p0_dm_auto_invite_prompt_text().replace("{names}", who)
+    card = _cards.build_auto_invite_calling_card(text, priority)
     uid = (operator_lark_user_id or "").strip()
+    st, body, mid = 0, "", ""
     try:
-        st, body = _lark.post_text_to_user_cross_app(oid, uid, tok, text, use_user_id=bool(uid))
+        if uid:
+            st, body, mid = _lark.post_card_to_user_cross_app(oid, uid, tok, card, use_user_id=True)
+            if not _dm_instruction_lark_response_ok(st, body):
+                log.warning("DM auto-invite prompt: user_id path not ok body=%s — trying open_id", (body or "")[:200])
+                st, body, mid = _lark.post_card_to_open_id(oid, tok, card)
+        else:
+            st, body, mid = _lark.post_card_to_open_id(oid, tok, card)
     except Exception as e:  # noqa: BLE001
         log.warning("DM auto-invite prompt: post failed open_id_tail=%s: %s", oid[-8:], e)
         return
-    mid = _lark.parse_im_message_id_from_response(body or "")
     log.info(
         "DM auto-invite prompt: open_id_tail=%s http=%s names=%d mid_tail=%s",
         oid[-8:] if len(oid) > 8 else oid, st, len(names), (mid or "")[-8:],
@@ -1657,12 +1665,12 @@ def _send_dm_instruction_card_logged(
     if not oid:
         return
     label = (context or "DM instruction").strip()
-    # "Calling <auto-invite names>" prompt FIRST of all, then the ring guide, then the green card — so the
-    # duty sees who's being paged in, and each auto-invitee's "joined" reply threads under this prompt.
-    _send_dm_auto_invite_calling_prompt(oid, tenant_token, operator_lark_user_id, source_incident_chat_id)
-    # Post the VC ring-command cheat-sheet next (chronologically above the green card) so the duty sees
-    # how to call people into the meeting before the overview prompt. Gated + only when ring is enabled.
+    # Duty-DM order: (1) ring-guide card, (2) the "Calling <names>" card — sits BETWEEN the invite
+    # commands and the green overview card (most visible spot), (3) the green Build-overview card below.
+    # The "Calling" card still anchors join_prompt_reply_mid, so auto-invitees' "joined" replies thread
+    # under it wherever it sits.
     _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
+    _send_dm_auto_invite_calling_prompt(oid, tenant_token, operator_lark_user_id, source_incident_chat_id, priority)
     card = _cards.build_dm_instruction_card(
         priority,
         source_chat_label=source_chat_label,
