@@ -2957,6 +2957,25 @@ def get_p0_dm_ring_guide_enabled() -> bool:
     return get_p0_vc_ring_enabled() and _env_flag_on("P0_DM_RING_GUIDE_ENABLED", "1")
 
 
+def get_p0_dm_auto_invite_prompt_enabled() -> bool:
+    """``P0_DM_AUTO_INVITE_PROMPT_ENABLED`` — DM the duty a "Calling <names>" line naming the
+    ``P0_VC_AUTO_INVITE_OPEN_IDS`` people being auto-rung into the VC, posted just ABOVE the ring-guide
+    card. Each auto-invitee's "already in the P0 meeting" reply then threads under THIS prompt (in the
+    duty DM) instead of the in-group meeting notice. Default on, but only when ring is enabled
+    (auto-invite does nothing without it) — a no-op anyway when ``P0_VC_AUTO_INVITE_OPEN_IDS`` is empty."""
+    return get_p0_vc_ring_enabled() and _env_flag_on("P0_DM_AUTO_INVITE_PROMPT_ENABLED", "1")
+
+
+def get_p0_dm_auto_invite_prompt_text() -> str:
+    """Text of the DM "Calling <names>" auto-invite prompt (``P0_DM_AUTO_INVITE_PROMPT_TEXT``).
+    ``{names}`` → the resolved ``P0_VC_AUTO_INVITE_OPEN_IDS`` display names."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_DM_AUTO_INVITE_PROMPT_TEXT") or "").strip()
+    if raw:
+        return raw
+    return "Calling {names} into the P0 meeting…"
+
+
 def get_p0_vc_ring_fallback_open_ids() -> List[str]:
     """``P0_VC_RING_FALLBACK_OPEN_IDS`` — comma-separated ``ou_...`` when concern has no @mention."""
     reload_env_runtime()
