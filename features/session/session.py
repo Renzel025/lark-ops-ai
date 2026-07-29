@@ -266,8 +266,10 @@ def _activate_dm_instruction_slot(
             target_chat=target_chat,
             source_chat_label=label,
         ):
-            # This path skips the green card (posts the suggested overview instead), so post the ring
-            # guide here too — otherwise the duty never sees it on an Issue-Watch-declared P0.
+            # This path skips the green card (posts the suggested overview instead), so post the
+            # "Calling <names>" prompt + ring guide here too — otherwise the duty never sees them on an
+            # Issue-Watch-declared P0.
+            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id)
             _send_dm_ring_guide_card(oid, tok, op_uid)
             log.info(
                 "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
@@ -1517,6 +1519,122 @@ def _send_dm_ring_guide_card(open_id: str, tenant_token: str, operator_lark_user
         log.warning("DM ring guide: post failed open_id_tail=%s: %s", tail, e)
 
 
+def _humanize_name_list(names: List[str]) -> str:
+    """['Aldan'] -> 'Aldan'; two -> 'A and B'; more -> 'A, B and C'."""
+    names = [n for n in (names or []) if n]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _find_incident_session(chat_id: str) -> Tuple[str, Dict[str, Any]]:
+    """Return ``(session_key, session_dict)`` for an incident chat — the SAME in-memory object stored in
+    ``P0_SESSIONS`` (so callers can mutate it in place). Handles the multi-meeting composite key
+    ``chat_id#meeting_no`` (newest wins) and falls back to disk."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return "", {}
+    direct = P0_SESSIONS.get(cid)
+    if isinstance(direct, dict):
+        return cid, direct
+    best_key, best_sess, best_epoch = "", {}, -1.0
+    for k, v in P0_SESSIONS.items():
+        if not isinstance(v, dict):
+            continue
+        if k == cid or k.startswith(cid + "#") or str(v.get("source_chat") or "").strip() == cid:
+            try:
+                ep = float(v.get("start_epoch") or 0)
+            except (TypeError, ValueError):
+                ep = 0.0
+            if ep >= best_epoch:
+                best_key, best_sess, best_epoch = k, v, ep
+    if best_sess:
+        return best_key, best_sess
+    if _session_disk.enabled():
+        sd = _session_disk.load_session(cid)
+        if isinstance(sd, dict):
+            P0_SESSIONS[cid] = sd
+            return cid, sd
+    return "", {}
+
+
+def _send_dm_auto_invite_calling_prompt(
+    open_id: str,
+    tenant_token: str,
+    operator_lark_user_id: str,
+    source_incident_chat_id: str,
+) -> None:
+    """DM the duty a "Calling <names>" line naming the ``P0_VC_AUTO_INVITE_OPEN_IDS`` people being
+    auto-rung into the VC — posted just ABOVE the ring-guide card. Capture its ``message_id`` and set the
+    session's ``join_prompt_reply_mid`` so each auto-invitee's "already in the P0 meeting" reply threads
+    under THIS prompt (in the duty DM) instead of the in-group meeting notice.
+
+    Uses the **primary** tenant token so the VC-join watcher (``maybe_prompt_major_check_person_joined``,
+    also primary token) can reply to it. Best-effort — never blocks the overview DM.
+    """
+    oid = (open_id or "").strip()
+    tok = (tenant_token or "").strip()
+    if not oid or not tok:
+        return
+    try:
+        if not _config.get_p0_dm_auto_invite_prompt_enabled():
+            return
+    except Exception as e:  # noqa: BLE001
+        log.warning("DM auto-invite prompt: gate check failed open_id_tail=%s: %s", oid[-8:], e)
+        return
+    # People being auto-rung (exclude the DM recipient themselves if they're on the list).
+    try:
+        auto_ids = [o for o in _config.get_p0_vc_auto_invite_open_ids() if o and o != oid]
+    except Exception:  # noqa: BLE001
+        auto_ids = []
+    if not auto_ids:
+        return
+    names: List[str] = []
+    for o in auto_ids:
+        nm = ""
+        try:
+            nm = (_lark.lookup_user_name_by_open_id(tok, o) or "").strip()
+        except Exception:  # noqa: BLE001
+            nm = ""
+        names.append(nm or f"({o[-6:]})")
+    who = _humanize_name_list(names)
+    if not who:
+        return
+    text = _config.get_p0_dm_auto_invite_prompt_text().replace("{names}", who)
+    uid = (operator_lark_user_id or "").strip()
+    try:
+        st, body = _lark.post_text_to_user_cross_app(oid, uid, tok, text, use_user_id=bool(uid))
+    except Exception as e:  # noqa: BLE001
+        log.warning("DM auto-invite prompt: post failed open_id_tail=%s: %s", oid[-8:], e)
+        return
+    mid = _lark.parse_im_message_id_from_response(body or "")
+    log.info(
+        "DM auto-invite prompt: open_id_tail=%s http=%s names=%d mid_tail=%s",
+        oid[-8:] if len(oid) > 8 else oid, st, len(names), (mid or "")[-8:],
+    )
+    if not mid:
+        return
+    # Point the auto-invitees' join-watch reply at THIS DM prompt (mutate the live session object +
+    # persist so both the in-memory and disk-reload reply paths find it).
+    cid = (source_incident_chat_id or "").strip()
+    if not cid:
+        return
+    key, sess = _find_incident_session(cid)
+    if not sess:
+        return
+    sess["join_prompt_reply_mid"] = mid
+    P0_SESSIONS[key] = sess
+    if _session_disk.enabled():
+        try:
+            _session_disk.save_session(cid, sess)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _send_dm_instruction_card_logged(
     open_id: str,
     tenant_token: str,
@@ -1539,7 +1657,10 @@ def _send_dm_instruction_card_logged(
     if not oid:
         return
     label = (context or "DM instruction").strip()
-    # Post the VC ring-command cheat-sheet FIRST (chronologically above the green card) so the duty sees
+    # "Calling <auto-invite names>" prompt FIRST of all, then the ring guide, then the green card — so the
+    # duty sees who's being paged in, and each auto-invitee's "joined" reply threads under this prompt.
+    _send_dm_auto_invite_calling_prompt(oid, tenant_token, operator_lark_user_id, source_incident_chat_id)
+    # Post the VC ring-command cheat-sheet next (chronologically above the green card) so the duty sees
     # how to call people into the meeting before the overview prompt. Gated + only when ring is enabled.
     _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
     card = _cards.build_dm_instruction_card(
