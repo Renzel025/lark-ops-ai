@@ -37,6 +37,7 @@ from p0_logic import config
 config.apply_env_layers()
 
 from p0_logic import lark_client as lark  # noqa: E402
+from p0_logic import cards as C  # noqa: E402
 from features.session.session import _humanize_name_list  # noqa: E402
 
 
@@ -109,10 +110,11 @@ def main() -> int:
         print("ERROR: --post needs a recipient. Pass --user-id <id> (prod path) or --open-id ou_...")
         return 1
 
-    st, body = lark.post_text_to_user_cross_app(
-        recipient_oid, recipient_uid, tok, text, use_user_id=bool(recipient_uid)
-    )
-    mid = lark.parse_im_message_id_from_response(body or "")
+    card = C.build_auto_invite_calling_card(text, "P0")
+    if recipient_uid:
+        st, body, mid = lark.post_card_to_user_cross_app(recipient_oid, recipient_uid, tok, card, use_user_id=True)
+    else:
+        st, body, mid = lark.post_card_to_open_id(recipient_oid, tok, card)
     print(f"POST -> HTTP {st}  message_id={mid or '(none)'}")
     if st == 200 and mid:
         print("OK — check that DM in Lark. This is the exact prompt the bot posts on P0 declare.")

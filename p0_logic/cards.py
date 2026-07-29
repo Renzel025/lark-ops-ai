@@ -1232,6 +1232,37 @@ def build_ring_commands_guide_card() -> Dict[str, Any]:
     }
 
 
+def build_auto_invite_calling_card(body_text: str, priority: str = "P0") -> Dict[str, Any]:
+    """DM card announcing the fixed ``P0_VC_AUTO_INVITE_OPEN_IDS`` people being paged into the VC,
+    posted just ABOVE the ring-guide card. ``body_text`` is the already-rendered 'Calling <names> …'
+    line (honours ``P0_DM_AUTO_INVITE_PROMPT_TEXT``). Each named person's "already in the meeting"
+    reply threads under this card."""
+    prio = (priority or "P0").strip().upper()
+    if prio not in ("P0", "P1"):
+        prio = "P0"
+    line = (body_text or "").strip() or "Calling on-call into the meeting…"
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": f"{prio} — Paging on-call into the meeting"},
+        },
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": f"**{line}**"},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": "They're being called into the VC now — a reply threads here as each one joins.",
+                    },
+                },
+            ]
+        },
+    }
+
+
 def dm_escalation_reminder_plain() -> str:
     """P0 SOP escalation reminder (plain text for DM lines)."""
     return (
