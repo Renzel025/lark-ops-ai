@@ -1398,6 +1398,24 @@ def get_p0_trigger_ignore_open_ids() -> FrozenSet[str]:
     return frozenset(x for x in ids if is_open_id(x))
 
 
+def get_p0_auto_declare_trusted_open_ids() -> FrozenSet[str]:
+    """
+    Senders allowed to **AUTO-create** a P0/P1 meeting on a declare (e.g. the CP OM Duty).
+
+    ``P0_AUTO_DECLARE_TRUSTED_OPEN_IDS`` — comma-separated Lark open_ids (ou_...). When **non-empty**,
+    a ``declare_p0`` from ANY OTHER sender is routed to the duty confirm-DM (ask first) instead of
+    auto-starting — so a stray "Priority: P0" from a non-duty person never surprise-creates a meeting.
+    **Empty (default)** = every declare auto-starts (legacy behaviour, unchanged).
+    Note: use the sender's **primary-app** open_id (the ``user_id`` seen in ``process_message route``).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_AUTO_DECLARE_TRUSTED_OPEN_IDS") or "").strip()
+    if not raw:
+        return frozenset()
+    ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return frozenset(x for x in ids if is_open_id(x))
+
+
 def get_p0_keyword_groq_gate() -> bool:
     """
     ``P0_KEYWORD_GROQ_GATE`` — if ``1``, after regex filters pass, call Groq once to decide whether
