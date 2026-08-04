@@ -3013,6 +3013,17 @@ def get_p0_dm_auto_invite_prompt_text() -> str:
     return "Calling {names} into the P0 meeting…"
 
 
+def get_p0_vc_auto_invite_include_declarer() -> bool:
+    """``P0_VC_AUTO_INVITE_INCLUDE_DECLARER`` — still ring the fixed ``P0_VC_AUTO_INVITE_OPEN_IDS``
+    people even when one of them is the person who declared the P0 (the meeting trigger). Default ON
+    so the auto-invite list is ALWAYS rung in full — otherwise, if the declarer is the only configured
+    auto-invitee, the session ends up with no ring targets. Set to 0 to restore the old behaviour of
+    skipping the declarer (they usually join via the link themselves)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_VC_AUTO_INVITE_INCLUDE_DECLARER") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_vc_ring_fallback_open_ids() -> List[str]:
     """``P0_VC_RING_FALLBACK_OPEN_IDS`` — comma-separated ``ou_...`` when concern has no @mention."""
     reload_env_runtime()
