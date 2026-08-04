@@ -813,7 +813,21 @@ def _is_explicit_direct_p0_declaration(text: str) -> bool:
     if re.match(r"(?is)^(?:p0|priority\s*0)\s*[!?.…]*\s*$", t):
         return True
     # "we tag … as p0" — modal + we + tag stays with Groq / thread-confirm ("can we tag…").
-    if not re.search(r"(?is)\b(?:can|could|should|may|would|shall)\s+we\s+(?:tag|treat|consider|declare)", t):
+    if not re.search(
+        r"(?is)\b(?:can|could|should|may|would|shall)\s+we\s+"
+        r"(?:tag|treat|consider|declare|escalate|raise|elevate)",
+        t,
+    ):
+        # Declaration verbs: "we declare this as p0", "declare this issue as p0", "escalate to p0",
+        # "raise this to p0", "elevate to p0" (and -ing/-ed forms). Modal questions ("should we
+        # escalate to p0?") are excluded by the guard above.
+        if re.search(
+            r"(?is)\b(?:(?:i|we|let's|lets)\s+)?(?:hereby\s+)?(?:will\s+)?(?:are\s+)?"
+            r"(?:declar(?:e|ed|es|ing)|escalat(?:e|ed|es|ing)|rais(?:e|ed|es|ing)|elevat(?:e|ed|es|ing))\s+"
+            r"(?:this|that|it|the\s+issue|this\s+issue)?\s*(?:as\s+|to\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
+            t,
+        ):
+            return True
         if re.search(
             rf"(?is)\b(?:i|we)\s+(?:will\s+)?consider(?:ed|ing)?\s+{_P0_SUBJECT}\s+(?:as\s+)?(?:a\s+)?(?:p0|priority\s*0)\b",
             t,
