@@ -2236,9 +2236,13 @@ def start_p0(
         # Seed ring targets: whatever the caller passed (Issue Watch mentions / major check
         # persons) PLUS the fixed P0_VC_AUTO_INVITE_OPEN_IDS — those are invited into EVERY new
         # meeting the moment it's created (rung when the declarer joins + is OAuth-authorized).
+        # Ring the FULL auto-invite list — including the declarer when they're on it (default). Without
+        # this, if the declarer is the only configured auto-invitee the session has no ring targets
+        # ("vc_ring: no ring targets"). Set P0_VC_AUTO_INVITE_INCLUDE_DECLARER=0 to skip the declarer.
+        _incl_declarer = _config.get_p0_vc_auto_invite_include_declarer()
         _auto_invite_ids = [
             o for o in _config.get_p0_vc_auto_invite_open_ids()
-            if o and o != trigger_open_id
+            if o and (_incl_declarer or o != trigger_open_id)
         ]
         _ring_seed: List[str] = list(vc_ring_target_open_ids or [])
         for _auto_oid in _auto_invite_ids:
