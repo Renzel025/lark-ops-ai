@@ -136,8 +136,7 @@ def build_p0_meeting_created_text(
     prio = (priority or "P0").strip().upper()
     topic = (emergency_topic or "").strip() or MEETING_TOPIC
     url = (link or "").strip()
-    notice = _config.get_p0_meeting_created_notice_text().replace("{priority}", prio)
-    lines: List[str] = [topic, "", notice, "", MEETING_JOIN_LINK_LABEL]
+    lines: List[str] = [topic, "", f"🚨 {prio} meeting created.", "", MEETING_JOIN_LINK_LABEL]
     if url:
         lines.append(url)
     return "\n".join(lines)

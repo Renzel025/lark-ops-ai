@@ -2037,6 +2037,17 @@ def _post_meeting_link_unfurl_notice(
     url = (link or "").strip()
     if not cid or not token:
         return ""
+    # First a SEPARATE standalone "We declare this issue as P0" message, then (below) the meeting
+    # notice + join link as its own message. Two messages, not one combined block.
+    if _config.get_p0_meeting_declare_reply_enabled():
+        declare = _config.get_p0_meeting_declare_reply_text().replace(
+            "{priority}", (priority or "P0").strip().upper()
+        )
+        if declare:
+            try:
+                _lark.post_text_to_chat(cid, token, declare)
+            except Exception as e:  # noqa: BLE001 — best-effort, never block the notice below
+                log.warning("meeting declare reply post exception chat_id_tail=%s err=%s", cid[-12:], e)
     text = _cards.build_p0_meeting_created_text(
         url, priority=priority, emergency_topic=emergency_topic
     )

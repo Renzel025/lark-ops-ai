@@ -2823,15 +2823,23 @@ def get_p0_issue_watch_declare_reply_text() -> str:
     return raw or "We will declare this issue as P0."
 
 
-def get_p0_meeting_created_notice_text() -> str:
+def get_p0_meeting_declare_reply_enabled() -> bool:
+    """``P0_MEETING_DECLARE_REPLY_ENABLED`` — post a SEPARATE 'We declare this issue as P0' message to
+    the group first, just before the meeting notice + link. Default on."""
+    reload_env_runtime()
+    v = (os.getenv("P0_MEETING_DECLARE_REPLY_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_meeting_declare_reply_text() -> str:
     """
-    The announcement line posted to the group when a P0/P1 meeting is created, shown right above
-    the join link. ``P0_MEETING_CREATED_NOTICE_TEXT`` — ``{priority}`` is replaced with P0/P1.
-    Default declares the issue (rather than the old "meeting created" wording).
+    The standalone declaration message posted to the group when a P0/P1 meeting is created — its OWN
+    message, sent just BEFORE the meeting notice + link. ``P0_MEETING_DECLARE_REPLY_TEXT`` —
+    ``{priority}`` is replaced with P0/P1.
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_MEETING_CREATED_NOTICE_TEXT") or "").strip()
-    return raw or "🚨 We declare this issue as {priority}."
+    raw = (os.getenv("P0_MEETING_DECLARE_REPLY_TEXT") or "").strip()
+    return raw or "We declare this issue as {priority}."
 
 
 def get_p0_issue_watch_declare_reaction() -> str:
