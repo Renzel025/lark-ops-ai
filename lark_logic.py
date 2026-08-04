@@ -16,6 +16,7 @@ from p0_logic.config import (
     resolve_priority_keyword_ai_provider,
     get_session_meeting_card_post_chat_id,
     get_p0_trigger_ignore_open_ids,
+    get_p0_auto_declare_trusted_open_ids,
     get_p0_redeclare_supersedes_active,
     get_p0_multi_meeting_per_group,
     get_p0_issue_watch_enabled,
@@ -1623,6 +1624,30 @@ def process_message(
                                 "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
                                 text_raw[:200],
                             )
+
+                # SENDER GATE for auto-create: when a trusted-declarer allowlist is configured, ONLY
+                # those senders (e.g. the CP OM Duty) auto-start a meeting on a declare. Any OTHER
+                # sender's declare is routed to the duty confirm-DM (ask first) — so a stray
+                # "Priority: P0" from a non-duty person never surprise-creates a meeting. This gates
+                # every auto-declare path (AI / legacy / Groq) at their single convergence point.
+                # Empty allowlist = legacy behaviour (all declares auto-start).
+                _trusted_declarers = get_p0_auto_declare_trusted_open_ids()
+                if _trusted_declarers and (user_id or "").strip() not in _trusted_declarers:
+                    log.info(
+                        "Incident group: auto-declare gated — non-trusted sender %s -> confirm-DM (not auto) chat_id=%s",
+                        user_id,
+                        chat_id,
+                    )
+                    _maybe_p0_keyword_confirm_dm(
+                        chat_id=chat_id,
+                        token=token,
+                        user_id=user_id,
+                        sender_lark_user_id=sender_lark_user_id,
+                        source_chat_name=source_chat_name,
+                        text_raw=text_raw,
+                        message_id=message_id,
+                    )
+                    return
 
                 kw_dedupe = _keyword_trigger_dedupe_key(
                     chat_id, user_id, message_id, message_create_time, text_raw
