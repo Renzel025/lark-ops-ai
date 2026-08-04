@@ -1230,6 +1230,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         priority="P0",
                         source_chat_name=_src_name,
                         trigger_lark_user_id=_trigger_luid,
+                        announce_declaration=True,  # confirm-DM "Create meeting" → post "We declare this issue as P0"
                     )
                 except Exception as e:  # noqa: BLE001
                     _start_err["e"] = e
