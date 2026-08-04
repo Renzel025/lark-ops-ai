@@ -2823,6 +2823,17 @@ def get_p0_issue_watch_declare_reply_text() -> str:
     return raw or "We will declare this issue as P0."
 
 
+def get_p0_meeting_created_notice_text() -> str:
+    """
+    The announcement line posted to the group when a P0/P1 meeting is created, shown right above
+    the join link. ``P0_MEETING_CREATED_NOTICE_TEXT`` — ``{priority}`` is replaced with P0/P1.
+    Default declares the issue (rather than the old "meeting created" wording).
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_MEETING_CREATED_NOTICE_TEXT") or "").strip()
+    return raw or "🚨 We declare this issue as {priority}."
+
+
 def get_p0_issue_watch_declare_reaction() -> str:
     """Lark emoji_type reaction on the source concern message (empty = skip). Default ``OnIt``."""
     reload_env_runtime()
