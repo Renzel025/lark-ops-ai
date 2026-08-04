@@ -2839,7 +2839,7 @@ def get_p0_meeting_declare_reply_text() -> str:
     """
     reload_env_runtime()
     raw = (os.getenv("P0_MEETING_DECLARE_REPLY_TEXT") or "").strip()
-    return raw or "We declare this issue as {priority}."
+    return raw or "We declare the issue as {priority}."
 
 
 def get_p0_issue_watch_declare_reaction() -> str:
@@ -3058,16 +3058,26 @@ def get_p0_vc_ring_escalation_open_ids() -> List[str]:
     return _parse_ou_id_csv(os.getenv("P0_VC_RING_ESCALATION_OPEN_IDS") or "")
 
 
-def get_p0_vc_ring_inviter_open_id() -> str:
-    """``P0_VC_RING_INVITER_OPEN_ID`` — the ONE fixed account that rings/invites for ALL P0s.
+def get_p0_vc_ring_inviter_open_ids() -> List[str]:
+    """``P0_VC_RING_INVITER_OPEN_ID`` — the fixed account(s) that ring/invite for ALL P0s.
 
-    Anyone may declare a P0, but only this account's OAuth token performs VC invites — decoupling
-    the ring from whoever declared. The ring fires when THIS account joins the VC (Lark requires
-    the inviter be a meeting participant). Empty (default) = legacy behavior: the declarer's own
-    token invites, fired on the declarer's join.
+    Anyone may declare a P0, but only a listed account's OAuth token performs VC invites — decoupling
+    the ring from whoever declared. The ring fires when a listed account joins the VC (Lark requires
+    the inviter be a meeting participant).
+
+    Accepts a comma-separated list so more than one account can serve as inviter (e.g. a personal
+    test account AND a shared duty account). Whichever listed account is actually in the VC drives
+    the invite, using its own OAuth token. Empty (default) = legacy: the declarer's own token invites,
+    fired on the declarer's own join. ONE value = the original single-fixed-inviter behavior, exactly.
     """
     reload_env_runtime()
-    return (os.getenv("P0_VC_RING_INVITER_OPEN_ID") or "").strip()
+    return _parse_ou_id_csv(os.getenv("P0_VC_RING_INVITER_OPEN_ID") or "")
+
+
+def get_p0_vc_ring_inviter_open_id() -> str:
+    """First configured ring inviter (back-compat shim for callers wanting a single value)."""
+    ids = get_p0_vc_ring_inviter_open_ids()
+    return ids[0] if ids else ""
 
 
 def get_p0_vc_auto_invite_open_ids() -> List[str]:
