@@ -2157,6 +2157,7 @@ def start_p0(
     silent_when_blocked: bool = False,
     vc_ring_target_open_ids: Optional[List[str]] = None,
     issue_watch_alert_key: str = "",
+    announce_declaration: bool = False,
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -2292,6 +2293,9 @@ def start_p0(
             link=link,
             priority=priority,
             emergency_topic=emergency_topic,
+            # Only the confirm-DM "Create meeting" flow announces "We declare this issue as P0";
+            # an automatic declaration doesn't echo it back (the declarer already said it).
+            include_declare_reply=announce_declaration,
         )
         if not invite_mid:
             log.error(
