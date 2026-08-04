@@ -2028,6 +2028,7 @@ def _post_meeting_link_unfurl_notice(
     link: str,
     priority: str,
     emergency_topic: str = "",
+    include_declare_reply: bool = True,
 ) -> str:
     """
     Option A: one plain-text message — topic, P0 created, join label, raw URL (Lark unfurl below).
@@ -2038,8 +2039,9 @@ def _post_meeting_link_unfurl_notice(
     if not cid or not token:
         return ""
     # First a SEPARATE standalone "We declare this issue as P0" message, then (below) the meeting
-    # notice + join link as its own message. Two messages, not one combined block.
-    if _config.get_p0_meeting_declare_reply_enabled():
+    # notice + join link as its own message. Two messages, not one combined block. Skipped for fan-out
+    # / mirror groups (include_declare_reply=False) — those get the link notice only.
+    if include_declare_reply and _config.get_p0_meeting_declare_reply_enabled():
         declare = _config.get_p0_meeting_declare_reply_text().replace(
             "{priority}", (priority or "P0").strip().upper()
         )
@@ -2102,6 +2104,7 @@ def _fanout_p0_meeting_created_link_notice(
             link=link,
             priority=priority,
             emergency_topic=emergency_topic,
+            include_declare_reply=False,  # fan-out / mirror groups: link notice only, no declare line
         )
         if mid:
             out.append((oc, mid))
