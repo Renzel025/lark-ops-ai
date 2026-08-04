@@ -315,6 +315,11 @@ def fanout_recording_to_chats(
         if mid in _FANOUT_DONE:
             log.info("vc recording fan-out skip duplicate meeting_id=%s source=%s", mid[:24], source)
             return True
+        # Atomic claim: mark this meeting DONE now, BEFORE resolving the URL + posting — so a concurrent
+        # recording_ready event and the poll backup (which each computed a different duration, 9s vs
+        # 2h43m) can't both pass the check above and post two cards. Released below if this attempt
+        # defers (no URL yet) or fully fails, so a later poll can still retry.
+        _FANOUT_DONE.add(mid)
 
     recording_url = _resolve_recording_url(token, mid, url_hint)
     if not recording_url and not force_notify:
@@ -323,6 +328,8 @@ def fanout_recording_to_chats(
             source,
             mid[:20],
         )
+        with _FANOUT_LOCK:
+            _FANOUT_DONE.discard(mid)  # release the claim → a later poll attempt can retry
         return False
     if not recording_url and force_notify:
         log.warning(
@@ -429,9 +436,10 @@ def fanout_recording_to_chats(
         except Exception as e:
             log.warning("vc recording fan-out DM exception source=%s open_id=%s err=%s", source, ou[:24], e)
 
-    if ok_any:
+    if not ok_any:
+        # Nothing posted — release the claim taken above so a later poll attempt can retry this meeting.
         with _FANOUT_LOCK:
-            _FANOUT_DONE.add(mid)
+            _FANOUT_DONE.discard(mid)
     return ok_any
 
 
