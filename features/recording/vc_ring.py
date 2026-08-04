@@ -169,9 +169,9 @@ def invite_open_ids_into_active_meeting(
     _merge_duty_mentions_into_active_session(
         cid, raw, operator_open_id=operator_open_id, tenant_token=tenant_token
     )
-    # The actual ring uses the fixed inviter's OAuth (or the declarer's when none is configured);
+    # The actual ring uses a fixed inviter's OAuth (or the declarer's when none is configured);
     # report whether it can fire now or is queued.
-    inviter = _config.get_p0_vc_ring_inviter_open_id() or trigger
+    inviter = _resolve_ring_inviter(sess, fallback=trigger)
     if inviter and _oauth.get_user_access_token(inviter):
         return "ringing"
     return "queued_oauth"
@@ -207,7 +207,7 @@ def force_reinvite_open_ids(
     )
     if not raw:
         return "no_targets"
-    inviter = _config.get_p0_vc_ring_inviter_open_id() or trigger
+    inviter = _resolve_ring_inviter(sess, fallback=trigger)
     user_tok = _oauth.get_user_access_token(inviter)
     if not user_tok:
         maybe_prompt_oauth_dm(inviter, tenant_token)
@@ -807,6 +807,39 @@ def _is_session_declarer(
     return False
 
 
+def _resolve_ring_inviter(
+    sess: Optional[Dict[str, Any]],
+    *,
+    prefer_open_id: str = "",
+    fallback: str = "",
+) -> str:
+    """Pick which account's OAuth token drives the VC invite.
+
+    ``P0_VC_RING_INVITER_OPEN_ID`` may list one OR MORE accounts. Whichever listed account is
+    actually in the VC is the one that can invite (Lark requires the inviter be a participant), so:
+      1. ``prefer_open_id`` (the account that just joined) when it is a configured inviter,
+      2. else the inviter already recorded as having joined this session,
+      3. else the first configured inviter holding a valid user_access_token,
+      4. else the first configured inviter (so an OAuth-prompt DM targets a real account),
+      5. else ``fallback`` — legacy: no inviter configured, use the declarer's own token.
+    With exactly ONE configured inviter this returns that account, matching the original behavior.
+    """
+    inviters = _config.get_p0_vc_ring_inviter_open_ids()
+    if not inviters:
+        return (fallback or "").strip()
+    prefer = (prefer_open_id or "").strip()
+    if prefer and prefer in inviters:
+        return prefer
+    if isinstance(sess, dict):
+        active = str(sess.get("vc_ring_active_inviter") or "").strip()
+        if active and active in inviters:
+            return active
+    for oid in inviters:
+        if _oauth.get_user_access_token(oid):
+            return oid
+    return inviters[0]
+
+
 def _try_ring_session(
     chat_id: str,
     sess: Dict[str, Any],
@@ -832,10 +865,11 @@ def _try_ring_session(
         log.warning("vc_ring: no meeting_id on session chat_id=%s", chat_id[:24])
         return False
 
-    # Fixed inviter (one authorized account rings for ALL declarers) — falls back to the declarer's
+    # Fixed inviter (an authorized account rings for ALL declarers) — falls back to the declarer's
     # own token when P0_VC_RING_INVITER_OPEN_ID is unset (legacy). Either way the inviter must be a
-    # participant in the meeting for Lark to accept the invite.
-    inviter = _config.get_p0_vc_ring_inviter_open_id() or declarer
+    # participant in the meeting for Lark to accept the invite. When called on a VC join, ``declarer``
+    # IS the joiner, so prefer their token (they are the account actually in the meeting).
+    inviter = _resolve_ring_inviter(sess, prefer_open_id=declarer, fallback=declarer)
     user_tok = _oauth.get_user_access_token(inviter)
     if not user_tok:
         maybe_prompt_oauth_dm(inviter, tenant_token)
@@ -913,18 +947,22 @@ def maybe_ring_on_vc_join(
         )
         return
 
-    inviter = _config.get_p0_vc_ring_inviter_open_id()
-    if inviter:
-        # Fixed-inviter mode: anyone can declare, but only THIS account's join triggers the ring
-        # (only then is the inviter a meeting participant, as Lark requires). The declarer's join
-        # is irrelevant — their token is never used.
-        if joiner != inviter:
+    inviters = _config.get_p0_vc_ring_inviter_open_ids()
+    if inviters:
+        # Fixed-inviter mode: anyone can declare, but only a listed account's join triggers the ring
+        # (only then is that account a meeting participant, as Lark requires). The declarer's join is
+        # irrelevant — their token is never used. With more than one configured inviter, whichever
+        # listed account joins first fires the ring using its own token.
+        if joiner not in inviters:
             log.info(
-                "vc_ring: joiner not the fixed inviter — waiting for inviter to join joiner_tail=%s inviter_tail=%s",
+                "vc_ring: joiner not a fixed inviter — waiting for an inviter to join joiner_tail=%s inviters=%s",
                 joiner[-8:],
-                inviter[-8:],
+                [i[-8:] for i in inviters],
             )
             return
+        # Record which listed inviter is in the VC so later @bot ring commands use its token.
+        sess["vc_ring_active_inviter"] = joiner
+        _session.P0_SESSIONS[chat_id] = sess
     elif not _is_session_declarer(
         sess,
         joiner_open_id=joiner,
@@ -960,18 +998,18 @@ def maybe_retry_pending_vc_ring_for_declarer(declarer_open_id: str, tenant_token
         return 0
     if not _oauth.has_user_token(user):
         return 0
-    # Fixed-inviter mode: only the configured inviter's OAuth can drive a retry, and it rings for
+    # Fixed-inviter mode: only a configured inviter's OAuth can drive a retry, and it rings for
     # EVERY pending session (their token invites regardless of who declared). Legacy: the declarer's
     # OAuth retries only the sessions they declared.
-    inviter = _config.get_p0_vc_ring_inviter_open_id()
-    if inviter and user != inviter:
+    inviters = _config.get_p0_vc_ring_inviter_open_ids()
+    if inviters and user not in inviters:
         return 0
 
     n_ok = 0
     for chat_id, sess in list(_session.P0_SESSIONS.items()):
         if not isinstance(sess, dict):
             continue
-        if not inviter and str(sess.get("trigger_open_id") or "").strip() != user:
+        if not inviters and str(sess.get("trigger_open_id") or "").strip() != user:
             continue
         if sess.get("vc_ring_done"):
             continue
