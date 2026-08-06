@@ -928,6 +928,15 @@ def get_standalone_overview_target_chat_id_for_tag(tag: str) -> str:
     return ""
 
 
+def get_overview_impact_scope_default() -> str:
+    """``P0_OVERVIEW_IMPACT_SCOPE_DEFAULT`` — impact-scope text when the source (screenshot/text) has
+    NO player IDs, NO count, and NO vague-player phrase at all. Default keeps the legacy
+    ``Not specified``; set to e.g. ``0 affected players`` to show a concrete zero instead."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_OVERVIEW_IMPACT_SCOPE_DEFAULT") or "").strip()
+    return raw or "Not specified"
+
+
 REQ_TIMEOUT_ENV = (os.getenv("REQ_TIMEOUT", "15") or "15").strip()
 try:
     REQ_TIMEOUT = float(REQ_TIMEOUT_ENV)
@@ -3090,6 +3099,36 @@ def get_p0_vc_auto_invite_open_ids() -> List[str]:
     """
     reload_env_runtime()
     return _parse_ou_id_csv(os.getenv("P0_VC_AUTO_INVITE_OPEN_IDS") or "")
+
+
+def get_p0_vc_ring_retry_enabled() -> bool:
+    """``P0_VC_RING_RETRY_ENABLED`` — re-ring (re-invite) a rung user who has NOT joined the VC yet,
+    up to ``P0_VC_RING_RETRY_MAX_ATTEMPTS`` total rings spaced ``P0_VC_RING_RETRY_INTERVAL_SEC`` apart,
+    stopping as soon as they join. Lark has no 'declined/expired' event, so 'not answered' == 'not
+    joined within the interval'. Applies to all normal ring paths (auto-ring + @bot m/e/c + duty);
+    the SRE Game (/srebac …) keeps its own escalation. Default OFF (no behavior change)."""
+    reload_env_runtime()
+    return (os.getenv("P0_VC_RING_RETRY_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_p0_vc_ring_retry_max_attempts() -> int:
+    """``P0_VC_RING_RETRY_MAX_ATTEMPTS`` — total rings per user incl. the first (default 3). Min 1."""
+    reload_env_runtime()
+    try:
+        n = int((os.getenv("P0_VC_RING_RETRY_MAX_ATTEMPTS") or "3").strip())
+    except Exception:
+        n = 3
+    return max(1, n)
+
+
+def get_p0_vc_ring_retry_interval_sec() -> float:
+    """``P0_VC_RING_RETRY_INTERVAL_SEC`` — seconds between rings (default 60, ~one Lark ring). Min 10."""
+    reload_env_runtime()
+    try:
+        s = float((os.getenv("P0_VC_RING_RETRY_INTERVAL_SEC") or "60").strip())
+    except Exception:
+        s = 60.0
+    return max(10.0, s)
 
 
 def get_p0_vc_oauth_public_base_url() -> str:
