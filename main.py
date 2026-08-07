@@ -752,6 +752,13 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                     maybe_mark_sre_game_contact_joined(oid, tenant_token)
             except Exception as e_sg:
                 log.warning("sre_game join hook failed: %s", e_sg)
+            try:
+                from features.recording.vc_ring import mark_vc_ring_target_joined
+
+                if oid and meeting_ref:
+                    mark_vc_ring_target_joined(meeting_ref, oid, tenant_token)
+            except Exception as e_rr:
+                log.warning("vc_ring re-ring join hook failed: %s", e_rr)
             return
 
         if event_type == "vc.meeting.leave_meeting_v1":

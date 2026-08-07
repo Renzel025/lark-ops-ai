@@ -23,6 +23,12 @@ _DUTY_MENTION_LOCK = threading.Lock()
 # detection chat_id -> {open_id, ids[], ts}
 _DUTY_MENTIONS_BY_CHAT: Dict[str, Dict[str, Any]] = {}
 
+# Re-ring scheduler (P0_VC_RING_RETRY_ENABLED): ring an invited-but-not-joined user again, up to
+# P0_VC_RING_RETRY_MAX_ATTEMPTS total, spaced P0_VC_RING_RETRY_INTERVAL_SEC apart, stopping on join.
+# chat_id -> {meeting_id, targets:{open_id:{attempts:int}}, joined:set[open_id], timer:threading.Timer}
+_RERING_LOCK = threading.Lock()
+_RERING_STATE: Dict[str, Dict[str, Any]] = {}
+
 
 def _is_duty_open_id(open_id: str) -> bool:
     oid = (open_id or "").strip()
@@ -183,12 +189,17 @@ def force_reinvite_open_ids(
     *,
     tenant_token: str = "",
     operator_open_id: str = "",
+    track_rering: bool = False,
 ) -> str:
     """Re-send a VC invite to ``open_ids`` into the active meeting EVEN IF already invited.
 
     The normal ``invite_open_ids_into_active_meeting`` path dedupes (only rings NEWLY-added targets),
     so it no-ops when re-ringing the same person. This rings them DIRECTLY via the inviter's OAuth —
-    used by the SRE-game escalation (/srebac … /r retry, /n next) so each step actually re-invites.
+    used by the SRE-game escalation (/srebac … /r retry, /n next) so each step actually re-invites,
+    and by the direct ``/c`` call command.
+
+    ``track_rering`` registers the targets with the re-ring scheduler (P0_VC_RING_RETRY_*) so they are
+    paged again if they don't join — set by ``/c`` but NOT by the SRE game (it runs its own escalation).
 
     Returns: ``disabled`` / ``no_session`` / ``no_targets`` / ``queued_oauth`` / ``ringing`` / ``failed``.
     """
@@ -218,6 +229,8 @@ def force_reinvite_open_ids(
         "vc_ring: force re-invite count=%s ok=%s meeting_tail=%s detail=%s",
         len(raw), ok, meeting_id[-8:], (detail or "")[:200],
     )
+    if ok and track_rering:
+        _note_ring_attempt(cid, meeting_id, raw)
     return "ringing" if ok else "failed"
 
 
@@ -404,10 +417,15 @@ def handle_ring_commands_batch(
         # Direct /c (tagged people) ALWAYS re-invites: a human explicitly asked to call them, so bypass
         # the merge-dedupe that would SILENTLY no-op a re-ring of someone already targeted this session
         # (yet still report "ringing"). Duty/roster rings keep the deduping path (don't spam on-call).
-        _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
-        status = _ring_fn(
-            session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
-        )
+        if c == "c":
+            status = force_reinvite_open_ids(
+                session_source, targets, tenant_token=tok,
+                operator_open_id=operator_open_id, track_rering=True,
+            )
+        else:
+            status = invite_open_ids_into_active_meeting(
+                session_source, targets, tenant_token=tok, operator_open_id=operator_open_id
+            )
         log.info("ring batch cmd=%s targets=%s status=%s", c, len(targets), status)
         ats = " ".join(f"<at id={oid}></at>" for oid in targets)
         head = f"**{disp}** — {ats}" if ats else f"**{disp}**"
@@ -512,13 +530,21 @@ def handle_ring_command(
 
     # Direct /c always re-invites (bypass merge-dedupe) so a manual re-ring actually re-fires and the
     # returned status reflects the real invite result; duty/roster keep the deduping path.
-    _ring_fn = force_reinvite_open_ids if c == "c" else invite_open_ids_into_active_meeting
-    status = _ring_fn(
-        session_source,
-        targets,
-        tenant_token=tok,
-        operator_open_id=operator_open_id,
-    )
+    if c == "c":
+        status = force_reinvite_open_ids(
+            session_source,
+            targets,
+            tenant_token=tok,
+            operator_open_id=operator_open_id,
+            track_rering=True,
+        )
+    else:
+        status = invite_open_ids_into_active_meeting(
+            session_source,
+            targets,
+            tenant_token=tok,
+            operator_open_id=operator_open_id,
+        )
     log.info(
         "ring cmd handled cmd=%s targets=%s status=%s session_tail=%s",
         c,
@@ -807,6 +833,160 @@ def _is_session_declarer(
     return False
 
 
+def _cancel_rering_timer_locked(st: Dict[str, Any]) -> None:
+    """Cancel a scheduler entry's pending timer. Caller must hold ``_RERING_LOCK``."""
+    tmr = st.get("timer")
+    if tmr is not None:
+        try:
+            tmr.cancel()
+        except Exception:
+            pass
+        st["timer"] = None
+
+
+def _note_ring_attempt(chat_id: str, meeting_id: str, target_open_ids: List[str]) -> None:
+    """Record that ``target_open_ids`` were just rung (attempt #1) into ``meeting_id`` and arm the
+    re-ring timer. No-op unless P0_VC_RING_RETRY_ENABLED. Idempotent per (chat, target): a target
+    already tracked keeps its attempt count (so re-registering the same session does not reset it)."""
+    if not _config.get_p0_vc_ring_retry_enabled():
+        return
+    cid = (chat_id or "").strip()
+    mid = (meeting_id or "").strip()
+    fresh = [str(x).strip() for x in (target_open_ids or []) if str(x).strip()]
+    if not cid or not mid or not fresh:
+        return
+    with _RERING_LOCK:
+        st = _RERING_STATE.get(cid)
+        if not isinstance(st, dict):
+            st = {"meeting_id": mid, "targets": {}, "joined": set(), "timer": None}
+            _RERING_STATE[cid] = st
+        st["meeting_id"] = mid
+        targets: Dict[str, Any] = st["targets"]
+        joined: set = st["joined"]
+        added = False
+        for oid in fresh:
+            if oid in joined:
+                continue
+            if oid not in targets:
+                targets[oid] = {"attempts": 1}  # the first ring already went out
+                added = True
+        if added and st.get("timer") is None:
+            _arm_rering_timer_locked(cid)
+
+
+def _arm_rering_timer_locked(chat_id: str) -> None:
+    """Arm the next re-ring pass for ``chat_id``. Caller must hold ``_RERING_LOCK``."""
+    st = _RERING_STATE.get(chat_id)
+    if not isinstance(st, dict):
+        return
+    _cancel_rering_timer_locked(st)
+    interval = _config.get_p0_vc_ring_retry_interval_sec()
+    tmr = threading.Timer(interval, _rering_pass, args=(chat_id,))
+    tmr.daemon = True
+    st["timer"] = tmr
+    tmr.start()
+
+
+def _rering_pass(chat_id: str) -> None:
+    """Timer callback: re-ring every tracked target that has NOT joined and is under the attempt cap,
+    then re-arm if any remain pending. Drops the scheduler entry once everyone joined or maxed out."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return
+    try:
+        if not _config.get_p0_vc_ring_retry_enabled():
+            with _RERING_LOCK:
+                _RERING_STATE.pop(cid, None)
+            return
+        max_attempts = _config.get_p0_vc_ring_retry_max_attempts()
+        with _RERING_LOCK:
+            st = _RERING_STATE.get(cid)
+            if not isinstance(st, dict):
+                return
+            st["timer"] = None
+            meeting_id = str(st.get("meeting_id") or "").strip()
+            joined: set = st["joined"]
+            targets: Dict[str, Any] = st["targets"]
+            due = [
+                oid for oid, meta in targets.items()
+                if oid not in joined and int(meta.get("attempts") or 0) < max_attempts
+            ]
+        if not meeting_id or not due:
+            with _RERING_LOCK:
+                # Nothing left to ring (all joined or all maxed) — clean up.
+                st2 = _RERING_STATE.get(cid)
+                if isinstance(st2, dict) and st2.get("timer") is None:
+                    _RERING_STATE.pop(cid, None)
+            return
+
+        sess = _session.P0_SESSIONS.get(cid)
+        tenant_token = _lark.get_tenant_token_primary()
+        inviter = _resolve_ring_inviter(sess if isinstance(sess, dict) else None)
+        user_tok = _oauth.get_user_access_token(inviter) if inviter else ""
+        if not user_tok:
+            if inviter:
+                maybe_prompt_oauth_dm(inviter, tenant_token)
+            log.warning("vc_ring: re-ring queued — no inviter token cid_tail=%s", cid[-8:])
+            with _RERING_LOCK:
+                if cid in _RERING_STATE:
+                    _arm_rering_timer_locked(cid)  # retry the same pass next interval
+            return
+
+        ok, detail = _lark.invite_users_to_vc_meeting(user_tok, meeting_id, due)
+        with _RERING_LOCK:
+            st = _RERING_STATE.get(cid)
+            if isinstance(st, dict):
+                for oid in due:
+                    meta = st["targets"].get(oid)
+                    if isinstance(meta, dict):
+                        meta["attempts"] = int(meta.get("attempts") or 0) + 1
+                still = [
+                    oid for oid, meta in st["targets"].items()
+                    if oid not in st["joined"] and int(meta.get("attempts") or 0) < max_attempts
+                ]
+                if still:
+                    _arm_rering_timer_locked(cid)
+                else:
+                    _cancel_rering_timer_locked(st)
+                    _RERING_STATE.pop(cid, None)
+        log.info(
+            "vc_ring: re-ring pass count=%s ok=%s meeting_tail=%s cid_tail=%s detail=%s",
+            len(due), ok, meeting_id[-8:], cid[-8:], (detail or "")[:160],
+        )
+    except Exception as e:
+        log.warning("vc_ring: re-ring pass error cid_tail=%s err=%s", cid[-8:], e)
+
+
+def mark_vc_ring_target_joined(meeting_ref: str, joiner_open_id: str, tenant_token: str = "") -> None:
+    """VC-join hook: mark ``joiner_open_id`` as answered so the re-ring scheduler stops paging them.
+    Safe/cheap no-op when the retry feature is off or the joiner was never a re-ring target."""
+    if not _config.get_p0_vc_ring_retry_enabled():
+        return
+    oid = (joiner_open_id or "").strip()
+    if not oid:
+        return
+    chat_id, _sess = _session.find_session_by_meeting_ref((meeting_ref or "").strip())
+    cid = (chat_id or "").strip()
+    if not cid:
+        return
+    with _RERING_LOCK:
+        st = _RERING_STATE.get(cid)
+        if not isinstance(st, dict):
+            return
+        if oid not in st.get("targets", {}):
+            return
+        st["joined"].add(oid)
+        remaining = [
+            t for t in st["targets"]
+            if t not in st["joined"]
+            and int(st["targets"][t].get("attempts") or 0) < _config.get_p0_vc_ring_retry_max_attempts()
+        ]
+        if not remaining:
+            _cancel_rering_timer_locked(st)
+            _RERING_STATE.pop(cid, None)
+    log.info("vc_ring: re-ring target joined — stop paging oid_tail=%s cid_tail=%s", oid[-8:], cid[-8:])
+
+
 def _resolve_ring_inviter(
     sess: Optional[Dict[str, Any]],
     *,
@@ -901,6 +1081,8 @@ def _try_ring_session(
             inviter[-8:],
             (detail or "")[:200],
         )
+        # Track for re-ring: page each newly-invited user again if they don't join (P0_VC_RING_RETRY_*).
+        _note_ring_attempt(chat_id, meeting_id, targets)
         # Auto-ring on VC join invites the targets SILENTLY — the "calling check persons" chat
         # notice is posted only by the explicit `@bot m` command (actual major P0 check persons).
         return True

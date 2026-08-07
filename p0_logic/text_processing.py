@@ -247,4 +247,5 @@ def build_impact_scope(text: str) -> str:
     bare_line = _impact_from_bare_count_lines(text)
     if bare_line:
         return bare_line
-    return "Not specified"
+    # No player IDs, no count, no vague phrase — nothing about impact in the source at all.
+    return _config.get_overview_impact_scope_default()
