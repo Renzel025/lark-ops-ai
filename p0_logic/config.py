@@ -1536,6 +1536,16 @@ def overview_ai_provider_chain() -> list:
     return chain
 
 
+def get_overview_zh_translate_anthropic_model() -> str:
+    """``P0_OVERVIEW_ZH_TRANSLATE_MODEL`` — Claude model for the EN→中文 translation of Issue/Impact.
+
+    Translation is a simple task, so this defaults to fast **Claude Haiku 4.5** (~1s) instead of the
+    heavier overview model (Sonnet 5, ~5s) — which is what made "Save" on an edited overview slow.
+    Stays on Claude (not Groq). Set empty to use the shared overview model."""
+    reload_env_runtime()
+    return (os.getenv("P0_OVERVIEW_ZH_TRANSLATE_MODEL") or "claude-haiku-4-5-20251001").strip()
+
+
 def get_p0_multi_meeting_per_group() -> bool:
     """
     Allow MULTIPLE concurrent P0 meetings in one group: every ``p0`` declaration spins up its own
