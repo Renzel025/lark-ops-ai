@@ -256,9 +256,16 @@ def _activate_dm_instruction_slot(
     _drafts.cancel_preview_timer(oid)
     _drafts.seed_draft_for_incident(oid, target_chat, chat_id, draft_priority=priority)
 
+    # Post the invite-command cards FIRST for EVERY path so any overview (suggested / auto / manual
+    # green) sits BELOW them: (1) ring guide, (2) "Calling <names>". The green-card path below is told
+    # not to re-send them (include_invite_cards=False).
+    _send_dm_ring_guide_card(oid, tok, op_uid)
+    _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id, priority)
+
     if alert_key and priority == "P0" and _config.get_p0_issue_watch_auto_overview_enabled():
         from features.issue_watch import issue_watch_overview as _iwo
 
+        # Suggested overview preview lands below the invite cards just posted above.
         if _iwo.push_suggested_overview_on_p0_declare(
             oid,
             tok,
@@ -267,11 +274,6 @@ def _activate_dm_instruction_slot(
             target_chat=target_chat,
             source_chat_label=label,
         ):
-            # This path skips the green card (posts the suggested overview instead), so post the ring
-            # guide + "Calling <names>" card here too — otherwise the duty never sees them on an
-            # Issue-Watch-declared P0.
-            _send_dm_ring_guide_card(oid, tok, op_uid)
-            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id, priority)
             log.info(
                 "%s: Issue Watch suggested overview open_id_tail=%s incident=%s alert_key=%s",
                 context,
@@ -282,8 +284,8 @@ def _activate_dm_instruction_slot(
             return True
 
     # Path B — typed "p0" / confirm-DM declare (no Issue Watch snapshot): seed the draft with the raw
-    # declaration text and auto-generate the preview, DMing the pre-filled card instead of the green
-    # manual card. Falls back to the green card if generation yields nothing.
+    # declaration text and auto-generate the preview, DMing the pre-filled card (below the invite cards)
+    # instead of the green manual card. Falls back to the green card if generation yields nothing.
     decl_text = str(item.get("declaration_text") or "").strip()
     if (not alert_key) and decl_text and priority in ("P0", "P1") and _config.get_p0_typed_declare_auto_overview_enabled():
         _drafts.add_text_to_draft(oid, target_chat, decl_text)
@@ -295,9 +297,6 @@ def _activate_dm_instruction_slot(
         except Exception as e:  # noqa: BLE001
             log.warning("%s: typed-declare auto overview failed open_id_tail=%s err=%s", context, oid[-8:], e)
         if ok_auto:
-            # Preview replaces the green card, so still post the ring guide + "Calling <names>" cards.
-            _send_dm_ring_guide_card(oid, tok, op_uid)
-            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id, priority)
             log.info(
                 "%s: typed-declare auto overview open_id_tail=%s incident=%s",
                 context,
@@ -306,6 +305,7 @@ def _activate_dm_instruction_slot(
             )
             return True
 
+    # Green card fallback — invite cards were already posted above, so skip them here.
     _send_dm_instruction_card_logged(
         oid,
         tok,
@@ -315,6 +315,7 @@ def _activate_dm_instruction_slot(
         target_chat=target_chat,
         source_incident_chat_id=chat_id,
         operator_lark_user_id=op_uid,
+        include_invite_cards=False,
     )
     return False
 
@@ -1680,6 +1681,7 @@ def _send_dm_instruction_card_logged(
     target_chat: str = "",
     source_incident_chat_id: str = "",
     operator_lark_user_id: str = "",
+    include_invite_cards: bool = True,
 ) -> None:
     """
     Send the green **Build overview** DM instruction card.
@@ -1687,6 +1689,9 @@ def _send_dm_instruction_card_logged(
     Prefers ``receive_id_type=user_id`` when ``operator_lark_user_id`` is set (same tenant id as group
     messages) — some tenants return HTTP 400 / 230099 for interactive cards via ``open_id`` only.
     Falls back to ``open_id`` if the user_id path fails.
+
+    ``include_invite_cards`` — send the ring-guide + "Calling <names>" cards before the green card.
+    Callers that already posted those (so an overview preview can sit BELOW them) pass False.
     """
     oid = (open_id or "").strip()
     if not oid:
@@ -1696,8 +1701,9 @@ def _send_dm_instruction_card_logged(
     # commands and the green overview card (most visible spot), (3) the green Build-overview card below.
     # The "Calling" card still anchors join_prompt_reply_mid, so auto-invitees' "joined" replies thread
     # under it wherever it sits.
-    _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
-    _send_dm_auto_invite_calling_prompt(oid, tenant_token, operator_lark_user_id, source_incident_chat_id, priority)
+    if include_invite_cards:
+        _send_dm_ring_guide_card(oid, tenant_token, operator_lark_user_id)
+        _send_dm_auto_invite_calling_prompt(oid, tenant_token, operator_lark_user_id, source_incident_chat_id, priority)
     card = _cards.build_dm_instruction_card(
         priority,
         source_chat_label=source_chat_label,
