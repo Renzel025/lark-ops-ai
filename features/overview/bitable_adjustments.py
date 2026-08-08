@@ -856,7 +856,9 @@ def _format_p0_declare_bitable_miss_text(diag: Dict[str, Any]) -> str:
     return ""
 
 
-def _mark_session_bitable_posted(source_chat_id: str) -> None:
+def _mark_session_bitable_posted(source_chat_id: str, posted: bool = True) -> None:
+    """Set the session's ``adjustment_bitable_posted`` flag. ``posted=False`` RELEASES a claim made
+    before the (slow) post so the Send-overview path can retry after a failure."""
     cid = (source_chat_id or "").strip()
     if not cid.startswith("oc_"):
         return
@@ -866,7 +868,7 @@ def _mark_session_bitable_posted(source_chat_id: str) -> None:
     sess = _session.P0_SESSIONS.get(cid)
     if not sess:
         return
-    sess["adjustment_bitable_posted"] = True
+    sess["adjustment_bitable_posted"] = bool(posted)
     if _session_disk.enabled():
         _session_disk.save_session(cid, sess)
 
@@ -934,6 +936,10 @@ def maybe_post_adjustment_notice_on_p0_declare(
         cid[-12:] if len(cid) > 12 else cid,
         dest[-12:] if len(dest) > 12 else dest,
     )
+    # Claim the session NOW — BEFORE the slow (~3-min) post — so a concurrent Send-overview does not
+    # double-post inside that window (the after-overview dedup checks this same flag). Every failure
+    # path below RELEASES the claim so Send-overview can still retry when the declare post didn't land.
+    _mark_session_bitable_posted(cid)
     try:
         posted, _lines, diag = _post_boss_style_notices(
             tenant_token,
@@ -947,8 +953,9 @@ def maybe_post_adjustment_notice_on_p0_declare(
         deploy_ok = (not deploy_needed) or bool(diag.get("deploy_post_ok"))
         ops_ok = (not ops_needed) or bool(diag.get("ops_post_ok"))
         if posted and deploy_ok and ops_ok:
-            _mark_session_bitable_posted(cid)
+            pass  # keep the claim
         elif posted and not (deploy_ok and ops_ok):
+            _mark_session_bitable_posted(cid, posted=False)  # release → Send-overview may retry
             log.warning(
                 "adjustment_bitable: P0 declare partial post — session not marked complete "
                 "(retry via Send overview). deploy_ok=%s ops_ok=%s diag=%s",
@@ -957,6 +964,7 @@ def maybe_post_adjustment_notice_on_p0_declare(
                 {k: diag.get(k) for k in ("deploy_rows", "ops_rows", "deploy_post_ok", "ops_post_ok", "card_post_failed")},
             )
         else:
+            _mark_session_bitable_posted(cid, posted=False)  # release → Send-overview may retry
             log.warning(
                 "adjustment_bitable: P0 declare — enabled but no cards posted "
                 "(0 rows in 48h window, fetch error, or card post failed). "
@@ -972,6 +980,7 @@ def maybe_post_adjustment_notice_on_p0_declare(
             except Exception as hint_err:
                 log.warning("adjustment_bitable: p0_declare hint post failed: %s", hint_err)
     except Exception as e:
+        _mark_session_bitable_posted(cid, posted=False)  # release on error → Send-overview may retry
         log.warning("adjustment_bitable: on_p0_declare failed source=%s err=%s", cid[:24], e)
 
 
