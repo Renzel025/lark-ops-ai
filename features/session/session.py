@@ -2417,6 +2417,23 @@ def start_p0(
             chat_id[:24],
             issue_watch_key[:12],
         )
+    # Dispatch the Bitable deploy/ops cards in a BACKGROUND THREAD so they post in PARALLEL with the DM
+    # overview generation (2× Claude one-shot, ~13s) and the Grafana screenshot — instead of waiting at
+    # the tail of this sequential flow, which made the cards appear ~1-2 min after declare.
+    if priority == "P0" and not _cancelled_midflight():
+        def _run_declare_bitable(_tok=token, _cid=chat_id, _prio=priority):
+            try:
+                from features.overview import bitable_adjustments as _bitable_adj
+
+                _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(_tok, source_chat_id=_cid, priority=_prio)
+            except Exception as e:  # noqa: BLE001
+                log.warning("start_p0: adjustment bitable on declare failed: %s", e)
+
+        threading.Thread(target=_run_declare_bitable, daemon=True, name="declare-bitable").start()
+        log.info(
+            "start_p0: adjustment bitable dispatched (background) chat_tail=%s",
+            chat_id[-12:] if len(chat_id) > 12 else chat_id,
+        )
     for oid in dm_targets:
         if not oid:
             continue
@@ -2439,20 +2456,6 @@ def start_p0(
             if declaration_text:
                 dm_item["declaration_text"] = declaration_text
             enqueue_dm_instruction_if_needed(oid, token, dm_item)
-    # THEN the Bitable adjustment notice, before the Grafana screenshot, so a slow/hung Grafana path
-    # can never delay the Bitable ops/deploy cards.
-    if priority == "P0" and not _cancelled_midflight():
-        try:
-            from features.overview import bitable_adjustments as _bitable_adj
-
-            log.info("start_p0: running adjustment bitable on P0 declare chat_tail=%s", chat_id[-12:] if len(chat_id) > 12 else chat_id)
-            _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(
-                token,
-                source_chat_id=chat_id,
-                priority=priority,
-            )
-        except Exception as e:
-            log.warning("start_p0: adjustment bitable on declare failed: %s", e)
     if not _cancelled_midflight():
         try:
             from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
