@@ -2802,6 +2802,37 @@ def get_p0_typed_declare_auto_overview_enabled() -> bool:
     return (os.getenv("P0_TYPED_DECLARE_AUTO_OVERVIEW") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_p0_typed_declare_concern_ai_pick_enabled() -> bool:
+    """``P0_TYPED_DECLARE_CONCERN_AI_PICK`` — when a typed "p0" is NOT a reply to a specific concern,
+    let Claude pick which recent group message is the concern being declared (used to build the
+    auto-overview). Default ON; when off, the most recent substantive message is used instead. Only
+    consulted while P0_TYPED_DECLARE_AUTO_OVERVIEW is on."""
+    reload_env_runtime()
+    return (os.getenv("P0_TYPED_DECLARE_CONCERN_AI_PICK") or "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_p0_typed_declare_concern_window_min() -> int:
+    """``P0_TYPED_DECLARE_CONCERN_WINDOW_MIN`` — how far back (minutes) to look for the concern behind a
+    typed "p0" that has no reply anchor (default 30, min 1)."""
+    reload_env_runtime()
+    try:
+        n = int((os.getenv("P0_TYPED_DECLARE_CONCERN_WINDOW_MIN") or "30").strip())
+    except Exception:
+        n = 30
+    return max(1, n)
+
+
+def get_p0_typed_declare_concern_max_msgs() -> int:
+    """``P0_TYPED_DECLARE_CONCERN_MAX_MSGS`` — max recent messages shown to the AI-pick / scanned for the
+    concern behind a no-reply typed "p0" (default 15, min 1)."""
+    reload_env_runtime()
+    try:
+        n = int((os.getenv("P0_TYPED_DECLARE_CONCERN_MAX_MSGS") or "15").strip())
+    except Exception:
+        n = 15
+    return max(1, n)
+
+
 def get_p0_issue_watch_buzz_enabled() -> bool:
     """``P0_ISSUE_WATCH_BUZZ_ENABLED`` — Lark 加急 on Major detection alert DM (default on)."""
     reload_env_runtime()

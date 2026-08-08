@@ -1271,7 +1271,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _trigger_open_id = str(entry.get("trigger_open_id") or "").strip()
             _src_name = str(entry.get("source_chat_name") or "").strip()
             _trigger_luid = str(entry.get("trigger_lark_user_id") or "").strip()
-            _decl_text = str(entry.get("phrase") or "").strip()  # raw declaration text for auto-overview
+            # Prefer the resolved concern (reply-parent / AI-pick / recent, computed at confirm-DM time);
+            # fall back to the raw triggering phrase. Used to auto-fill the overview on "Create meeting".
+            _decl_text = str(entry.get("concern_text") or entry.get("phrase") or "").strip()
 
             def _run_start_p0() -> None:
                 try:
