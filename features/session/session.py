@@ -197,6 +197,7 @@ def enqueue_dm_instruction_if_needed(operator_open_id: str, token: str, item: Di
         "priority": priority,
         "label": label,
         "operator_lark_user_id": op_uid,
+        "declaration_text": str(item.get("declaration_text") or "").strip(),
     }
     send_now = False
     with _DM_INSTR_LOCK:
@@ -280,6 +281,31 @@ def _activate_dm_instruction_slot(
             )
             return True
 
+    # Path B — typed "p0" / confirm-DM declare (no Issue Watch snapshot): seed the draft with the raw
+    # declaration text and auto-generate the preview, DMing the pre-filled card instead of the green
+    # manual card. Falls back to the green card if generation yields nothing.
+    decl_text = str(item.get("declaration_text") or "").strip()
+    if (not alert_key) and decl_text and priority in ("P0", "P1") and _config.get_p0_typed_declare_auto_overview_enabled():
+        _drafts.add_text_to_draft(oid, target_chat, decl_text)
+        ok_auto = False
+        try:
+            from p0_logic import handlers as _handlers
+
+            ok_auto = _handlers.autofill_overview_preview_now(oid, tok)
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s: typed-declare auto overview failed open_id_tail=%s err=%s", context, oid[-8:], e)
+        if ok_auto:
+            # Preview replaces the green card, so still post the ring guide + "Calling <names>" cards.
+            _send_dm_ring_guide_card(oid, tok, op_uid)
+            _send_dm_auto_invite_calling_prompt(oid, tok, op_uid, chat_id, priority)
+            log.info(
+                "%s: typed-declare auto overview open_id_tail=%s incident=%s",
+                context,
+                oid[-8:] if len(oid) > 8 else oid,
+                chat_id,
+            )
+            return True
+
     _send_dm_instruction_card_logged(
         oid,
         tok,
@@ -319,6 +345,7 @@ def enqueue_dm_issue_watch_overview_if_needed(
         "priority": priority,
         "label": label,
         "operator_lark_user_id": op_uid,
+        "declaration_text": str(item.get("declaration_text") or "").strip(),
     }
     send_now = False
     with _DM_INSTR_LOCK:
@@ -2158,6 +2185,7 @@ def start_p0(
     vc_ring_target_open_ids: Optional[List[str]] = None,
     issue_watch_alert_key: str = "",
     announce_declaration: bool = False,
+    declaration_text: str = "",
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -2399,6 +2427,11 @@ def start_p0(
         if issue_watch_key:
             enqueue_dm_issue_watch_overview_if_needed(oid, token, dm_item, issue_watch_key)
         else:
+            # Typed-p0 / confirm-DM declare: carry the raw declaration text so the DM slot can
+            # auto-fill the overview preview from it (P0_TYPED_DECLARE_AUTO_OVERVIEW) instead of the
+            # green manual card. Issue Watch declares use their own snapshot path above.
+            if declaration_text:
+                dm_item["declaration_text"] = declaration_text
             enqueue_dm_instruction_if_needed(oid, token, dm_item)
     # THEN the Bitable adjustment notice, before the Grafana screenshot, so a slow/hung Grafana path
     # can never delay the Bitable ops/deploy cards.

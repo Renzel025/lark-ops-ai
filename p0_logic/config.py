@@ -2792,6 +2792,16 @@ def get_p0_issue_watch_auto_overview_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_typed_declare_auto_overview_enabled() -> bool:
+    """``P0_TYPED_DECLARE_AUTO_OVERVIEW`` — for a TYPED "p0" declare or the confirm-DM "Create meeting"
+    flow (i.e. NOT an Issue Watch alert, which has its own P0_ISSUE_WATCH_AUTO_OVERVIEW path), seed the
+    duty's overview draft with the declaration message text, auto-generate the preview, and DM the
+    pre-filled preview card (one-click Send) INSTEAD of the green "Build overview" instruction card.
+    Falls back to the green card if generation yields nothing. Default OFF (no behavior change)."""
+    reload_env_runtime()
+    return (os.getenv("P0_TYPED_DECLARE_AUTO_OVERVIEW") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_p0_issue_watch_buzz_enabled() -> bool:
     """``P0_ISSUE_WATCH_BUZZ_ENABLED`` — Lark 加急 on Major detection alert DM (default on)."""
     reload_env_runtime()

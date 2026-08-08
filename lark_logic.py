@@ -1681,6 +1681,7 @@ def process_message(
                     priority="P0",
                     source_chat_name=source_chat_name,
                     trigger_lark_user_id=sender_lark_user_id,
+                    declaration_text=text_raw,
                 )
                 return
 
