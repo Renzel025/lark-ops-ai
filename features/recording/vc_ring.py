@@ -749,15 +749,21 @@ def resolve_declare_ring_targets(
     detection_chat_id: str,
     operator_open_id: str,
     tenant_token: str = "",
+    include_major_check_persons: bool = True,
 ) -> List[str]:
     """
     Ring targets at Issue Watch declare: concern/duty @mentions + ``P0_MAJOR_CHECK_PERSON_IDS``.
+
+    ``include_major_check_persons=False`` drops the check persons (P0_MAJOR_CHECK_PERSON_AUTO_INVITE off)
+    so only the concern @mentions ring here; the on-call auto-invite list is seeded separately in start_p0.
     """
     base = resolve_ring_targets_from_snapshot(
         snap,
         detection_chat_id=detection_chat_id,
         operator_open_id=operator_open_id,
     )
+    if not include_major_check_persons:
+        return base
     major = _major_check_person_ring_open_ids(tenant_token)
     if not major:
         return base

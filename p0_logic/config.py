@@ -2973,6 +2973,16 @@ def get_p0_major_check_person_dm_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_major_check_person_auto_invite_on_declare_enabled() -> bool:
+    """``P0_MAJOR_CHECK_PERSON_AUTO_INVITE`` — on a MAJOR P0 auto-declare (Issue Watch), auto-invite the
+    major check persons and post the "calling the check persons" reply. Default ON (legacy behavior).
+    Set ``0`` to page ONLY the on-call auto-invite list ("Calling <names> into the P0 meeting") and NOT
+    the check persons on detection — the manual ``@bot m`` command still rings them on demand."""
+    reload_env_runtime()
+    v = (os.getenv("P0_MAJOR_CHECK_PERSON_AUTO_INVITE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_major_check_person_dm_text() -> str:
     """DM body when ``P0_MAJOR_CHECK_PERSON_DM_ENABLED=1``. Use ``{link}`` for meeting URL."""
     reload_env_runtime()

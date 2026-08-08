@@ -339,6 +339,11 @@ def handle_declare_p0(
         _lark.post_text_to_open_id(oid, tok, "Could not resolve the detection group for this alert.")
         return
 
+    # Auto-calling major check persons on detection is gated: when off, only the on-call auto-invite
+    # ("Calling <names> into the meeting", seeded in start_p0) pages people — the check persons are NOT
+    # rung, NOT DM'd, and get no "calling check persons" reply; @bot m still reaches them on demand.
+    auto_call_check = _config.get_p0_major_check_person_auto_invite_on_declare_enabled()
+
     ring_targets: List[str] = []
     if _config.get_p0_vc_ring_enabled():
         from features.recording import vc_ring as _vc_ring
@@ -348,6 +353,7 @@ def handle_declare_p0(
             detection_chat_id=detection_chat,
             operator_open_id=oid,
             tenant_token=tok,
+            include_major_check_persons=auto_call_check,
         )
         if ring_targets:
             log.info(
@@ -358,7 +364,7 @@ def handle_declare_p0(
         _vc_ring.maybe_prompt_oauth_dm(oid, tok)
 
     declare_reply = _declare_reply_from_alert(snap)
-    check_recipients = _config.get_p0_major_check_person_recipients()
+    check_recipients = _config.get_p0_major_check_person_recipients() if auto_call_check else []
     if src_mid:
         _post_declare_text_on_concern(
             src_mid=src_mid,
@@ -414,7 +420,7 @@ def handle_declare_p0(
         vc_ring_target_open_ids=ring_targets or None,
         issue_watch_alert_key=key,
     )
-    if _config.get_p0_major_check_person_recipients():
+    if auto_call_check and _config.get_p0_major_check_person_recipients():
         n_inv = invite_major_check_persons_after_declare(detection_chat, tok, src_mid)
         log.info(
             "issue_watch_declare: check-person invites sent=%s chat_tail=%s",
