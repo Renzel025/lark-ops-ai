@@ -785,6 +785,14 @@ def _handle_edit_group_overview(
         return
     _drafts.load_group_overview_edit_session(sender_open_id, state)
     _drafts.set_preview_edit_waiting(sender_open_id, True)
+    # Force a FRESH edit card. load_group_overview_edit_session preserves the previous edit_message_id,
+    # but PATCHing that stale pre-send form leaves the text inputs blank — Lark does not re-apply
+    # input.value on an in-place card update (only the datetime picker re-renders), which is exactly the
+    # "datetime filled, Issue/Impact/Support blank" symptom. Pop + recall it so post_or_patch_edit_card
+    # posts a brand-new message that renders the pre-filled fields.
+    _stale_edit_mid = _drafts.take_edit_message_id(sender_open_id)
+    if _stale_edit_mid:
+        _lark.recall_im_message(tenant_token, _stale_edit_mid)
     lab = str(state.get("source_chat_label") or "").strip()
     if not lab:
         lab = _session.get_source_chat_label_for_target_chat(str(state.get("target_chat") or ""))
