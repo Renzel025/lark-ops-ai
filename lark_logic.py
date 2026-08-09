@@ -181,12 +181,25 @@ def _send_p0_keyword_confirm_dm(
         )
         return
     nonce = secrets.token_hex(16)
+    # Resolve the concern NOW (buffer is fresh) so, if the duty clicks "Create meeting", the auto-overview
+    # is built from the real issue this "p0" refers to — not the bare "p0". Kept separate from ``phrase``
+    # (which still shows the triggering text on the confirm card). Falls back to phrase.
+    _concern_text = (phrase or "").strip()
+    try:
+        from features.overview import concern_context as _concern_ctx
+
+        _concern_text = _concern_ctx.resolve_declaration_concern(
+            (source_incident_chat_id or "").strip(), decl_message_id=message_id, decl_text=phrase
+        ) or _concern_text
+    except Exception as _cc_err:  # noqa: BLE001
+        log.warning("concern_context: confirm-DM resolve failed err=%s", _cc_err)
     entry: Dict[str, Any] = {
         "source_incident_chat_id": (source_incident_chat_id or "").strip(),
         "trigger_open_id": (trigger_open_id or "").strip(),
         "trigger_lark_user_id": (trigger_lark_user_id or "").strip(),
         "source_chat_name": (source_chat_name or "").strip(),
         "phrase": (phrase or "").strip()[:300],
+        "concern_text": _concern_text.strip()[:1200],
         "created_at": time.time(),
     }
     with _P0_KEYWORD_CONFIRM_LOCK:
@@ -1172,6 +1185,24 @@ def process_message(
         else:
             session_source = mirror_session_source
 
+        # Buffer the message so a typed "p0" can later resolve WHICH concern to build the overview from
+        # (reply-parent / AI-pick / most-recent). Cheap; records into the incident group's rolling buffer.
+        if is_detection and message_type == "text":
+            try:
+                from features.overview import concern_context as _concern_ctx
+
+                _concern_ctx.record_group_message(
+                    chat_id,
+                    message_id=message_id,
+                    parent_id=parent_id,
+                    root_id=root_id,
+                    sender_open_id=user_id,
+                    text=text_raw,
+                    ts=float(message_create_time) / 1000.0 if message_create_time.isdigit() else None,
+                )
+            except Exception as _cc_err:  # noqa: BLE001
+                log.warning("concern_context: record failed chat_id=%s err=%s", chat_id, _cc_err)
+
         # Bot replies from typed commands: same destination as meeting cards for this incident row.
         notify_chat = get_session_meeting_card_post_chat_id(session_source) or chat_id
 
@@ -1674,6 +1705,17 @@ def process_message(
                     return
 
                 log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
+                # Resolve WHICH concern this "p0" refers to (reply-parent / AI-pick / recent) so the
+                # auto-overview is built from the real issue, not a bare "p0". Falls back to text_raw.
+                _decl_concern = text_raw
+                try:
+                    from features.overview import concern_context as _concern_ctx
+
+                    _decl_concern = _concern_ctx.resolve_declaration_concern(
+                        chat_id, decl_message_id=message_id, decl_text=text_raw
+                    )
+                except Exception as _cc_err:  # noqa: BLE001
+                    log.warning("concern_context: resolve failed chat_id=%s err=%s", chat_id, _cc_err)
                 start_p0(
                     chat_id,
                     token,
@@ -1681,6 +1723,7 @@ def process_message(
                     priority="P0",
                     source_chat_name=source_chat_name,
                     trigger_lark_user_id=sender_lark_user_id,
+                    declaration_text=_decl_concern,
                 )
                 return
 

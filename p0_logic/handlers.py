@@ -785,6 +785,14 @@ def _handle_edit_group_overview(
         return
     _drafts.load_group_overview_edit_session(sender_open_id, state)
     _drafts.set_preview_edit_waiting(sender_open_id, True)
+    # Force a FRESH edit card. load_group_overview_edit_session preserves the previous edit_message_id,
+    # but PATCHing that stale pre-send form leaves the text inputs blank — Lark does not re-apply
+    # input.value on an in-place card update (only the datetime picker re-renders), which is exactly the
+    # "datetime filled, Issue/Impact/Support blank" symptom. Pop + recall it so post_or_patch_edit_card
+    # posts a brand-new message that renders the pre-filled fields.
+    _stale_edit_mid = _drafts.take_edit_message_id(sender_open_id)
+    if _stale_edit_mid:
+        _lark.recall_im_message(tenant_token, _stale_edit_mid)
     lab = str(state.get("source_chat_label") or "").strip()
     if not lab:
         lab = _session.get_source_chat_label_for_target_chat(str(state.get("target_chat") or ""))
@@ -895,6 +903,49 @@ def _generate_preview_now(sender_open_id: str, tenant_token: str) -> bool:
         _lark.post_text_to_open_id(sender_open_id, tenant_token, "❌ Failed to send or update preview card.")
         return False
     return True
+
+
+def autofill_overview_preview_now(sender_open_id: str, tenant_token: str) -> bool:
+    """Build a preview from the ALREADY-seeded draft and DM the pre-filled preview card, returning
+    False SILENTLY on any failure (empty draft, no target, ended session, LLM error) so the caller can
+    fall back to the manual instruction card. Unlike ``_generate_preview_now`` this posts NO
+    user-facing warning/error text — used by the auto-overview-on-declare path (P0_TYPED_DECLARE_AUTO_OVERVIEW)."""
+    oid = (sender_open_id or "").strip()
+    tok = (tenant_token or "").strip()
+    if not oid or not tok:
+        return False
+    draft = _drafts.get_draft(oid)
+    if not draft:
+        return False
+    target_chat = str(draft.get("target_chat") or "").strip()
+    if not target_chat:
+        return False
+    src_inc = str(draft.get("source_incident_chat_id") or "").strip()
+    if not _ensure_dm_preview_incident_session(oid, tok, src_inc, target_chat):
+        return False
+    _chat_id, sess = _session.find_session_by_target_chat(target_chat)
+    start_epoch = int(sess.get("start_epoch") or time.time()) if sess else int(time.time())
+    try:
+        md = _drafts.build_preview_from_draft(
+            sender_open_id=oid, tenant_token=tok, target_chat=target_chat, start_epoch=start_epoch, draft=draft
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("autofill overview: preview build failed open_id_tail=%s err=%s", oid[-8:], e)
+        return False
+    if not md:
+        return False
+    prev = _drafts.get_preview(oid) or {}
+    pr = _preview_priority(prev)
+    lab = _session.get_source_chat_label_for_target_chat(target_chat)
+    card = _cards.build_preview_card(
+        md,
+        priority=pr,
+        source_chat_label=lab,
+        update_multi=True,
+        target_chat=target_chat,
+        source_incident_chat_id=src_inc,
+    )
+    return bool(_drafts.post_or_patch_preview_card(oid, tok, card))
 
 
 def _recover_preview_from_draft_if_needed(
@@ -1220,6 +1271,9 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             _trigger_open_id = str(entry.get("trigger_open_id") or "").strip()
             _src_name = str(entry.get("source_chat_name") or "").strip()
             _trigger_luid = str(entry.get("trigger_lark_user_id") or "").strip()
+            # Prefer the resolved concern (reply-parent / AI-pick / recent, computed at confirm-DM time);
+            # fall back to the raw triggering phrase. Used to auto-fill the overview on "Create meeting".
+            _decl_text = str(entry.get("concern_text") or entry.get("phrase") or "").strip()
 
             def _run_start_p0() -> None:
                 try:
@@ -1231,6 +1285,7 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         source_chat_name=_src_name,
                         trigger_lark_user_id=_trigger_luid,
                         announce_declaration=True,  # confirm-DM "Create meeting" → post "We declare this issue as P0"
+                        declaration_text=_decl_text,
                     )
                 except Exception as e:  # noqa: BLE001
                     _start_err["e"] = e

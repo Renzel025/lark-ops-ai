@@ -112,7 +112,10 @@ def _is_player_id_list_message(text: str) -> bool:
     remainder = t
     for pid in ids:
         remainder = remainder.replace(pid, " ")
-    remainder = re.sub(r"(?i)\baccount\b", " ", remainder)
+    # Strip ID-list header words so a follow-up like "additional player id <ids>" / "more account ids"
+    # is recognized. NOT "player(s)" alone — that word carries real concerns ("players cannot login"),
+    # which must stay on the classification path, so it keeps the remainder long enough to fail this.
+    remainder = re.sub(r"(?i)\b(?:accounts?|additional|extra|more|other|also|new|the|here|are|ids?)\b", " ", remainder)
     remainder = re.sub(r"[\s,;:+.\-]+", "", remainder)
     return len(remainder) < 12
 
@@ -314,7 +317,13 @@ def _try_player_id_followup(
         log.info("issue_watch: player ID follow-up already sent chat_id=%s", chat_id)
         return True
 
-    player_count = len(ids)
+    # Merge the follow-up IDs with the ORIGINAL report's IDs (union, order-preserving) so the count
+    # reflects EVERY affected player across the report + this follow-up — e.g. an initial "…5179455,
+    # 1066838821" (2) plus an "additional player id …" bubble (4) = 6, not just this message's 4.
+    prior_ids = [str(x).strip() for x in (recent.get("player_ids") or []) if str(x).strip()]
+    _seen_prior = set(prior_ids)
+    merged_ids = prior_ids + [x for x in ids if x and x not in _seen_prior]
+    player_count = len(merged_ids)
     min_affected = _config.get_p0_issue_watch_min_affected_players()
     if player_count < min_affected:
         log.info(
@@ -340,7 +349,7 @@ def _try_player_id_followup(
         if _cooldown_active(cd_key):
             log.info("issue_watch: player ID follow-up cooldown chat_id=%s", chat_id)
             return True
-        recent["player_ids"] = ids
+        recent["player_ids"] = merged_ids
         recent["players_count"] = player_count
         recent["ids_followup_sent"] = True
         _set_cooldown(cd_key, max(5, _config.get_p0_issue_watch_cooldown_min() // 2))
@@ -355,14 +364,14 @@ def _try_player_id_followup(
         "fingerprint": fp,
         "categories": categories,
         "players_count": player_count,
-        "player_ids": ids,
+        "player_ids": merged_ids,
         "concern_raw": concern,
         "group_label": group_label,
         "categories_md": _format_categories(categories, players_affected=player_count),
         "summary": summary,
         "concern": _quote_excerpt(concern),
         "alert_time": _format_alert_time(),
-        "player_ids_md": _format_player_ids_md(ids),
+        "player_ids_md": _format_player_ids_md(merged_ids),
         "source_message_link": _lark.build_message_open_applink(chat_id, src_mid)
         or _lark.build_chat_open_applink(chat_id),
         "source_message_time": src_time,

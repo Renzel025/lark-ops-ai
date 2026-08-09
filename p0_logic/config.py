@@ -1536,6 +1536,16 @@ def overview_ai_provider_chain() -> list:
     return chain
 
 
+def get_overview_zh_translate_anthropic_model() -> str:
+    """``P0_OVERVIEW_ZH_TRANSLATE_MODEL`` — Claude model for the EN→中文 translation of Issue/Impact.
+
+    Translation is a simple task, so this defaults to fast **Claude Haiku 4.5** (~1s) instead of the
+    heavier overview model (Sonnet 5, ~5s) — which is what made "Save" on an edited overview slow.
+    Stays on Claude (not Groq). Set empty to use the shared overview model."""
+    reload_env_runtime()
+    return (os.getenv("P0_OVERVIEW_ZH_TRANSLATE_MODEL") or "claude-haiku-4-5-20251001").strip()
+
+
 def get_p0_multi_meeting_per_group() -> bool:
     """
     Allow MULTIPLE concurrent P0 meetings in one group: every ``p0`` declaration spins up its own
@@ -2792,6 +2802,47 @@ def get_p0_issue_watch_auto_overview_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_typed_declare_auto_overview_enabled() -> bool:
+    """``P0_TYPED_DECLARE_AUTO_OVERVIEW`` — for a TYPED "p0" declare or the confirm-DM "Create meeting"
+    flow (i.e. NOT an Issue Watch alert, which has its own P0_ISSUE_WATCH_AUTO_OVERVIEW path), seed the
+    duty's overview draft with the declaration message text, auto-generate the preview, and DM the
+    pre-filled preview card (one-click Send) INSTEAD of the green "Build overview" instruction card.
+    Falls back to the green card if generation yields nothing. Default OFF (no behavior change)."""
+    reload_env_runtime()
+    return (os.getenv("P0_TYPED_DECLARE_AUTO_OVERVIEW") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_p0_typed_declare_concern_ai_pick_enabled() -> bool:
+    """``P0_TYPED_DECLARE_CONCERN_AI_PICK`` — when a typed "p0" is NOT a reply to a specific concern,
+    let Claude pick which recent group message is the concern being declared (used to build the
+    auto-overview). Default ON; when off, the most recent substantive message is used instead. Only
+    consulted while P0_TYPED_DECLARE_AUTO_OVERVIEW is on."""
+    reload_env_runtime()
+    return (os.getenv("P0_TYPED_DECLARE_CONCERN_AI_PICK") or "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_p0_typed_declare_concern_window_min() -> int:
+    """``P0_TYPED_DECLARE_CONCERN_WINDOW_MIN`` — how far back (minutes) to look for the concern behind a
+    typed "p0" that has no reply anchor (default 30, min 1)."""
+    reload_env_runtime()
+    try:
+        n = int((os.getenv("P0_TYPED_DECLARE_CONCERN_WINDOW_MIN") or "30").strip())
+    except Exception:
+        n = 30
+    return max(1, n)
+
+
+def get_p0_typed_declare_concern_max_msgs() -> int:
+    """``P0_TYPED_DECLARE_CONCERN_MAX_MSGS`` — max recent messages shown to the AI-pick / scanned for the
+    concern behind a no-reply typed "p0" (default 15, min 1)."""
+    reload_env_runtime()
+    try:
+        n = int((os.getenv("P0_TYPED_DECLARE_CONCERN_MAX_MSGS") or "15").strip())
+    except Exception:
+        n = 15
+    return max(1, n)
+
+
 def get_p0_issue_watch_buzz_enabled() -> bool:
     """``P0_ISSUE_WATCH_BUZZ_ENABLED`` — Lark 加急 on Major detection alert DM (default on)."""
     reload_env_runtime()
@@ -2960,6 +3011,16 @@ def get_p0_major_check_person_dm_enabled() -> bool:
     """
     reload_env_runtime()
     v = (os.getenv("P0_MAJOR_CHECK_PERSON_DM_ENABLED") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_major_check_person_auto_invite_on_declare_enabled() -> bool:
+    """``P0_MAJOR_CHECK_PERSON_AUTO_INVITE`` — on a MAJOR P0 auto-declare (Issue Watch), auto-invite the
+    major check persons and post the "calling the check persons" reply. Default ON (legacy behavior).
+    Set ``0`` to page ONLY the on-call auto-invite list ("Calling <names> into the P0 meeting") and NOT
+    the check persons on detection — the manual ``@bot m`` command still rings them on demand."""
+    reload_env_runtime()
+    v = (os.getenv("P0_MAJOR_CHECK_PERSON_AUTO_INVITE") or "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

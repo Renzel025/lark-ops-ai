@@ -47,12 +47,20 @@ _ZH_TRANSLATE_SYSTEM = (
 )
 
 
-def _run_provider(provider: str, system_prompt: str, user_prompt: str, *, max_tokens: int = _OVERVIEW_MAX_TOKENS) -> str:
-    """One model round trip for ``provider``. Returns raw text ('' on failure)."""
+def _run_provider(
+    provider: str,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_tokens: int = _OVERVIEW_MAX_TOKENS,
+    claude_model: str = "",
+) -> str:
+    """One model round trip for ``provider``. Returns raw text ('' on failure). ``claude_model`` overrides
+    the Claude model (e.g. a fast Haiku for translation); empty = the shared overview model."""
     if provider == "claude":
         from p0_logic.anthropic_client import anthropic_chat_once
 
-        model = _config.get_overview_anthropic_model() or None
+        model = (claude_model or "").strip() or _config.get_overview_anthropic_model() or None
         return anthropic_chat_once(system_prompt, user_prompt, max_tokens=max_tokens, model=model)
     if provider == "groq":
         return _groq.groq_chat_once(system_prompt, user_prompt, max_tokens=max_tokens)
@@ -73,9 +81,12 @@ def _translate_one_zh(text: str) -> str:
     if hit is not None:
         return hit
     out = ""
+    # Translation stays on Claude but uses a FAST model (Haiku) so "Save" on an edited overview is
+    # quick; the provider chain keeps Claude first (Groq only as an emergency failover if Claude errors).
+    _fast_zh_model = _config.get_overview_zh_translate_anthropic_model()
     for provider in _config.overview_ai_provider_chain():
         try:
-            out = _run_provider(provider, _ZH_TRANSLATE_SYSTEM, src, max_tokens=160)
+            out = _run_provider(provider, _ZH_TRANSLATE_SYSTEM, src, max_tokens=160, claude_model=_fast_zh_model)
         except Exception as e:  # noqa: BLE001 — try the next provider
             log.warning("overview zh-translate: provider=%s raised %s", provider, e)
             out = ""
