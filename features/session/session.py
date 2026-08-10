@@ -1769,8 +1769,13 @@ def get_p1_prompt_pending(chat_id: str) -> Optional[Dict[str, Any]]:
         return dict(p) if p else None
 
 
-def set_p1_prompt_pending(chat_id: str, trigger_open_id: str) -> str:
-    """Store pending P1 meeting confirmation; returns nonce embedded in the Yes/No card buttons."""
+def set_p1_prompt_pending(chat_id: str, trigger_open_id: str, declaration_text: str = "") -> str:
+    """Store pending P1 meeting confirmation; returns nonce embedded in the Yes/No card buttons.
+
+    ``declaration_text`` — the concern this P1 refers to, resolved at prompt time. Carried through
+    the Yes click into ``start_p0`` so P1 gets the same auto-filled overview preview as P0
+    (``P0_TYPED_DECLARE_AUTO_OVERVIEW``); without it the duty DM falls back to the green manual card.
+    """
     chat_id = (chat_id or "").strip()
     trigger_open_id = (trigger_open_id or "").strip()
     if not chat_id:
@@ -1781,6 +1786,7 @@ def set_p1_prompt_pending(chat_id: str, trigger_open_id: str) -> str:
             "trigger_open_id": trigger_open_id,
             "ts": int(time.time()),
             "nonce": nonce,
+            "declaration_text": (declaration_text or "").strip(),
         }
     return nonce
 
@@ -1961,7 +1967,13 @@ def handle_p1_meeting_confirm_yes(
     if not pending:
         return "stale"
     trigger = str(pending.get("trigger_open_id") or "").strip() or (fallback_trigger_open_id or "").strip()
-    start_p0(chat_id, token, trigger, priority="P1")
+    start_p0(
+        chat_id,
+        token,
+        trigger,
+        priority="P1",
+        declaration_text=str(pending.get("declaration_text") or "").strip(),
+    )
     return ""
 
 
