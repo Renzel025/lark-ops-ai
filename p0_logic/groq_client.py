@@ -478,6 +478,10 @@ def build_issue_watch_declare_reply_prompts(
 
     Lives here next to the other prompt builders, but the call itself runs through the Issue Watch
     provider chain (Claude first), so this is not Groq-specific.
+
+    ``min_reports_threshold`` / ``widespread_impact`` are accepted for call compatibility but no
+    longer shape the reply: it is one fixed short sentence (issue + affected players), so threshold
+    and widespread wording would only pad it.
     """
     cats = (categories_md or "").strip() or "(unspecified)"
     summ = (summary or "").strip() or "(none)"
@@ -486,27 +490,29 @@ def build_issue_watch_declare_reply_prompts(
         n = max(0, int(players_count or 0))
     except (TypeError, ValueError):
         n = 0
-    try:
-        thr = max(1, int(min_reports_threshold or 4))
-    except (TypeError, ValueError):
-        thr = 4
+    players_clause = (
+        f"and {n} affected player{'' if n == 1 else 's'}" if n >= 1 else "(omit the players clause)"
+    )
     system_prompt = (
         "You are an on-call ops bot replying in a Lark detection-group thread after duty declares P0.\n"
-        "Write ONE or TWO short sentences (plain text, no markdown, no bullets) that:\n"
-        "- Confirm we are declaring this as P0.\n"
-        "- Briefly explain WHY using ONLY the facts given (issue category, symptom, player count, widespread flag).\n"
-        "- If players_count >= min_reports_threshold or widespread_impact is true, mention scale (e.g. multiple players / threshold met).\n"
-        "- Sound responsive and professional — not a fixed template; vary wording naturally.\n"
-        "STRICT: Do not invent facts. Do not list account IDs. Do not mention AI or automation. Max ~280 characters.\n"
+        "Write EXACTLY ONE short sentence in this shape (plain text, no markdown, no bullets):\n"
+        '  "We will declare this issue as P0 due to <short issue phrase> and <N> affected players."\n'
+        "Rules:\n"
+        "- <short issue phrase> is the symptom in a few words, taken ONLY from the facts given "
+        "(e.g. 'GCash deposits failing to credit', 'players unable to log in').\n"
+        "- Use the players clause EXACTLY as given in 'Players clause'. If it says to omit it, end the "
+        "sentence after the issue phrase.\n"
+        "- Nothing else: no greeting, no second sentence, no next steps, no escalation or investigation talk, "
+        "no threshold or widespread wording, no counts other than the players clause.\n"
+        "STRICT: Do not invent facts. Do not list account IDs. Do not mention AI or automation. "
+        "Max ~140 characters.\n"
         "Output ONLY valid JSON: {\"reply\": \"your text\"}"
     )
     user_prompt = (
         f"Category labels:\n{cats}\n\n"
         f"Summary: {summ}\n\n"
         f"Concern (scrubbed): {concern}\n\n"
-        f"Players affected (count): {n}\n"
-        f"Major-alert player threshold: {thr}\n"
-        f"Widespread impact flagged: {'yes' if widespread_impact else 'no'}"
+        f"Players clause: {players_clause}"
     )
     return system_prompt, user_prompt
 
