@@ -465,7 +465,7 @@ def _scrub_declare_reply_context(text: str) -> str:
     return t[:600]
 
 
-def groq_issue_watch_declare_group_reply(
+def build_issue_watch_declare_reply_prompts(
     *,
     categories_md: str,
     summary: str,
@@ -473,13 +473,12 @@ def groq_issue_watch_declare_group_reply(
     players_count: int,
     min_reports_threshold: int,
     widespread_impact: bool,
-) -> Optional[str]:
+) -> Tuple[str, str]:
+    """``(system, user)`` for the declare-on-concern thread reply — provider-agnostic.
+
+    Lives here next to the other prompt builders, but the call itself runs through the Issue Watch
+    provider chain (Claude first), so this is not Groq-specific.
     """
-    One Groq call: contextual thread reply when duty declares P0 from an Issue Watch alert.
-    Returns plain English reply text or None (caller uses env fallback).
-    """
-    if not GROQ_API_KEY:
-        return None
     cats = (categories_md or "").strip() or "(unspecified)"
     summ = (summary or "").strip() or "(none)"
     concern = _scrub_declare_reply_context(concern_excerpt) or "(none)"
@@ -509,19 +508,48 @@ def groq_issue_watch_declare_group_reply(
         f"Major-alert player threshold: {thr}\n"
         f"Widespread impact flagged: {'yes' if widespread_impact else 'no'}"
     )
+    return system_prompt, user_prompt
+
+
+def parse_issue_watch_declare_reply(raw: str) -> str:
+    """``{"reply": "..."}`` → cleaned one/two-sentence text (``""`` when unusable). Any provider."""
+    obj = _parse_json_object(raw or "")
+    if not obj:
+        if (raw or "").strip():
+            log.warning("declare reply: JSON parse failed head=%s", (raw or "")[:200])
+        return ""
+    reply = str(obj.get("reply") or "").strip()
+    reply = re.sub(r"\s+", " ", reply).strip(" \"'")
+    if not reply:
+        return ""
+    if len(reply) > _DECLARE_REPLY_MAX_CHARS:
+        reply = reply[:_DECLARE_REPLY_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:") + "."
+    return reply
+
+
+def groq_issue_watch_declare_group_reply(
+    *,
+    categories_md: str,
+    summary: str,
+    concern_excerpt: str,
+    players_count: int,
+    min_reports_threshold: int,
+    widespread_impact: bool,
+) -> Optional[str]:
+    """Groq-only declare reply. Kept for direct/legacy callers; the Issue Watch declare path uses
+    the provider chain (Claude first) via ``build_issue_watch_declare_reply_prompts``."""
+    if not GROQ_API_KEY:
+        return None
+    system_prompt, user_prompt = build_issue_watch_declare_reply_prompts(
+        categories_md=categories_md,
+        summary=summary,
+        concern_excerpt=concern_excerpt,
+        players_count=players_count,
+        min_reports_threshold=min_reports_threshold,
+        widespread_impact=widespread_impact,
+    )
     t0 = time.perf_counter()
     try:
-        raw = groq_chat_once(system_prompt, user_prompt, max_tokens=200)
-        obj = _parse_json_object(raw or "")
-        if not obj:
-            log.warning("groq declare reply: JSON parse failed head=%s", (raw or "")[:200])
-            return None
-        reply = str(obj.get("reply") or "").strip()
-        reply = re.sub(r"\s+", " ", reply).strip(" \"'")
-        if not reply:
-            return None
-        if len(reply) > _DECLARE_REPLY_MAX_CHARS:
-            reply = reply[:_DECLARE_REPLY_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:") + "."
-        return reply
+        return parse_issue_watch_declare_reply(groq_chat_once(system_prompt, user_prompt, max_tokens=200)) or None
     finally:
         perf_log("groq_issue_watch_declare_reply", t0)

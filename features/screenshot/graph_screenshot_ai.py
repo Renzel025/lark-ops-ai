@@ -29,21 +29,29 @@ _ALLOWED_RANGES = frozenset({"30m", "1h", "2h", "3h", "6h"})
 
 
 def resolve_graph_screenshot_ai_provider() -> str:
+    """First provider to try — see ``resolve_graph_screenshot_ai_provider_chain``."""
+    chain = resolve_graph_screenshot_ai_provider_chain()
+    return chain[0] if chain else ""
+
+
+def resolve_graph_screenshot_ai_provider_chain() -> list:
     """
     ``P0_GRAPH_SCREENSHOT_AI_PROVIDER``: ``claude`` | ``groq`` | ``auto`` (default).
-    ``auto`` prefers Claude when OAuth/API key is configured, else Groq.
+    ``auto`` is **claude → groq** (each skipped if unconfigured), so a Claude outage still
+    classifies instead of silently dropping the request. Forcing one provider disables failover.
     """
     _config.reload_env_runtime()
     raw = (os.getenv("P0_GRAPH_SCREENSHOT_AI_PROVIDER") or "auto").strip().lower()
     if raw == "claude":
-        return "claude" if _anthropic_configured() else ""
+        return ["claude"] if _anthropic_configured() else []
     if raw == "groq":
-        return "groq" if _groq_key() else ""
+        return ["groq"] if _groq_key() else []
+    chain = []
     if _anthropic_configured():
-        return "claude"
+        chain.append("claude")
     if _groq_key():
-        return "groq"
-    return ""
+        chain.append("groq")
+    return chain
 
 
 def _anthropic_configured() -> bool:
@@ -101,9 +109,12 @@ def classify_graph_screenshot_request(message_text: str) -> Optional[dict]:
     t = (message_text or "").strip()
     if not t:
         return None
-    provider = resolve_graph_screenshot_ai_provider()
-    if provider == "claude":
-        return _classify_via_claude(t)
-    if provider == "groq":
-        return _classify_via_groq(t)
+    for provider in resolve_graph_screenshot_ai_provider_chain():
+        try:
+            out = _classify_via_claude(t) if provider == "claude" else _classify_via_groq(t)
+        except Exception as e:  # noqa: BLE001 — any provider error falls through to the next
+            log.warning("classify_graph_screenshot: provider=%s raised %s", provider, e)
+            continue
+        if out:
+            return out
     return None

@@ -1,15 +1,43 @@
 """
-Issue summarization and regeneration using Groq.
+Issue summarization and regeneration.
+
+Both calls run through the overview provider chain (``P0_OVERVIEW_AI_PROVIDER``: Claude first,
+Groq only as failover), the same chain as the overview one-shot — so one setting decides the model
+for every overview-side AI call. With no provider configured they degrade to a regex first-sentence
+cut rather than failing.
 """
 from __future__ import annotations
 
+import logging
 import re
 
+from p0_logic import config as _config
 from p0_logic import groq_client as _groq
 from p0_logic import text_processing as _text
 
+log = logging.getLogger("lark-ops-ai")
+
 # Issue one-liner max length for cards (was 240; hard slice caused mid-word cuts like "veri" vs "verified").
 ISSUE_SUMMARY_MAX_CHARS = 480
+
+
+def _issue_ai_chat(system_prompt: str, user_prompt: str, *, max_tokens: int) -> str:
+    """One round trip through the overview provider chain. ``""`` when every provider fails."""
+    from features.overview import overview_ai as _overview_ai
+
+    chain = _config.overview_ai_provider_chain() or (["groq"] if _groq.GROQ_API_KEY else [])
+    for provider in chain:
+        try:
+            out = (
+                _overview_ai.run_provider(provider, system_prompt, user_prompt, max_tokens=max_tokens) or ""
+            ).strip()
+        except Exception as e:  # noqa: BLE001 — any provider error falls through to the next
+            log.warning("issues: provider=%s raised %s", provider, e)
+            continue
+        if out:
+            return out
+        log.warning("issues: provider=%s returned nothing", provider)
+    return ""
 
 
 def _truncate_issue_output(s: str, max_chars: int) -> str:
@@ -36,9 +64,6 @@ def summarize_issue(text: str) -> str:
     scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
     if not scrubbed:
         return "Not specified"
-    if not _groq.GROQ_API_KEY:
-        cut = re.split(r"[.\n]", scrubbed, maxsplit=1)[0].strip()
-        return _truncate_issue_output(cut, ISSUE_SUMMARY_MAX_CHARS) if cut else "Not specified"
     system_prompt = (
         "You are an on-call incident assistant.\n"
         "Write ONE concise factual issue sentence for a P0/P1 overview.\n"
@@ -52,8 +77,7 @@ def summarize_issue(text: str) -> str:
         "- Do NOT invent anything.\n"
         "- Output exactly one concise sentence only."
     )
-    out = _groq.groq_chat_once(system_prompt, scrubbed, max_tokens=180)
-    out = (out or "").strip()
+    out = _issue_ai_chat(system_prompt, scrubbed, max_tokens=180)
     if not out:
         cut = re.split(r"[.\n]", scrubbed, maxsplit=1)[0].strip()
         return _truncate_issue_output(cut, ISSUE_SUMMARY_MAX_CHARS) if cut else "Not specified"
@@ -68,8 +92,6 @@ def regenerate_issue_only(old_issue: str, context_text: str = "") -> str:
     ctx = (context_text or "").strip()
     if not src:
         return "Not specified"
-    if not _groq.GROQ_API_KEY:
-        return src
     clean_ctx = re.sub(r"\b\d{6,}\b", "<ID>", ctx)
     clean_ctx = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", "<DATE>", clean_ctx)
     clean_ctx = re.sub(r"\s+", " ", clean_ctx).strip()[:1800]
@@ -93,8 +115,7 @@ def regenerate_issue_only(old_issue: str, context_text: str = "") -> str:
         f"Incident context:\n{clean_ctx}\n\n"
         "Rewrite it with different wording while preserving meaning."
     )
-    out = _groq.groq_chat_once(system_prompt, user_prompt, max_tokens=140)
-    out = (out or "").strip()
+    out = _issue_ai_chat(system_prompt, user_prompt, max_tokens=140)
     if not out:
         return src
     out = re.sub(r"\b\d{6,}\b", "", out)
@@ -109,7 +130,7 @@ def regenerate_issue_only(old_issue: str, context_text: str = "") -> str:
             "Rewrite it again using a clearly different sentence structure. "
             "Do not include counts, IDs, or dates."
         )
-        out2 = _groq.groq_chat_once(system_prompt, second_prompt, max_tokens=140).strip()
+        out2 = _issue_ai_chat(system_prompt, second_prompt, max_tokens=140)
         if out2:
             out2 = re.sub(r"\b\d{6,}\b", "", out2)
             out2 = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", "", out2)

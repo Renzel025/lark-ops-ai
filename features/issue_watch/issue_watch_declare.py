@@ -183,7 +183,8 @@ def maybe_prompt_major_check_person_joined(
 
 
 def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
-    """Groq contextual reply on the concern thread; env fallback if AI off or unavailable."""
+    """Contextual reply on the concern thread, via the ``P0_ISSUE_WATCH_AI_PROVIDER`` chain
+    (Claude first, Groq failover — same as the classifier); env fallback text if all fail."""
     fallback = _config.get_p0_issue_watch_declare_reply_text()
     if not snap or not _config.get_p0_issue_watch_declare_reply_ai_enabled():
         return fallback
@@ -196,7 +197,10 @@ def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
         )
     except (TypeError, ValueError):
         players = 0
-    ai = _groq.groq_issue_watch_declare_group_reply(
+    from features.issue_watch.issue_watch_ai import issue_watch_ai_providers_to_try
+    from features.overview.overview_ai import run_provider
+
+    system_prompt, user_prompt = _groq.build_issue_watch_declare_reply_prompts(
         categories_md=str(snap.get("categories_md") or "").strip(),
         summary=str(snap.get("summary") or "").strip(),
         concern_excerpt=str(snap.get("concern_raw") or snap.get("concern") or "").strip(),
@@ -204,10 +208,24 @@ def _declare_reply_from_alert(snap: Optional[Dict[str, Any]]) -> str:
         min_reports_threshold=_config.get_p0_issue_watch_min_reports(),
         widespread_impact=widespread,
     )
-    if ai:
-        log.info("issue_watch_declare: Groq declare reply len=%s players=%s widespread=%s", len(ai), players, widespread)
-        return ai
-    log.warning("issue_watch_declare: Groq declare reply failed — using fallback text")
+    for provider in issue_watch_ai_providers_to_try():
+        try:
+            raw = run_provider(provider, system_prompt, user_prompt, max_tokens=200)
+        except Exception as e:  # noqa: BLE001 — any provider error falls through to the next
+            log.warning("issue_watch_declare: declare reply provider=%s raised %s", provider, e)
+            continue
+        ai = _groq.parse_issue_watch_declare_reply(raw)
+        if ai:
+            log.info(
+                "issue_watch_declare: declare reply provider=%s len=%s players=%s widespread=%s",
+                provider,
+                len(ai),
+                players,
+                widespread,
+            )
+            return ai
+        log.warning("issue_watch_declare: declare reply provider=%s returned no usable JSON", provider)
+    log.warning("issue_watch_declare: declare reply failed on all providers — using fallback text")
     return fallback
 
 
