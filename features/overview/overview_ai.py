@@ -47,7 +47,7 @@ _ZH_TRANSLATE_SYSTEM = (
 )
 
 
-def _run_provider(
+def run_provider(
     provider: str,
     system_prompt: str,
     user_prompt: str,
@@ -86,7 +86,7 @@ def _translate_one_zh(text: str) -> str:
     _fast_zh_model = _config.get_overview_zh_translate_anthropic_model()
     for provider in _config.overview_ai_provider_chain():
         try:
-            out = _run_provider(provider, _ZH_TRANSLATE_SYSTEM, src, max_tokens=160, claude_model=_fast_zh_model)
+            out = run_provider(provider, _ZH_TRANSLATE_SYSTEM, src, max_tokens=160, claude_model=_fast_zh_model)
         except Exception as e:  # noqa: BLE001 — try the next provider
             log.warning("overview zh-translate: provider=%s raised %s", provider, e)
             out = ""
@@ -127,7 +127,7 @@ def overview_issue_and_zh_bilingual(issue_source: str, impact_en: str) -> Option
         return None
     for provider in chain:
         try:
-            raw = _run_provider(provider, system_prompt, user_prompt)
+            raw = run_provider(provider, system_prompt, user_prompt)
         except Exception as e:  # noqa: BLE001 — any provider error falls through to the next
             log.warning("overview one-shot: provider=%s raised %s", provider, e)
             continue

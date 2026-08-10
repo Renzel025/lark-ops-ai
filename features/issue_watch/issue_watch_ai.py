@@ -255,6 +255,12 @@ def _groq_key() -> str:
     return (os.getenv("GROQ_API_KEY") or "").strip()
 
 
+def issue_watch_ai_providers_to_try() -> List[str]:
+    """Public alias — the same ``P0_ISSUE_WATCH_AI_PROVIDER`` chain the classifier uses, so other
+    Issue Watch AI calls (e.g. the declare thread reply) honour one provider setting."""
+    return _issue_watch_ai_providers_to_try()
+
+
 def _issue_watch_ai_providers_to_try() -> List[str]:
     """
     LLM providers to attempt (in order) before keyword fallback.

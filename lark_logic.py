@@ -1772,7 +1772,20 @@ def process_message(
                     return
 
                 log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
-                set_p1_prompt_pending(chat_id, user_id)
+                # Same concern resolution as the P0 branch (reply-parent / AI-pick / recent), done
+                # now while the surrounding chat is fresh — the Yes click can land minutes later.
+                # Stored on the pending entry so the P1 duty DM gets an auto-filled overview preview
+                # instead of the green manual card.
+                _p1_concern = text_raw
+                try:
+                    from features.overview import concern_context as _concern_ctx
+
+                    _p1_concern = _concern_ctx.resolve_declaration_concern(
+                        chat_id, decl_message_id=message_id, decl_text=text_raw
+                    )
+                except Exception as _cc_err:  # noqa: BLE001
+                    log.warning("concern_context: P1 resolve failed chat_id=%s err=%s", chat_id, _cc_err)
+                set_p1_prompt_pending(chat_id, user_id, declaration_text=_p1_concern)
                 if not request_p1_meeting_confirmation(chat_id, token, user_id):
                     pop_p1_prompt_pending(chat_id)
                     log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)

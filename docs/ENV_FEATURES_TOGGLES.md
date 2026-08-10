@@ -109,6 +109,14 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_ISSUE_WATCH_DECLARE_REPLY_AI` | on | off | **on** |
 | `P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD` | on | off | **on** |
 | `P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP` | on | off | **on** |
+| `P0_ISSUE_WATCH_MUTE_COMMAND` | on | off | **on** |
+| `P0_ISSUE_WATCH_MUTE_MAX_MIN` | minutes until a `/off` group auto-resumes | `0` = until `/on` | **0** |
+
+**`/off` and `/on`** — when the classifier keeps flagging non-incident chatter, type `/off` in any
+detection group or in the alert DM: it is **one global switch**, so every detection group stops
+alerting, wherever the command was typed. `/on` brings them all back. The state survives restart when
+`P0_SHARED_STATE_DIR` is set, so detection stays muted until someone types `/on` — set
+`P0_ISSUE_WATCH_MUTE_MAX_MIN` to a positive number only if you want an auto-resume timer instead.
 
 ### Prod vs dev (issue watch)
 

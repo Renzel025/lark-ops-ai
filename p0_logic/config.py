@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -90,9 +91,44 @@ def apply_env_layers() -> List[str]:
 ENV_PATH = resolve_env_file_path()
 
 
+# Hot-reload throttle. Nearly every getter below opens with ``reload_env_runtime()``, and a full
+# dotenv parse of the layer files costs ~130 ms on the VPS — so a loop over a few hundred Bitable
+# rows used to spend over a minute re-reading ``.env``. Re-check at most once every
+# ``P0_ENV_RELOAD_MIN_SEC`` seconds, and only re-parse when a layer file actually changed
+# (mtime + size). Editing ``.env`` on the box still takes effect within seconds, no restart.
+try:
+    _ENV_RELOAD_MIN_SEC = max(0.0, float((os.getenv("P0_ENV_RELOAD_MIN_SEC") or "2").strip()))
+except ValueError:
+    _ENV_RELOAD_MIN_SEC = 2.0
+_env_reload_last_check: float = 0.0
+_env_reload_last_sig: Optional[Tuple[Tuple[str, float, int], ...]] = None
+
+
+def _env_layer_signature(paths: List[str]) -> Tuple[Tuple[str, float, int], ...]:
+    sig: List[Tuple[str, float, int]] = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        sig.append((path, st.st_mtime, st.st_size))
+    return tuple(sig)
+
+
 def reload_env_runtime() -> None:
+    """Refresh ``os.environ`` from the ``.env`` layer(s) — throttled, see ``_ENV_RELOAD_MIN_SEC``."""
+    global _env_reload_last_check, _env_reload_last_sig
+    now = time.monotonic()
+    if _env_reload_last_sig is not None and (now - _env_reload_last_check) < _ENV_RELOAD_MIN_SEC:
+        return
+    _env_reload_last_check = now
     try:
-        apply_env_layers()
+        paths = resolve_env_layer_paths()
+        sig = _env_layer_signature(paths)
+        if _env_reload_last_sig is not None and sig == _env_reload_last_sig:
+            return
+        _merge_dotenv_files_into_environ(paths)
+        _env_reload_last_sig = sig
     except Exception as e:
         log.error("Failed to reload .env: %s", e)
 
@@ -2693,6 +2729,40 @@ def get_p0_issue_watch_enabled() -> bool:
     reload_env_runtime()
     v = (os.getenv("P0_ISSUE_WATCH_ENABLED") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+# Issue Watch mute: whole line ``/off`` (stop alerting for this detection group) or ``/on`` (resume).
+# Typed in the detection group, or in the alert DM (then it applies to the group of the last alert).
+_ISSUE_WATCH_MUTE_RE = re.compile(r"^\s*/\s*(off|on)\s*$", re.IGNORECASE)
+
+
+def get_p0_issue_watch_mute_command_enabled() -> bool:
+    """``P0_ISSUE_WATCH_MUTE_COMMAND`` — allow ``/off`` / ``/on`` to silence a detection group
+    when the classifier keeps flagging non-incident chatter (default **on**)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_MUTE_COMMAND") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_mute_max_min() -> int:
+    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — optional auto-resume for a ``/off`` group, in minutes.
+
+    Default **0** = the mute holds until someone types ``/on`` (no timer). Set a positive number
+    only if you want a forgotten ``/off`` to expire on its own."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def parse_issue_watch_mute_command(text: str) -> str:
+    """``/off`` → ``"off"``, ``/on`` → ``"on"``, anything else (or feature off) → ``""``."""
+    if not get_p0_issue_watch_mute_command_enabled():
+        return ""
+    m = _ISSUE_WATCH_MUTE_RE.match((text or "").strip())
+    return (m.group(1) or "").strip().lower() if m else ""
 
 
 def get_p0_issue_watch_min_confidence() -> float:
