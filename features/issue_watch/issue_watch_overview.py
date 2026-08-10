@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
@@ -99,6 +100,115 @@ def find_latest_alert_key_for_chat(chat_id: str, max_age_sec: float = _CACHE_TTL
         )
         return dkey
     return ""
+
+
+_DECLARE_CLAIM_LOCK = threading.Lock()
+
+
+def attach_alert_card_message(alert_key: str, open_id: str, message_id: str) -> None:
+    """Remember which DM card carries this alert for each recipient, so declare/dismiss can PATCH
+    every copy — otherwise the other duty person's card keeps live buttons after a declare."""
+    key = (alert_key or "").strip()
+    oid = (open_id or "").strip()
+    mid = (message_id or "").strip()
+    if not key or not oid or not mid:
+        return
+    with _DECLARE_CLAIM_LOCK:
+        row = _ALERT_CACHE.get(key)
+        if not row:
+            return
+        cards = [c for c in (row.get("card_messages") or []) if isinstance(c, dict)]
+        if any(str(c.get("message_id") or "") == mid for c in cards):
+            return
+        cards.append({"open_id": oid, "message_id": mid})
+        row["card_messages"] = cards
+        cid = str(row.get("chat_id") or "").strip()
+        if cid:
+            _iw_disk.save_alert_snapshot(cid, key, row)
+
+
+def alert_card_messages(alert_key: str) -> List[Dict[str, str]]:
+    snap = get_alert_snapshot(alert_key) or {}
+    return [c for c in (snap.get("card_messages") or []) if isinstance(c, dict)]
+
+
+def claim_alert_declare(alert_key: str, operator_open_id: str) -> Tuple[bool, str]:
+    """Atomically mark this alert declared. Returns ``(claimed, already_declared_by_open_id)``.
+
+    Stops a second click — from the same person after the meeting ended, or from the other duty
+    recipient — creating another meeting for the same detection alert.
+    """
+    key = (alert_key or "").strip()
+    oid = (operator_open_id or "").strip()
+    if not key:
+        return True, ""
+    with _DECLARE_CLAIM_LOCK:
+        row = _ALERT_CACHE.get(key)
+        if not row:
+            return True, ""
+        prev = str(row.get("declared_by") or "").strip()
+        if prev:
+            return False, prev
+        row["declared_by"] = oid
+        row["declared_at"] = int(time.time())
+        cid = str(row.get("chat_id") or "").strip()
+        if cid:
+            _iw_disk.save_alert_snapshot(cid, key, row)
+        return True, ""
+
+
+def build_declared_alert_card(alert_key: str, note: str) -> Optional[Dict[str, Any]]:
+    """Rebuild the alert card in its terminal state (same body, buttons replaced by ``note``)."""
+    snap = get_alert_snapshot(alert_key)
+    if not snap:
+        return None
+    return _cards.build_issue_watch_alert_card(
+        group_label=str(snap.get("group_label") or ""),
+        categories_md=str(snap.get("categories_md") or ""),
+        summary=str(snap.get("summary") or ""),
+        concern=str(snap.get("concern") or snap.get("concern_raw") or ""),
+        alert_time=str(snap.get("alert_time") or ""),
+        player_ids_md=str(snap.get("player_ids_md") or ""),
+        source_message_link=str(snap.get("source_message_link") or ""),
+        source_message_time=str(snap.get("source_message_time") or ""),
+        declared_note=note,
+    )
+
+
+def patch_alert_cards(tenant_token: str, alert_key: str, note: str, *, only_message_id: str = "") -> int:
+    """PATCH the alert card(s) into a terminal state. Returns how many were updated."""
+    tok = (tenant_token or "").strip()
+    card = build_declared_alert_card(alert_key, note)
+    if not tok or not card:
+        return 0
+    targets = alert_card_messages(alert_key)
+    only = (only_message_id or "").strip()
+    if only:
+        targets = [c for c in targets if str(c.get("message_id") or "") == only] or [
+            {"open_id": "", "message_id": only}
+        ]
+    done = 0
+    for c in targets:
+        mid = str(c.get("message_id") or "").strip()
+        if not mid:
+            continue
+        st, body = _lark.patch_interactive_card(tok, mid, card)
+        if st == 200:
+            done += 1
+        else:
+            log.warning(
+                "issue_watch_overview: alert card patch failed HTTP=%s mid_tail=%s body=%s",
+                st,
+                mid[-12:] if len(mid) > 12 else mid,
+                (body or "")[:200],
+            )
+    log.info(
+        "issue_watch_overview: alert cards patched=%s/%s alert_key=%s",
+        done,
+        len(targets),
+        (alert_key or "")[:12],
+    )
+    return done
 
 
 def get_alert_snapshot(alert_key: str) -> Optional[Dict[str, Any]]:

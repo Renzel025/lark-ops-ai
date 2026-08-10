@@ -1362,7 +1362,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
 
             val = _card_action_value_dict(payload)
             if action_name == "issue_watch_declare_p0_dismiss":
-                _iwd.handle_declare_dismiss(sender_open_id, tenant_token)
+                _iwd.handle_declare_dismiss(
+                    sender_open_id,
+                    tenant_token,
+                    alert_key=str(val.get("issue_watch_alert_key") or "").strip(),
+                    clicked_card_message_id=_extract_card_action_open_message_id(payload),
+                )
             else:
                 tc, src_inc, _pr = _extract_dm_scope_from_card_payload(payload)
                 _iwd.handle_declare_p0(

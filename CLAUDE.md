@@ -26,6 +26,8 @@ pyright                                # config in pyrightconfig.json (checks p0
 
 There is **no unit test suite**. "Tests" here are manual one-shot scripts under `features/*/scripts/` run against real Lark/Grafana. See `docs/MANUAL_TEST_COMMANDS.md`. Examples:
 
+Always push the changes to my github repo 'git push origin main'
+
 ```bash
 python3 features/overview/scripts/test_bitable_once.py --post --chat-id=oc_YOUR_GROUP
 python3 features/recording/scripts/post_card_once.py --chat-id=oc_...

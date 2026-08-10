@@ -187,7 +187,7 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         declare_p0_buttons=declare_btns,
         auto_overview_buttons=False,
     )
-    return _send_dm_alerts(tenant_token, alert_card)
+    return _send_dm_alerts(tenant_token, alert_card, alert_key=alert_key)
 
 
 def _fire_deferred_issue_watch_alert(defer_key: str) -> None:
@@ -594,7 +594,7 @@ def apply_mute_command_for_dm(cmd: str, operator_open_id: str, tenant_token: str
     )
 
 
-def _send_dm_alerts(token: str, card: Dict[str, object]) -> int:
+def _send_dm_alerts(token: str, card: Dict[str, object], alert_key: str = "") -> int:
     recipients = _dm_recipients()
     if not recipients:
         log.warning("issue_watch: no P0_DM_INSTRUCTION_OPEN_IDS — alert not sent")
@@ -615,6 +615,12 @@ def _send_dm_alerts(token: str, card: Dict[str, object]) -> int:
             log.warning("issue_watch: DM card HTTP=%s open_id=%s body=%s", st, oid[:16], (body or "")[:200])
             continue
         sent += 1
+        # Remember this copy so declare/dismiss can PATCH every recipient's card, not just the
+        # one that was clicked.
+        if alert_key and mid:
+            from . import issue_watch_overview as _iwo
+
+            _iwo.attach_alert_card_message(alert_key, oid, mid)
         if buzz_on and urgent_mode != "off" and mid:
             uok, udetail = _lark.urgent_message_for_users(tok, mid, [oid], mode=urgent_mode)
             if uok:
