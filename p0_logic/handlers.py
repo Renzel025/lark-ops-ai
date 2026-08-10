@@ -1562,6 +1562,12 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     src_inc=src_inc,
                     forwarder_warning=pending_note,
                 )
+                # Drop the edit form NOW, next to the green sent card. Everything after this point
+                # (forwarder, detection fan-out, adjustment Bitable) can take a minute or more, and
+                # recalling only at the end left the stale edit card sitting under the sent card for
+                # that whole window.
+                _recall_dm_overview_edit_card(sender_open_id, tenant_token)
+                edit_mid = ""
             forwarder_ok = True
             forwarder_mid = ""
             if use_forwarder and broadcast_dest and md:
@@ -1649,6 +1655,8 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
             fwd_warn = ""
             if use_forwarder and broadcast_dest and not forwarder_ok:
                 fwd_warn = "⚠️ Broadcast room post via overview bot failed (see server log)."
+            # Fallback only: the normal path already recalled the edit card right after the sent card.
+            # This covers the "posted but Lark returned no message_id" branch above.
             if edit_mid:
                 st_e, body_e = _lark.recall_im_message(tenant_token, edit_mid)
                 if st_e != 200:
@@ -1992,9 +2000,21 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                     "🗑️ Preview cancelled trigger again create overview.",
                 )
             else:
+                # Cancel means "this overview is wrong" (usually an auto-generated one) — drop it and
+                # hand the operator the standard manual flow: an EMPTY draft still scoped to this
+                # incident, plus the green Build overview card. Without the re-seed the draft is gone,
+                # so the reposted card carries no target_chat/source_incident_chat_id and pasted
+                # screenshots/text have no incident to attach to.
+                cancel_tc = str(prev.get("target_chat") or "").strip() or target_chat
+                if cancel_tc.startswith("oc_"):
+                    _drafts.seed_draft_for_incident(sender_open_id, cancel_tc, src_inc, pri)
                 # Recall removes the old preview from the thread; repost instruction for live P0/P1 flows.
                 _send_instruction_card(
-                    sender_open_id, tenant_token, "🗑️ Preview cancelled.", priority=pr, source_chat_label=lab
+                    sender_open_id,
+                    tenant_token,
+                    "🗑️ Overview cancelled — send your screenshots and text here, then tap Build overview.",
+                    priority=pr,
+                    source_chat_label=lab,
                 )
             return
         log.warning("Unknown card action: %s", action_name)
