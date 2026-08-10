@@ -1076,6 +1076,9 @@ def _help_commands_md() -> str:
         '• type "coe" — standalone overview, emergency group (no meeting)\n'
         '• type "cog" — standalone overview, game group (no meeting)\n'
         '• type "c" — abort coe/cog on the green card; with a preview open, use **Cancel** on the preview card\n\n'
+        "Major P0 detection (false alarms)\n"
+        '• type "/off" — mute detection for ALL groups (in a detection group, or in the alert DM)\n'
+        '• type "/on" — resume detection for all groups\n\n'
         "Tap — green instruction card (DM) / 私聊绿色卡片按钮\n"
         "• Build overview — generate preview from draft\n"
         "• Clear draft — reset pasted text/images\n"
@@ -2066,6 +2069,13 @@ def build_issue_watch_alert_card(
                 "*After you declare P0 in the detection group, duty gets a suggested overview in DM.*"
             )
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": footer}})
+    if not supplemental_player_ids:
+        # False-alarm escape hatch — /off silences this detection group, /on brings it back.
+        from features.issue_watch import issue_watch_mute as _iw_mute
+
+        mute_hint = _iw_mute.mute_hint_text()
+        if mute_hint:
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": mute_hint}})
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},

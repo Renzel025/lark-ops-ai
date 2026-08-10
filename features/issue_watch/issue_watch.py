@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
+from . import issue_watch_mute as _mute
 from .issue_watch_ai import classify_issue_watch_message, extract_player_ids, is_maintenance_or_test_message
 
 log = logging.getLogger("lark-ops-ai")
@@ -146,6 +147,15 @@ def _cancel_deferred_alert(chat_id: str, sender_open_id: str) -> bool:
 def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) -> int:
     from . import issue_watch_overview as _iwo
 
+    # Single funnel for every alert card (immediate and deferred player-ID follow-ups), so an
+    # alert queued before /off still gets suppressed.
+    if _mute.is_muted():
+        log.info(
+            "issue_watch: alert suppressed — detection muted by /off chat_id=%s",
+            str(payload.get("chat_id") or "").strip(),
+        )
+        return 0
+
     alert_key = _iwo.prepare_alert_for_overview(payload)
     src = str(payload.get("source_incident_chat_id") or "").strip()
     tgt = str(payload.get("target_chat") or "").strip()
@@ -177,7 +187,7 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         declare_p0_buttons=declare_btns,
         auto_overview_buttons=False,
     )
-    return _send_dm_alerts(tenant_token, alert_card)
+    return _send_dm_alerts(tenant_token, alert_card, detection_chat_id=detection_chat)
 
 
 def _fire_deferred_issue_watch_alert(defer_key: str) -> None:
@@ -534,6 +544,56 @@ def _dm_recipients() -> List[str]:
     return list(_config.get_dm_instruction_open_ids())
 
 
+def _apply_mute_command(
+    cmd: str,
+    chat_id: str,
+    sender_open_id: str,
+    tenant_token: str,
+    *,
+    in_group: bool = True,
+    reply_open_id: str = "",
+) -> str:
+    """Apply ``/off`` / ``/on`` — one switch for ALL detection groups. Returns the ack text."""
+    cid = (chat_id or "").strip()
+    tok = (tenant_token or "").strip() or _lark.get_tenant_token_primary()
+    if cmd == "off":
+        already = _mute.is_muted()
+        _mute.mute(sender_open_id)
+        window = _mute.describe_mute_window()
+        window = f" ({window})" if window else ""
+        text = (
+            f"🔇 Major P0 detection is already muted{window}. Type /on to resume."
+            if already
+            else f"🔇 Major P0 detection muted{window} — no alerts from any detection group "
+            "until someone types /on."
+        )
+    else:
+        was_muted = _mute.unmute()
+        text = (
+            "🔔 Major P0 detection resumed — all detection groups are alerting again."
+            if was_muted
+            else "🔔 Major P0 detection is already active."
+        )
+    if tok:
+        if in_group and cid:
+            _lark.post_text_to_chat(cid, tok, text)
+        elif reply_open_id:
+            _lark.post_text_to_open_id(reply_open_id, tok, text)
+    return text
+
+
+def apply_mute_command_for_dm(cmd: str, operator_open_id: str, tenant_token: str) -> str:
+    """``/off`` / ``/on`` typed in the alert DM — same global toggle, acknowledged in that DM."""
+    return _apply_mute_command(
+        cmd,
+        "",
+        operator_open_id,
+        tenant_token,
+        in_group=False,
+        reply_open_id=operator_open_id,
+    )
+
+
 def _send_dm_alerts(token: str, card: Dict[str, object]) -> int:
     recipients = _dm_recipients()
     if not recipients:
@@ -611,6 +671,17 @@ def try_handle_issue_watch(
             )
     raw = (text or "").strip()
     if not raw:
+        return True
+    mute_cmd = _config.parse_issue_watch_mute_command(raw)
+    if mute_cmd:
+        _apply_mute_command(mute_cmd, cid, sender, tenant_token, in_group=True)
+        return True
+    if _mute.is_muted():
+        log.info(
+            "issue_watch: muted by /off — skipping evaluation chat_id=%s text_head=%r",
+            cid,
+            raw[:80],
+        )
         return True
     if _try_player_id_followup(
         raw,

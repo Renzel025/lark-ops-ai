@@ -2731,6 +2731,40 @@ def get_p0_issue_watch_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+# Issue Watch mute: whole line ``/off`` (stop alerting for this detection group) or ``/on`` (resume).
+# Typed in the detection group, or in the alert DM (then it applies to the group of the last alert).
+_ISSUE_WATCH_MUTE_RE = re.compile(r"^\s*/\s*(off|on)\s*$", re.IGNORECASE)
+
+
+def get_p0_issue_watch_mute_command_enabled() -> bool:
+    """``P0_ISSUE_WATCH_MUTE_COMMAND`` — allow ``/off`` / ``/on`` to silence a detection group
+    when the classifier keeps flagging non-incident chatter (default **on**)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_MUTE_COMMAND") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_issue_watch_mute_max_min() -> int:
+    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — optional auto-resume for a ``/off`` group, in minutes.
+
+    Default **0** = the mute holds until someone types ``/on`` (no timer). Set a positive number
+    only if you want a forgotten ``/off`` to expire on its own."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def parse_issue_watch_mute_command(text: str) -> str:
+    """``/off`` → ``"off"``, ``/on`` → ``"on"``, anything else (or feature off) → ``""``."""
+    if not get_p0_issue_watch_mute_command_enabled():
+        return ""
+    m = _ISSUE_WATCH_MUTE_RE.match((text or "").strip())
+    return (m.group(1) or "").strip().lower() if m else ""
+
+
 def get_p0_issue_watch_min_confidence() -> float:
     reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.88").strip()

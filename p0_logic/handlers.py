@@ -985,6 +985,13 @@ def _recover_preview_from_draft_if_needed(
     return True
 
 
+def _handle_dm_issue_watch_mute(cmd: str, sender_open_id: str, tenant_token: str) -> None:
+    """``/off`` / ``/on`` typed in the alert DM — one switch for every detection group."""
+    from features.issue_watch import issue_watch as _issue_watch
+
+    _issue_watch.apply_mute_command_for_dm(cmd, sender_open_id, tenant_token)
+
+
 def handle_dm_generate_overview(
     sender_open_id: str,
     tenant_token: str,
@@ -1000,6 +1007,10 @@ def handle_dm_generate_overview(
         cmd = _text.clean_pasted_text(text).strip()
         if _config.HELP_RE.match(cmd):
             _send_help_commands_card(sender_open_id, tenant_token)
+            return
+        mute_cmd = _config.parse_issue_watch_mute_command(cmd)
+        if mute_cmd:
+            _handle_dm_issue_watch_mute(mute_cmd, sender_open_id, tenant_token)
             return
         if _config.STANDALONE_OVERVIEW_ABORT_RE.match(cmd):
             _try_dm_cancel_standalone_overview(sender_open_id, tenant_token)
