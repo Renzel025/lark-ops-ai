@@ -310,6 +310,11 @@ def _post_declare_text_on_concern(
     return True
 
 
+def _declared_note(_operator_open_id: str = "") -> str:
+    """Terminal line that replaces the Declare / Not now buttons once the alert is actioned."""
+    return "**Declared as P0** — meeting created. This alert cannot be declared again."
+
+
 def _duty_operator(operator_open_id: str) -> bool:
     oid = (operator_open_id or "").strip()
     if not oid:
@@ -356,6 +361,33 @@ def handle_declare_p0(
     if not detection_chat:
         _lark.post_text_to_open_id(oid, tok, "Could not resolve the detection group for this alert.")
         return
+
+    # One declare per alert. Without this, clicking the button again — by the other duty recipient,
+    # or by the same person after the meeting ended — starts a second VC for the same concern.
+    if key:
+        claimed, prev_by = _iwo.claim_alert_declare(key, oid)
+        if not claimed:
+            who = "you" if prev_by == oid else "another duty member"
+            _lark.post_text_to_open_id(
+                oid,
+                tok,
+                f"This alert was already declared as P0 by {who}. "
+                "Type p0 in the detection group if a new meeting is really needed.",
+            )
+            _iwo.patch_alert_cards(tok, key, _declared_note(prev_by or oid))
+            log.info(
+                "issue_watch_declare: duplicate declare blocked alert_key=%s operator_tail=%s prev_tail=%s",
+                key[:12],
+                oid[-8:] if len(oid) > 8 else oid,
+                (prev_by or "")[-8:],
+            )
+            return
+    else:
+        log.warning(
+            "issue_watch_declare: no alert_key on the button — cannot dedupe this declare "
+            "(P0_ISSUE_WATCH_AUTO_OVERVIEW off?) chat_tail=%s",
+            detection_chat[-12:] if len(detection_chat) > 12 else detection_chat,
+        )
 
     # Auto-calling major check persons on detection is gated: when off, only the on-call auto-invite
     # ("Calling <names> into the meeting", seeded in start_p0) pages people — the check persons are NOT
@@ -438,6 +470,9 @@ def handle_declare_p0(
         vc_ring_target_open_ids=ring_targets or None,
         issue_watch_alert_key=key,
     )
+    # Close the alert for EVERY recipient — the other duty member's copy still has live buttons.
+    if key:
+        _iwo.patch_alert_cards(tok, key, _declared_note(oid))
     if auto_call_check and _config.get_p0_major_check_person_recipients():
         n_inv = invite_major_check_persons_after_declare(detection_chat, tok, src_mid)
         log.info(
@@ -447,9 +482,29 @@ def handle_declare_p0(
         )
 
 
-def handle_declare_dismiss(operator_open_id: str, tenant_token: str) -> None:
+def handle_declare_dismiss(
+    operator_open_id: str,
+    tenant_token: str,
+    *,
+    alert_key: str = "",
+    clicked_card_message_id: str = "",
+) -> None:
+    """"Not now" — clear the buttons on the clicker's copy only.
+
+    Dismiss is a personal acknowledgement, so the other duty member's card keeps its buttons and
+    can still declare.
+    """
     oid = (operator_open_id or "").strip()
     tok = (tenant_token or "").strip()
     if not oid or not tok:
         return
+    key = (alert_key or "").strip()
+    mid = (clicked_card_message_id or "").strip()
+    if key and mid:
+        _iwo.patch_alert_cards(
+            tok,
+            key,
+            "**Not now** — no P0 declared from this alert. Type p0 in the detection group if that changes.",
+            only_message_id=mid,
+        )
     _lark.post_text_to_open_id(oid, tok, "Acknowledged. No P0 declared for this alert.")

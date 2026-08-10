@@ -1920,8 +1920,14 @@ def build_issue_watch_alert_card(
     issue_watch_source_message_id: str = "",
     declare_p0_buttons: bool = False,
     auto_overview_buttons: bool = False,
+    declared_note: str = "",
 ) -> Dict[str, Any]:
-    """DM card when Claude/keyword detects a player-facing issue in a detection group."""
+    """DM card when Claude/keyword detects a player-facing issue in a detection group.
+
+    ``declared_note`` — terminal state: the Declare / Not now buttons are replaced by this line
+    (e.g. "Declared as P0 by …"), so the alert cannot be actioned twice. Sent with
+    ``update_multi`` so every recipient's copy can be PATCHed to that state.
+    """
     title_group = (group_label or "").strip() or "detection group"
     if len(title_group) > 40:
         title_group = title_group[:39] + "…"
@@ -2002,7 +2008,11 @@ def build_issue_watch_alert_card(
             )
         )
     elements.append({"tag": "hr"})
-    if declare_p0_buttons and (source_incident_chat_id or "").strip():
+    if (declared_note or "").strip():
+        elements.append(
+            {"tag": "div", "text": {"tag": "lark_md", "content": (declared_note or "").strip()}}
+        )
+    elif declare_p0_buttons and (source_incident_chat_id or "").strip():
         sc = dict(
             target_chat=(target_chat or "").strip(),
             source_incident_chat_id=(source_incident_chat_id or "").strip(),
@@ -2069,7 +2079,7 @@ def build_issue_watch_alert_card(
                 "*After you declare P0 in the detection group, duty gets a suggested overview in DM.*"
             )
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": footer}})
-    if not supplemental_player_ids:
+    if not supplemental_player_ids and not (declared_note or "").strip():
         # False-alarm escape hatch — /off silences this detection group, /on brings it back.
         from features.issue_watch import issue_watch_mute as _iw_mute
 
@@ -2078,7 +2088,8 @@ def build_issue_watch_alert_card(
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": mute_hint}})
     return {
         "schema": "2.0",
-        "config": {"enable_forward": True},
+        # update_multi so declare/dismiss can PATCH every recipient's copy into the terminal state.
+        "config": {"enable_forward": True, "update_multi": True},
         "header": {
             "template": "red",
             "title": {
