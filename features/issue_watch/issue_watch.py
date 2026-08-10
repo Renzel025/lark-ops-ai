@@ -187,7 +187,7 @@ def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) 
         declare_p0_buttons=declare_btns,
         auto_overview_buttons=False,
     )
-    return _send_dm_alerts(tenant_token, alert_card, detection_chat_id=detection_chat)
+    return _send_dm_alerts(tenant_token, alert_card)
 
 
 def _fire_deferred_issue_watch_alert(defer_key: str) -> None:
