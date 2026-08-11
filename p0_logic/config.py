@@ -2814,6 +2814,105 @@ def get_p0_issue_watch_min_affected_players() -> int:
     return max(1, min(n, 50))
 
 
+def get_p0_issue_watch_rag_enabled() -> bool:
+    """``P0_ISSUE_WATCH_RAG_ENABLED`` — ground the Major-P0 classifier in the P0 SOP doc
+    (retrieval-augmented) instead of the built-in prompt alone. Default **off**.
+
+    Needs ``P0_RAG_DOC_TOKEN`` + ``GEMINI_API_KEY`` for embeddings.
+    Any failure falls back to the built-in prompt, so detection never breaks on RAG."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_RAG_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_rag_doc_token() -> str:
+    """``P0_RAG_DOC_TOKEN`` — the P0/P1 SOP document. Accepts a **docx** token or a ``/wiki/`` node
+    token (resolved automatically).
+
+    Deliberately has NO fallback: it does not inherit ``WIKI_DOC_TOKEN`` from the wiki Q&A feature,
+    which points at an unrelated runbook. Unset = RAG stays off rather than grounding the P0
+    classifier in the wrong document."""
+    reload_env_runtime()
+    return (os.getenv("P0_RAG_DOC_TOKEN") or "").strip()
+
+
+def get_p0_rag_embed_model() -> str:
+    """``P0_RAG_EMBED_MODEL`` — Gemini embedding model (default ``gemini-embedding-001``, the one
+    free API keys expose; ``text-embedding-004`` 404s on them).
+    Anthropic has no embeddings API, so retrieval runs on Gemini even when triage is Claude."""
+    reload_env_runtime()
+    return (os.getenv("P0_RAG_EMBED_MODEL") or "gemini-embedding-001").strip()
+
+
+def get_p0_rag_embed_dims() -> int:
+    """``P0_RAG_EMBED_DIMS`` — truncate embeddings to N dimensions (default **768**, native 3072).
+
+    Matryoshka truncation keeps ranking quality while making the cached index 4x smaller and cosine
+    4x cheaper. ``0`` = keep the model's native size."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_RAG_EMBED_DIMS") or "768").strip()
+    try:
+        return max(0, min(int(raw), 3072))
+    except ValueError:
+        return 768
+
+
+def get_p0_rag_full_doc_max_chars() -> int:
+    """``P0_RAG_FULL_DOC_MAX_CHARS`` — SOPs at or below this size are injected WHOLE, skipping
+    embeddings and retrieval entirely (default **6000**).
+
+    Retrieval exists because a corpus does not fit in the context window. A P0 SOP does fit, and
+    chunking it only risks dropping the one rule that mattered — the Major/Minor escalation table,
+    or the "more than 4 players … considered as P0" note. Below this size we send all of it: no
+    embedding calls, no retrieval gamble, every rule present every time. Above it, the
+    chunk + embed + top-K path kicks in.
+
+    Default **12000** covers the current P0/P1 Emergency Flow (~9.9k chars, ~2.5k tokens) — cheap,
+    since RAG only runs on a message the classifier already flagged."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_RAG_FULL_DOC_MAX_CHARS") or "12000").strip()
+    try:
+        return max(0, min(int(raw), 60000))
+    except ValueError:
+        return 12000
+
+
+def get_p0_rag_top_k() -> int:
+    """``P0_RAG_TOP_K`` — how many SOP passages to put in the prompt (default **4**)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_RAG_TOP_K") or "4").strip()
+    try:
+        return max(1, min(int(raw), 12))
+    except ValueError:
+        return 4
+
+
+def get_p0_rag_chunk_chars() -> int:
+    """``P0_RAG_CHUNK_CHARS`` — target passage size when splitting the SOP (default **700**)."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_RAG_CHUNK_CHARS") or "700").strip()
+    try:
+        return max(200, min(int(raw), 4000))
+    except ValueError:
+        return 700
+
+
+def get_p0_rag_min_score() -> float:
+    """``P0_RAG_MIN_SCORE`` — drop retrieved passages below this cosine similarity. Default **0**
+    (rank only, no floor).
+
+    Measured on ``gemini-embedding-001``: a relevant SOP line scores ~0.60 and unrelated chatter
+    ~0.55, so absolute cosine barely separates them and any fixed floor either passes everything or
+    blocks everything. What IS reliable on this model is the ORDER, so the top-K ranking does the
+    work. Raise this only if you switch to a model with a wider spread."""
+    reload_env_runtime()
+    raw = (os.getenv("P0_RAG_MIN_SCORE") or "0").strip()
+    try:
+        return max(0.0, min(float(raw), 0.99))
+    except ValueError:
+        return 0.0
+
+
 def get_p0_issue_watch_require_player_evidence() -> bool:
     """``P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE`` — a **major** P0 alert requires an affected-player
     count of at least ``P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS`` (4). Default **on**.
