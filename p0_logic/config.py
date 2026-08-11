@@ -2814,6 +2814,18 @@ def get_p0_issue_watch_min_affected_players() -> int:
     return max(1, min(n, 50))
 
 
+def get_p0_issue_watch_require_player_evidence() -> bool:
+    """``P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE`` — a **major** P0 alert needs evidence that players
+    are affected: ``MIN_AFFECTED_PLAYERS`` reached, ``MIN_REPORTS`` reporters, or the classifier
+    flagging ``widespread_impact`` in prose. Default **on**.
+
+    Off restores the legacy hole where a message naming NO players could page duty on confidence
+    alone, while naming 1-2 players was blocked."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_issue_watch_min_solo_reporters() -> int:
     """
     Without widespread (``MIN_REPORTS``) impact, require this many unique reporters

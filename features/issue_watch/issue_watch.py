@@ -509,12 +509,18 @@ def _issue_watch_meets_alert_threshold(
     players_mentioned: int,
     reporter_count: int,
     confidence: float,
+    widespread_flagged: bool = False,
 ) -> Tuple[bool, bool, bool]:
     """
     Returns ``(threshold_ok, players_widespread, reporters_widespread)``.
 
-    Player-count alerts require ``players_mentioned >= MIN_AFFECTED_PLAYERS`` (default 3).
-    When 1–2 players are explicitly mentioned, do not alert on high confidence alone.
+    A **major** P0 needs evidence that players are affected — one of:
+    ``players_mentioned >= MIN_AFFECTED_PLAYERS``, ``reporter_count >= MIN_REPORTS``, or the
+    classifier flagging ``widespread_impact`` in prose ("all players", "everyone").
+
+    ``widespread_flagged`` is the classifier's own call, so "the site is down for everyone" still
+    pages with no IDs listed, while "upon testing we cannot receive OTP" — a QA finding with no
+    player impact — does not.
     """
     min_reports = _config.get_p0_issue_watch_min_reports()
     min_affected = _config.get_p0_issue_watch_min_affected_players()
@@ -532,6 +538,15 @@ def _issue_watch_meets_alert_threshold(
         and not reporters_widespread
     )
     if player_count_blocks_solo:
+        return False, players_widespread, reporters_widespread
+    # No player evidence at all: no count, no second reporter, and the classifier did not call it
+    # widespread. Naming 1-2 players already blocks above, so without this naming ZERO players was
+    # the easiest way to page duty — a single confident message about anything qualified.
+    if (
+        _config.get_p0_issue_watch_require_player_evidence()
+        and not widespread
+        and not widespread_flagged
+    ):
         return False, players_widespread, reporters_widespread
     if min_solo_reporters <= 1:
         return high_conf or widespread, players_widespread, reporters_widespread
@@ -791,6 +806,8 @@ def try_handle_issue_watch(
         players_mentioned=players_mentioned,
         reporter_count=reporter_count,
         confidence=confidence,
+        # The classifier's own widespread call, read BEFORE the count-derived flag is appended below.
+        widespread_flagged="widespread_impact" in categories,
     )
     if players_widespread and "widespread_impact" not in categories:
         categories.append("widespread_impact")
