@@ -460,14 +460,24 @@ def _cooldown_key(chat_id: str, alert_kind: str, fingerprint: str) -> str:
 
 
 def _cooldown_key_for_issue(chat_id: str, categories: List[str], concern_text: str, fingerprint: str) -> str:
-    """Same issue text in the same group should not DM again within cooldown."""
+    """Same ISSUE in the same group should not DM again within cooldown.
+
+    Keyed on the classifier's ``issue_fingerprint`` — the same identity used to count unique
+    reporters — not on the message text. Re-reporting the same problem in slightly different words
+    (or the same words plus a screenshot) used to produce a different key and a second DM seconds
+    after the first. Falls back to the normalized text only when the model returned no usable
+    fingerprint, so unrelated issues still alert separately.
+    """
     primary = ""
     for cat in categories:
         if cat != "widespread_impact":
             primary = cat
             break
+    fp = (fingerprint or "").strip().lower()
+    if fp and fp not in ("unknown_issue", "generic", "none"):
+        return f"{chat_id}:issue:{primary or 'any'}:fp:{fp[:60]}"
     if not primary:
-        primary = (fingerprint or "generic")[:40]
+        primary = "generic"
     norm = _normalize_concern_key(concern_text)
     return f"{chat_id}:issue:{primary}:{norm}"
 
@@ -499,12 +509,18 @@ def _issue_watch_meets_alert_threshold(
     players_mentioned: int,
     reporter_count: int,
     confidence: float,
+    widespread_flagged: bool = False,
 ) -> Tuple[bool, bool, bool]:
     """
     Returns ``(threshold_ok, players_widespread, reporters_widespread)``.
 
-    Player-count alerts require ``players_mentioned >= MIN_AFFECTED_PLAYERS`` (default 3).
-    When 1–2 players are explicitly mentioned, do not alert on high confidence alone.
+    A **major** P0 is a quantified player impact: ``players_mentioned >= MIN_AFFECTED_PLAYERS``
+    (4). Nothing substitutes for that count — not a confident model, not the ``widespread_impact``
+    flag, not several people discussing the same thing. Fewer than 4 affected players, or a message
+    that never says how many players are hit, is not a major P0 alert.
+
+    The count comes from Account IDs listed OR the number stated in prose, so "5 players cannot
+    deposit" qualifies without pasting IDs.
     """
     min_reports = _config.get_p0_issue_watch_min_reports()
     min_affected = _config.get_p0_issue_watch_min_affected_players()
@@ -516,6 +532,10 @@ def _issue_watch_meets_alert_threshold(
     widespread = players_widespread or reporters_widespread
     high_conf = confidence >= min_conf
 
+    if _config.get_p0_issue_watch_require_player_evidence():
+        return (players_widespread and high_conf), players_widespread, reporters_widespread
+
+    # Legacy path (P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE=0) — kept for rollback.
     player_count_blocks_solo = (
         players_mentioned >= 1
         and players_mentioned < min_affected
@@ -781,6 +801,8 @@ def try_handle_issue_watch(
         players_mentioned=players_mentioned,
         reporter_count=reporter_count,
         confidence=confidence,
+        # The classifier's own widespread call, read BEFORE the count-derived flag is appended below.
+        widespread_flagged="widespread_impact" in categories,
     )
     if players_widespread and "widespread_impact" not in categories:
         categories.append("widespread_impact")

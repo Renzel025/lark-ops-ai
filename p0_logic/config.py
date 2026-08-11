@@ -2801,17 +2801,28 @@ def get_p0_issue_watch_min_reports() -> int:
 
 def get_p0_issue_watch_min_affected_players() -> int:
     """
-    Minimum **affected player count** (from prose or Account IDs) before Issue Watch alerts
-    on player impact alone. Default **3** — 1–2 affected players do not trigger via count
-    (high-confidence solo path still applies when no player count is mentioned).
+    Minimum **affected player count** (from prose or Account IDs) for a major P0 alert.
+    Default **4** — with ``P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE`` on this is the whole rule:
+    fewer than 4 affected players, or no stated count, means no alert.
     """
     reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS") or "3").strip()
+    raw = (os.getenv("P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS") or "4").strip()
     try:
         n = int(raw)
     except ValueError:
-        n = 3
+        n = 4
     return max(1, min(n, 50))
+
+
+def get_p0_issue_watch_require_player_evidence() -> bool:
+    """``P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE`` — a **major** P0 alert requires an affected-player
+    count of at least ``P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS`` (4). Default **on**.
+
+    Nothing substitutes for the count: not model confidence, not the ``widespread_impact`` flag, not
+    several people discussing the same thing. Off restores the legacy mix of those signals."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_p0_issue_watch_min_solo_reporters() -> int:
