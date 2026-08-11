@@ -513,6 +513,81 @@ def _classify_via_provider(provider: str, message_text: str) -> Optional[dict]:
     return None
 
 
+_SOP_CHECK_SYSTEM = (
+    "You are checking one candidate incident against THIS COMPANY'S OWN P0 SOP.\n"
+    "You are given the SOP, the chat message, and a first-pass classification.\n"
+    "Answer only: does the SOP treat this as a MAJOR P0 that on-call duty must be paged for?\n"
+    "HARD RULE, overrides everything else including the SOP text: if 4 OR MORE players are "
+    "affected, answer is_major_p0=true. Never downgrade a 4+ player issue for being limited to one "
+    "provider, one channel or one payment method.\n"
+    "Otherwise the SOP wins over your own judgement. If the SOP does not cover it, keep the "
+    "first pass.\n"
+    'Output ONLY valid JSON: {"is_major_p0": true|false, "reason": "one short sentence"}'
+)
+
+
+def _apply_sop_check(message_text: str, ai: dict, provider: str) -> dict:
+    """RAG second stage — let the P0 SOP veto a positive classification.
+
+    Returns ``ai`` unchanged when RAG is off, the SOP has nothing relevant to say, or anything
+    fails: detection must never get *worse* because retrieval had a bad day.
+    """
+    if not _config.get_p0_issue_watch_rag_enabled():
+        return ai
+    # 4+ affected players is the company rule and is not up for debate — skip the SOP check
+    # entirely so no retrieved passage ("one provider = Minor") can veto a confirmed major P0.
+    min_affected = _config.get_p0_issue_watch_min_affected_players()
+    try:
+        stated = int(ai.get("players_mentioned_in_message") or 0)
+    except (TypeError, ValueError):
+        stated = 0
+    players = max(stated, len(extract_player_ids(message_text)))
+    if players >= min_affected:
+        log.info(
+            "issue_watch_rag: SOP check skipped — %s players affected (>= %s), major P0 by rule",
+            players,
+            min_affected,
+        )
+        return ai
+    try:
+        from . import issue_watch_rag as _rag
+
+        sop = _rag.sop_context_for_message(message_text)
+        if not sop:
+            return ai
+        user = (
+            f"{sop}\n\nCHAT MESSAGE:\n{message_text[:2500]}\n\n"
+            f"FIRST-PASS: categories={ai.get('categories')} "
+            f"confidence={ai.get('confidence')} summary={ai.get('summary')!r}\n\n"
+            "Per the SOP above, is this a MAJOR P0?"
+        )
+        raw = _run_classifier_provider(provider, _SOP_CHECK_SYSTEM, user, max_tokens=160)
+        obj = _parse_json_object(raw or "")
+        if not obj or "is_major_p0" not in obj:
+            return ai
+        if bool(obj.get("is_major_p0")):
+            log.info("issue_watch_rag: SOP confirms major P0 — %s", (obj.get("reason") or "")[:120])
+            return ai
+        out = dict(ai)
+        out["is_incident_signal"] = False
+        out["confidence"] = 0.0
+        out["reason"] = f"SOP says not a major P0: {(obj.get('reason') or '').strip()[:160]}"
+        out["provider"] = f"{provider}+sop"
+        log.info("issue_watch_rag: SOP VETO — %s", out["reason"][:160])
+        return out
+    except Exception as e:  # noqa: BLE001
+        log.warning("issue_watch_rag: SOP check failed (keeping first pass): %s", e)
+        return ai
+
+
+def _run_classifier_provider(provider: str, system: str, user: str, *, max_tokens: int) -> str:
+    if provider == "claude":
+        from p0_logic.anthropic_client import anthropic_chat_once
+
+        return anthropic_chat_once(system, user, max_tokens=max_tokens)
+    return groq_chat_once(system, user, max_tokens=max_tokens)
+
+
 def classify_issue_watch_message(message_text: str) -> Optional[dict]:
     """
     LLM triage with failover: Claude and/or Groq (per env), then keyword rules.
@@ -545,6 +620,11 @@ def classify_issue_watch_message(message_text: str) -> Optional[dict]:
                 float(ai.get("confidence") or 0),
                 (ai.get("reason") or "")[:160],
             )
+            # Second stage: only a POSITIVE gets checked against the SOP, so the embedding + extra
+            # model call happen on the rare candidate rather than on every line of group chat.
+            # It can only downgrade a signal, never create one.
+            if ai.get("is_incident_signal"):
+                ai = _apply_sop_check(t, ai, provider)
             return ai
         if i + 1 < len(providers):
             log.warning("issue_watch_ai: %s classify failed — trying %s", provider, providers[i + 1])
