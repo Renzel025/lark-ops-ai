@@ -110,6 +110,9 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD` | on | off | **on** |
 | `P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP` | on | off | **on** |
 | `P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE` | on | off | **on** |
+| `P0_ISSUE_WATCH_RAG_ENABLED` | on | off | **off** |
+| `P0_RAG_DOC_TOKEN` | SOP docx **or** `/wiki/` token | blank = RAG off | blank |
+| `P0_RAG_FULL_DOC_MAX_CHARS` | inject whole doc at/below this | above = retrieval | **12000** |
 | `P0_ISSUE_WATCH_MUTE_COMMAND` | on | off | **on** |
 | `P0_ISSUE_WATCH_MUTE_MAX_MIN` | minutes until a `/off` group auto-resumes | `0` = until `/on` | **0** |
 
