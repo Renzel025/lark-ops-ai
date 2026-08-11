@@ -460,14 +460,24 @@ def _cooldown_key(chat_id: str, alert_kind: str, fingerprint: str) -> str:
 
 
 def _cooldown_key_for_issue(chat_id: str, categories: List[str], concern_text: str, fingerprint: str) -> str:
-    """Same issue text in the same group should not DM again within cooldown."""
+    """Same ISSUE in the same group should not DM again within cooldown.
+
+    Keyed on the classifier's ``issue_fingerprint`` — the same identity used to count unique
+    reporters — not on the message text. Re-reporting the same problem in slightly different words
+    (or the same words plus a screenshot) used to produce a different key and a second DM seconds
+    after the first. Falls back to the normalized text only when the model returned no usable
+    fingerprint, so unrelated issues still alert separately.
+    """
     primary = ""
     for cat in categories:
         if cat != "widespread_impact":
             primary = cat
             break
+    fp = (fingerprint or "").strip().lower()
+    if fp and fp not in ("unknown_issue", "generic", "none"):
+        return f"{chat_id}:issue:{primary or 'any'}:fp:{fp[:60]}"
     if not primary:
-        primary = (fingerprint or "generic")[:40]
+        primary = "generic"
     norm = _normalize_concern_key(concern_text)
     return f"{chat_id}:issue:{primary}:{norm}"
 
