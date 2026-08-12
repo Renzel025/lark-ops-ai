@@ -45,7 +45,21 @@ def main() -> int:
         print("-" * 60)
         print(text[:1500] or "(empty — check P0_RAG_DOC_TOKEN and bot doc permission)")
         print("-" * 60)
-        print(f"would split into {len(rag.chunk_text(text))} chunk(s)")
+        full_max = _config.get_p0_rag_full_doc_max_chars()
+        if text and len(text) <= full_max:
+            print(
+                f"MODE: full_doc — {len(text)} chars <= P0_RAG_FULL_DOC_MAX_CHARS ({full_max}), "
+                "so the WHOLE SOP goes in the prompt and NO embeddings are used."
+            )
+            print(
+                f"      (retrieval would split it into {len(rag.chunk_text(text))} chunks — "
+                "only happens once the doc grows past that limit)"
+            )
+        else:
+            print(
+                f"MODE: retrieval — {len(text)} chars > {full_max}, so it is chunked into "
+                f"{len(rag.chunk_text(text))} pieces and the top {_config.get_p0_rag_top_k()} are retrieved."
+            )
 
     if args.build or args.force:
         idx = rag.build_index(force=args.force)

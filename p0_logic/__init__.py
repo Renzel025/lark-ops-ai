@@ -61,6 +61,7 @@ format_participants_names_display = participants.format_participants_names_displ
 
 # Lark
 get_tenant_token = lark_client.get_tenant_token
+get_im_message = lark_client.get_im_message
 get_tenant_token_primary = lark_client.get_tenant_token_primary
 get_tenant_token_for_severity_dm = lark_client.get_tenant_token_for_severity_dm
 post_text_to_chat = lark_client.post_text_to_chat
@@ -164,6 +165,7 @@ __all__ = [
     "departments_line_from_names",
     "format_participants_names_display",
     "get_tenant_token",
+    "get_im_message",
     "get_tenant_token_primary",
     "get_tenant_token_for_severity_dm",
     "get_lark_primary_app_credentials",

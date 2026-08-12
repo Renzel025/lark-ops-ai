@@ -1612,6 +1612,10 @@ def _send_dm_auto_invite_calling_prompt(
     try:
         if not _config.get_p0_dm_auto_invite_prompt_enabled():
             return
+        # A P1 is not a bridge-everyone emergency — no "Calling <names>" prompt for it.
+        if (priority or "").strip().upper() == "P1" and not _config.get_p0_vc_auto_invite_on_p1_enabled():
+            log.info("DM auto-invite prompt: skipped — P1 declaration (P0_VC_AUTO_INVITE_ON_P1 off)")
+            return
     except Exception as e:  # noqa: BLE001
         log.warning("DM auto-invite prompt: gate check failed open_id_tail=%s: %s", oid[-8:], e)
         return
@@ -2294,6 +2298,15 @@ def start_p0(
             o for o in _config.get_p0_vc_auto_invite_open_ids()
             if o and (_incl_declarer or o != trigger_open_id)
         ]
+        # P1 does not page the standing auto-invite list (P0_VC_AUTO_INVITE_ON_P1 to restore).
+        # Ring targets passed in by the caller (Issue Watch mentions, /c @name) are untouched.
+        if priority == "P1" and not _config.get_p0_vc_auto_invite_on_p1_enabled():
+            if _auto_invite_ids:
+                log.info(
+                    "start_p0: P1 — skipping %s auto-invite open_id(s), nobody auto-rung",
+                    len(_auto_invite_ids),
+                )
+            _auto_invite_ids = []
         _ring_seed: List[str] = list(vc_ring_target_open_ids or [])
         for _auto_oid in _auto_invite_ids:
             if _auto_oid not in _ring_seed:

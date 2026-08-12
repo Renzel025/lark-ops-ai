@@ -7,11 +7,18 @@ Pipeline (all of it lives in this file):
               ``wiki_ai_logic``: hit the Docx API directly to sidestep Wiki-space permissions).
   2. CHUNK    it into overlapping ~700-char passages on paragraph boundaries, so one retrieved
               passage is big enough to carry a rule but small enough to stay on topic.
-  3. EMBED    each chunk once with Gemini ``gemini-embedding-001`` (Anthropic has no embeddings API)
-              and cache the vectors in ``P0_SHARED_STATE_DIR``, keyed by a hash of the doc text —
-              so a restart costs nothing and editing the doc rebuilds automatically.
-  4. RETRIEVE the top-K chunks for an incoming chat message by cosine similarity.
+  3. EMBED    each chunk once with Gemini ``gemini-embedding-001`` and cache the vectors in
+              ``P0_SHARED_STATE_DIR``, keyed by a hash of the doc text — so a restart costs nothing
+              and editing the doc rebuilds automatically. OPTIONAL: with no embedding provider the
+              index falls back to keyword retrieval, because Anthropic has no embeddings API and
+              this must not force a second vendor on anyone.
+  4. RETRIEVE the top-K chunks for an incoming chat message (cosine, or keyword when there are no
+              vectors).
   5. INJECT   those chunks into the classifier's system prompt as "OUR P0 SOP SAYS".
+
+Stages 2-4 only run for a doc too big to fit in the prompt (see
+``P0_RAG_FULL_DOC_MAX_CHARS``). Below that size the whole SOP is injected and the judging is
+pure Claude — no second vendor involved at all.
 
 Everything degrades to "" on any failure, so detection keeps working exactly as before when the
 doc, the API key, or the network is unavailable. Gated by ``P0_ISSUE_WATCH_RAG_ENABLED``.
@@ -275,8 +282,16 @@ def build_index(*, force: bool = False) -> Dict[str, Any]:
             chunks, model=model, task_type="RETRIEVAL_DOCUMENT", dims=dims
         )
         if not vectors:
-            log.warning("issue_watch_rag: embedding failed — RAG stays off for this round")
-            return _INDEX or {}
+            # No embedding provider (or it failed) — keep RAG alive on keyword retrieval instead of
+            # giving up, so the pipeline needs nothing but Claude.
+            _INDEX = {"doc_hash": h, "model": model, "dims": dims, "mode": "lexical",
+                      "text": sop, "chunks": chunks, "vectors": [], "built_at": int(time.time())}
+            _save_index_to_disk(_INDEX)
+            log.info(
+                "issue_watch_rag: no embeddings available — using KEYWORD retrieval over %s chunks",
+                len(chunks),
+            )
+            return _INDEX
         _INDEX = {"doc_hash": h, "model": model, "dims": dims, "mode": "retrieval",
                   "text": "", "chunks": chunks, "vectors": vectors, "built_at": int(time.time())}
         _save_index_to_disk(_INDEX)
@@ -291,6 +306,45 @@ def build_index(*, force: bool = False) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------- 4. retrieve
+
+
+_STOPWORDS = frozenset(
+    "the a an and or of to in on for is are was were be been it this that we you they i not no "
+    "with as at by from can cannot cant have has had do does did please help team hi hello".split()
+)
+
+
+def _tokens(text: str) -> List[str]:
+    return [w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if w not in _STOPWORDS and len(w) > 2]
+
+
+def _lexical_rank(query: str, chunks: List[str], top_k: int) -> List[Tuple[float, str]]:
+    """Keyword retrieval used when no embedding provider is available.
+
+    Rarer shared words count for more (a crude IDF), so "otp"/"gcash" outweigh "issue"/"player".
+    Weaker than embeddings — it cannot match paraphrases — but it needs no API at all, which keeps
+    RAG working on Claude alone.
+    """
+    q = set(_tokens(query))
+    if not q or not chunks:
+        return []
+    doc_freq: Dict[str, int] = {}
+    tokenised = []
+    for c in chunks:
+        toks = set(_tokens(c))
+        tokenised.append(toks)
+        for t in toks:
+            doc_freq[t] = doc_freq.get(t, 0) + 1
+    n = len(chunks)
+    scored: List[Tuple[float, str]] = []
+    for i, toks in enumerate(tokenised):
+        shared = q & toks
+        if not shared:
+            continue
+        score = sum(math.log(1.0 + n / (1 + doc_freq.get(t, 1))) for t in shared)
+        scored.append((score / (len(q) ** 0.5), chunks[i]))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[: max(1, top_k)]
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -310,8 +364,11 @@ def retrieve(query: str, top_k: int = 0) -> List[Tuple[float, str]]:
     index = build_index()
     chunks = index.get("chunks") or []
     vectors = index.get("vectors") or []
-    if not chunks or not vectors:
+    k_cfg = top_k or _config.get_p0_rag_top_k()
+    if not chunks:
         return []
+    if not vectors:
+        return _lexical_rank(q, chunks, k_cfg)
     qv = _gemini.gemini_embed_texts(
         [q],
         model=index.get("model") or "",
@@ -319,11 +376,11 @@ def retrieve(query: str, top_k: int = 0) -> List[Tuple[float, str]]:
         dims=int(index.get("dims") or 0),
     )
     if not qv:
-        return []
-    k = top_k or _config.get_p0_rag_top_k()
+        log.info("issue_watch_rag: query embedding unavailable — falling back to keyword retrieval")
+        return _lexical_rank(q, chunks, k_cfg)
     scored = [(_cosine(qv[0], v), chunks[i]) for i, v in enumerate(vectors) if i < len(chunks)]
     scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[: max(1, k)]
+    return scored[: max(1, k_cfg)]
 
 
 # ---------------------------------------------------------------- 5. inject

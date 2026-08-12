@@ -1015,8 +1015,9 @@ def handle_dm_generate_overview(
         if _config.STANDALONE_OVERVIEW_ABORT_RE.match(cmd):
             _try_dm_cancel_standalone_overview(sender_open_id, tenant_token)
             return
-        tag = _config.parse_standalone_overview_dm_command(cmd)
-        if tag:
+        parsed_standalone = _config.parse_standalone_overview_dm_command(cmd)
+        if parsed_standalone:
+            tag, standalone_priority = parsed_standalone
             tag = (tag or "").strip().lower()
             blocked = _session.note_if_standalone_create_overview_blocked(sender_open_id, tenant_token)
             if blocked:
@@ -1039,7 +1040,7 @@ def handle_dm_generate_overview(
                 {
                     "chat_id": _session.STANDALONE_DM_SOURCE_CHAT_ID,
                     "target_chat": tc,
-                    "priority": "P0",
+                    "priority": standalone_priority,
                     "label": lab,
                 },
             )

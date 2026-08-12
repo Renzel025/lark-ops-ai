@@ -1070,11 +1070,21 @@ def _help_commands_md() -> str:
     return (
         "commands help for overview automation\n\n"
         "Typed in DM or incident group\n"
-        '• type "h" or "help" — show this card\n'
-        '• type "commands" — same as help\n\n'
+        '• type "/help" — show this card (also "help", "h", "commands")\n\n'
+        "Typed in the incident group\n"
+        '• type "p0" — declare a P0 and open the meeting\n'
+        '• type "p1" — declare a P1 (bot asks whether to create the meeting)\n'
+        '• type "end meeting" / "em" / "pe" — end the active meeting\n'
+        '• type "cancel meeting" / "cm" — cancel it (join link recalled)\n\n'
+        "@bot in the incident group — page people into the LIVE meeting\n"
+        "• @bot /c @name — call specific people\n"
+        "• @bot /fe /fpms /pms — call today's on-call for that team\n"
+        "• @bot /dba /sosm — call today's shift for that section\n"
+        "• @bot /srebac — start the SRE escalation chain\n\n"
         "Manually create overview\n"
-        '• type "coe" — standalone overview, emergency group (no meeting)\n'
-        '• type "cog" — standalone overview, game group (no meeting)\n'
+        '• type "coe" or "coep0" — standalone P0 overview, emergency group (no meeting)\n'
+        '• type "cog" or "cogp0" — standalone P0 overview, game group (no meeting)\n'
+        '• type "coep1" / "cogp1" — same, but the overview is built as P1\n'
         '• type "c" — abort coe/cog on the green card; with a preview open, use **Cancel** on the preview card\n\n'
         "Major P0 detection (false alarms)\n"
         '• type "/off" — mute detection for ALL groups (in a detection group, or in the alert DM)\n'

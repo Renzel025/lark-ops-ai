@@ -144,6 +144,11 @@ def _cancel_deferred_alert(chat_id: str, sender_open_id: str) -> bool:
     return False
 
 
+def cancel_deferred_alert_for_sender(chat_id: str, sender_open_id: str) -> bool:
+    """Drop a pending deferred alert — used when an EDIT supersedes the text it was waiting on."""
+    return _cancel_deferred_alert((chat_id or "").strip(), (sender_open_id or "").strip())
+
+
 def _send_issue_watch_alert_card(tenant_token: str, payload: Dict[str, object]) -> int:
     from . import issue_watch_overview as _iwo
 
