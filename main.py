@@ -13,12 +13,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from Crypto.Cipher import AES
 import lark_oapi as lark
 
-from lark_logic import process_message
+from lark_logic import process_message, process_message_edit
 from p0_logic import (
     get_incident_group_chat_ids,
     get_tenant_token,
     get_lark_severity_app_credentials,
     handle_dm_generate_overview,
+    get_im_message,
     handle_group_overview_recalled,
     handle_lark_card_action,
     handle_lark_card_action_show_participants_sync,
@@ -815,6 +816,44 @@ def _process_lark_payload(payload: Dict[str, Any], callback_type: str = "") -> N
                 (evt.get("recall_type") or "").strip(),
             )
             handle_group_overview_recalled(tenant_token, recalled_chat_id, recalled_message_id)
+            return
+
+        if event_type == "im.message.updated_v1":
+            # A group message was EDITED. The event does not reliably carry the new body, so read
+            # the message back and re-run Issue Watch on the current text — OM commonly appends the
+            # affected player IDs by editing, and the original (0 players) never clears the 4+ bar.
+            upd = evt.get("message") or evt
+            upd_mid = str(upd.get("message_id") or "").strip()
+            upd_chat = str(upd.get("chat_id") or "").strip()
+            fetched = get_im_message(tenant_token, upd_mid) if upd_mid else {}
+            merged = dict(fetched or {})
+            for k, v in (upd or {}).items():
+                if v not in (None, "", [], {}):
+                    merged.setdefault(k, v)
+            upd_chat = upd_chat or str(merged.get("chat_id") or "").strip()
+            upd_type, upd_text, _imgs = _extract_message_parts(merged)
+            upd_sender = (
+                (((evt.get("sender") or {}).get("sender_id") or {}).get("open_id") or "").strip()
+                or str(merged.get("sender_open_id") or "").strip()
+            )
+            log.info(
+                "im.message.updated_v1 chat_id=%s mid_tail=%s msg_type=%s has_text=%s",
+                upd_chat,
+                upd_mid[-12:] if len(upd_mid) > 12 else upd_mid,
+                upd_type,
+                bool(upd_text),
+            )
+            if upd_chat and upd_mid and upd_text:
+                process_message_edit(
+                    upd_chat,
+                    upd_mid,
+                    upd_sender,
+                    tenant_token,
+                    upd_text,
+                    source_chat_name=_extract_group_chat_display_name(evt),
+                    message_create_time=str(merged.get("create_time") or ""),
+                    mention_open_ids=_extract_mention_open_ids(merged),
+                )
             return
 
         msg = evt.get("message", {}) or {}

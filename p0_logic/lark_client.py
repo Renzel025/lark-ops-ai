@@ -376,6 +376,51 @@ def recall_im_message(token: str, message_id: str) -> Tuple[int, str]:
         perf_log("lark recall_im_message", t0)
 
 
+def get_im_message(token: str, message_id: str) -> Dict[str, Any]:
+    """
+    Read one message back by id — ``{"message_type": ..., "content": ..., "chat_id": ...}``
+    or ``{}`` on failure.
+
+    Used by the message-EDIT path: ``im.message.updated_v1`` says a message changed but does not
+    reliably carry the new body, so we fetch the authoritative current text. Keys are normalised to
+    match the webhook's ``event.message`` shape so the same parser handles both.
+    """
+    mid = (message_id or "").strip()
+    if not mid or not token:
+        return {}
+    t0 = time.perf_counter()
+    try:
+        url = f"{LARK_BASE}/im/v1/messages/{quote(mid, safe='')}"
+        r = _lark_http().get(url, headers={"Authorization": f"Bearer {token}"}, **_timeout_kw())
+        if r.status_code != 200:
+            log.warning(
+                "get_im_message HTTP=%s mid_tail=%s body=%s", r.status_code, mid[-12:], (r.text or "")[:200]
+            )
+            return {}
+        items = ((r.json() or {}).get("data") or {}).get("items") or []
+        if not items:
+            return {}
+        item = items[0] or {}
+        body = item.get("body") or {}
+        return {
+            "message_id": str(item.get("message_id") or mid),
+            "chat_id": str(item.get("chat_id") or ""),
+            "message_type": str(item.get("msg_type") or item.get("message_type") or ""),
+            "content": str(body.get("content") or item.get("content") or ""),
+            "create_time": str(item.get("create_time") or ""),
+            "update_time": str(item.get("update_time") or ""),
+            "parent_id": str(item.get("parent_id") or ""),
+            "root_id": str(item.get("root_id") or ""),
+            "mentions": item.get("mentions") or [],
+            "sender_open_id": str(((item.get("sender") or {}).get("id") or "")),
+        }
+    except Exception as e:  # noqa: BLE001
+        log.warning("get_im_message failed mid_tail=%s err=%s", mid[-12:], e)
+        return {}
+    finally:
+        perf_log("lark get_im_message", t0)
+
+
 def patch_interactive_card(token: str, message_id: str, card: Dict[str, Any]) -> Tuple[int, str]:
     """
     Replace an interactive (card) message body. Card must have been sent with

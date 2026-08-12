@@ -2825,6 +2825,18 @@ def get_p0_issue_watch_min_affected_players() -> int:
     return max(1, min(n, 50))
 
 
+def get_p0_edit_rescan_enabled() -> bool:
+    """``P0_EDIT_RESCAN_ENABLED`` — when a group message is EDITED, re-run Issue Watch detection on
+    the new text (default **on**; needs ``im.message.updated_v1`` subscribed in the Lark console).
+
+    OM often posts a report and then edits it to append the affected player IDs. Without this the
+    bot only ever sees the original — 0 players — and a major P0 needs 4+, so the alert never fires.
+    Only detection is re-run; declaring a P0/P1 still requires typing the keyword in a new message."""
+    reload_env_runtime()
+    v = (os.getenv("P0_EDIT_RESCAN_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_vc_auto_invite_on_p1_enabled() -> bool:
     """``P0_VC_AUTO_INVITE_ON_P1`` — also auto-ring ``P0_VC_AUTO_INVITE_OPEN_IDS`` and DM the
     "Calling <names>" prompt when the declaration is a **P1**. Default **off**.

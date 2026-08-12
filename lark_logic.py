@@ -36,6 +36,7 @@ from features.screenshot.graph_screenshot_request import (
     _mentions_our_bot,
 )
 from features.issue_watch.issue_watch import try_handle_issue_watch
+from p0_logic.config import get_p0_edit_rescan_enabled
 from p0_logic import (
     start_p0,
     cancel_p0_session,
@@ -1128,6 +1129,64 @@ def _parse_mixed_commands(ring_raw: str) -> Tuple[List[str], List[str]]:
             rseen.add(c)
             ring.append(c)
     return game, ring
+
+
+def process_message_edit(
+    chat_id: str,
+    message_id: str,
+    sender_open_id: str,
+    token: str,
+    text: str = "",
+    *,
+    source_chat_name: str = "",
+    message_create_time: str = "",
+    mention_open_ids: Optional[List[str]] = None,
+) -> None:
+    """Re-run **Issue Watch detection** on an edited message (``im.message.updated_v1``).
+
+    Why only detection: OM commonly posts a report and then EDITS it to append the affected player
+    IDs. The bot classified the original (0 players) and a major P0 needs 4+, so the alert that
+    matters would never fire. Re-classifying the edited text closes that hole.
+
+    Why NOT the declaration routing: re-running the full router would let an edit fire typed commands
+    (end meeting, ring commands, wiki Q&A) a second time. Declaring stays a deliberate act — type
+    the keyword in a new message.
+    """
+    cid = (chat_id or "").strip()
+    mid = (message_id or "").strip()
+    body = (text or "").strip()
+    if not cid or not mid or not body:
+        return
+    if not get_p0_edit_rescan_enabled():
+        return
+    if cid not in get_incident_group_chat_ids():
+        return
+    log.info(
+        "message edit: re-running issue watch chat_id=%s mid_tail=%s text_head=%r",
+        cid,
+        mid[-12:],
+        body[:100],
+    )
+    try:
+        from features.issue_watch.issue_watch import cancel_deferred_alert_for_sender
+
+        # A deferred alert from the ORIGINAL text is now stale — the edit is the better version.
+        cancel_deferred_alert_for_sender(cid, (sender_open_id or "").strip())
+    except Exception as e:  # noqa: BLE001
+        log.warning("message edit: could not cancel deferred alert: %s", e)
+    try:
+        try_handle_issue_watch(
+            _strip_lark_composer_message_footer(body, chat_label=source_chat_name),
+            cid,
+            (sender_open_id or "").strip(),
+            token,
+            source_chat_name=source_chat_name,
+            message_id=mid,
+            message_create_time=message_create_time,
+            mention_open_ids=mention_open_ids or [],
+        )
+    except Exception as e:  # noqa: BLE001
+        log.error("message edit: issue watch failed chat_id=%s err=%s", cid, e, exc_info=True)
 
 
 def process_message(
