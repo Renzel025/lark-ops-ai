@@ -1073,8 +1073,9 @@ def _help_commands_md() -> str:
         '• type "h" or "help" — show this card\n'
         '• type "commands" — same as help\n\n'
         "Manually create overview\n"
-        '• type "coe" — standalone overview, emergency group (no meeting)\n'
-        '• type "cog" — standalone overview, game group (no meeting)\n'
+        '• type "coe" or "coep0" — standalone P0 overview, emergency group (no meeting)\n'
+        '• type "cog" or "cogp0" — standalone P0 overview, game group (no meeting)\n'
+        '• type "coep1" / "cogp1" — same, but the overview is built as P1\n'
         '• type "c" — abort coe/cog on the green card; with a preview open, use **Cancel** on the preview card\n\n'
         "Major P0 detection (false alarms)\n"
         '• type "/off" — mute detection for ALL groups (in a detection group, or in the alert DM)\n'

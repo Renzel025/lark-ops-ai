@@ -1081,26 +1081,36 @@ RING_CMD_RE = re.compile(r"^(m|e|scpms|sfpms|sfe|spms|fe|fpms|cpms|pms|dba|sosm)
 
 # DM whole line: ``create overview emergency|game`` or shortcuts ``coe`` / ``cog``.
 _STANDALONE_OVERVIEW_LONG_RE = re.compile(
-    r"^\s*create\s+overview\s+(emergency|game)\s*$",
+    r"^\s*create\s+overview\s+(emergency|game)\s*(p0|p1)?\s*$",
     re.IGNORECASE,
 )
-_STANDALONE_OVERVIEW_SHORT_RE = re.compile(r"^\s*(coe|cog)\s*$", re.IGNORECASE)
+# ``coe`` / ``cog`` keep working as P0 (muscle memory); ``coep1`` / ``cogp1`` build a P1 overview,
+# ``coep0`` / ``cogp0`` state P0 explicitly. Optional separator: ``coe p1``, ``coe-p1``.
+_STANDALONE_OVERVIEW_SHORT_RE = re.compile(r"^\s*(coe|cog)[\s_-]*(p0|p1)?\s*$", re.IGNORECASE)
 # Back-compat alias for callers that still use ``.match()``.
 STANDALONE_OVERVIEW_DM_RE = _STANDALONE_OVERVIEW_LONG_RE
 
 
-def parse_standalone_overview_dm_command(cmd: str) -> Optional[str]:
-    """Return ``emergency`` or ``game`` from long or short standalone-overview DM command."""
+def parse_standalone_overview_dm_command(cmd: str) -> Optional[Tuple[str, str]]:
+    """``(tag, priority)`` from a standalone-overview DM command, else ``None``.
+
+    ``tag`` is ``emergency`` / ``game``; ``priority`` is ``P0`` / ``P1`` (P0 when unsuffixed).
+    Accepts ``coe``, ``coep0``, ``coep1``, ``cog``, ``cogp0``, ``cogp1`` and the long
+    ``create overview emergency p1`` form.
+    """
     s = (cmd or "").strip()
     if not s:
         return None
     m = _STANDALONE_OVERVIEW_LONG_RE.match(s)
     if m:
-        return (m.group(1) or "").strip().lower()
-    m = _STANDALONE_OVERVIEW_SHORT_RE.match(s)
-    if m:
-        return {"coe": "emergency", "cog": "game"}[(m.group(1) or "").strip().lower()]
-    return None
+        tag = (m.group(1) or "").strip().lower()
+    else:
+        m = _STANDALONE_OVERVIEW_SHORT_RE.match(s)
+        if not m:
+            return None
+        tag = {"coe": "emergency", "cog": "game"}[(m.group(1) or "").strip().lower()]
+    prio = (m.group(2) or "").strip().upper() or "P0"
+    return tag, (prio if prio in ("P0", "P1") else "P0")
 
 
 WHO_IN_MEETING_RE = re.compile(
@@ -2812,6 +2822,17 @@ def get_p0_issue_watch_min_affected_players() -> int:
     except ValueError:
         n = 4
     return max(1, min(n, 50))
+
+
+def get_p0_vc_auto_invite_on_p1_enabled() -> bool:
+    """``P0_VC_AUTO_INVITE_ON_P1`` — also auto-ring ``P0_VC_AUTO_INVITE_OPEN_IDS`` and DM the
+    "Calling <names>" prompt when the declaration is a **P1**. Default **off**.
+
+    A P1 is not a bridge-everyone emergency, so paging the standing auto-invite list on one is
+    noise. P0 is unaffected."""
+    reload_env_runtime()
+    v = (os.getenv("P0_VC_AUTO_INVITE_ON_P1") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_p0_issue_watch_rag_enabled() -> bool:
