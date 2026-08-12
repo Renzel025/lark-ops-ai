@@ -1806,19 +1806,25 @@ def process_message(
 
                 ai = _priority_keyword_ai_triage(text_raw, groq_key)
                 if ai is not None:
-                    if ai.get("intent") != "declare_p1":
+                    _p1_intent = str(ai.get("intent") or "").strip().lower()
+                    # Same policy as P0: only an explicit negation is silent. Anything else — a
+                    # question ("is this p1?"), a mention, a handoff — still ASKS. The P1 card is
+                    # itself a yes/no ask (and goes to the duty DM under P0_P1_CONFIRM_DM), so
+                    # dropping these silently just meant nobody was asked at all.
+                    if _p1_intent in ("negation",) or _is_explicit_p0_negation(text_raw):
                         log.info(
-                            "Incident group: P1 AI triage — no prompt (intent=%s) text_head=%r",
-                            ai.get("intent"),
+                            "Incident group: P1 trigger ignored (explicit negation) intent=%s text_head=%r",
+                            _p1_intent or "(none)",
                             text_raw[:200],
                         )
                         return
-                elif _is_question_about_priority(text_raw):
-                    log.info(
-                        "Incident group: P1 trigger ignored (question about priority) text=%r",
-                        text_raw[:200],
-                    )
-                    return
+                    if _p1_intent != "declare_p1":
+                        log.info(
+                            "Incident group: P1 AI triage intent=%s — still offering the create-meeting "
+                            "confirmation (ask, do not drop) text_head=%r",
+                            _p1_intent or "(none)",
+                            text_raw[:200],
+                        )
 
                 kw_dedupe = _keyword_trigger_dedupe_key(
                     chat_id, user_id, message_id, message_create_time, text_raw
