@@ -1071,7 +1071,8 @@ CLEAR_RE = re.compile(r"^\s*(clear|reset|discard|cancel|cl)\s*$", re.IGNORECASE)
 # Abort standalone ``coe`` / ``cog`` on the green DM card (before preview **Cancel**).
 STANDALONE_OVERVIEW_ABORT_RE = re.compile(r"^\s*c\s*$", re.IGNORECASE)
 STATUS_RE = re.compile(r"^\s*(status|draft|check|st)\s*$", re.IGNORECASE)
-HELP_RE = re.compile(r"^\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
+# Leading slash optional — operators type ``/help`` out of habit from ``/off`` / ``/on``.
+HELP_RE = re.compile(r"^\s*/?\s*(help|commands|command\s+list|h)\s*$", re.IGNORECASE)
 # @bot ring commands — page duty/escalation into the ALREADY-active meeting:
 #   m = major responders, e = escalation (senior).
 #   Emergency duty family: scpms/sfpms/sfe/spms = duty SRE per team; fe/fpms/cpms/pms/dba = team duty;
