@@ -2825,6 +2825,18 @@ def get_p0_issue_watch_min_affected_players() -> int:
     return max(1, min(n, 50))
 
 
+def get_p0_issue_watch_overview_merge_related() -> bool:
+    """``P0_ISSUE_WATCH_OVERVIEW_MERGE_RELATED`` — when building the suggested overview from an alert,
+    also feed in earlier reports of the SAME issue from the detection window (default **on**).
+
+    The alert usually fires on the bubble that finally lists the player IDs, while the description
+    ("new players cannot enter Jili games since 1900H") was a message before it. Without this the
+    Issue line is written from the ID bubble alone."""
+    reload_env_runtime()
+    v = (os.getenv("P0_ISSUE_WATCH_OVERVIEW_MERGE_RELATED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_edit_rescan_enabled() -> bool:
     """``P0_EDIT_RESCAN_ENABLED`` — when a group message is EDITED, re-run Issue Watch detection on
     the new text (default **on**; needs ``im.message.updated_v1`` subscribed in the Lark console).
