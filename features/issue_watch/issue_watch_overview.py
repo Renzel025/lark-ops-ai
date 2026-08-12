@@ -325,9 +325,11 @@ def build_overview_fields_from_alert(
             "issue_watch_overview: merged %s earlier report(s) of the same issue into the overview source",
             len(related),
         )
+    # Chronological: the earlier description first (that is the actual symptom), then the bubble
+    # that tripped the alert, then the IDs. related_concern_texts returns newest-first.
     combined_parts = [
         p
-        for p in ([concern] + related + [f"Account IDs: {id_blob}" if id_blob else ""])
+        for p in (list(reversed(related)) + [concern] + [f"Account IDs: {id_blob}" if id_blob else ""])
         if p
     ]
     combined_text = "\n\n".join(combined_parts).strip() or concern or summary
