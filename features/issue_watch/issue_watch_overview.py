@@ -305,7 +305,33 @@ def build_overview_fields_from_alert(
         n = len(player_ids)
 
     id_blob = ", ".join(player_ids[:24])
-    combined_parts = [p for p in [concern, f"Account IDs: {id_blob}" if id_blob else ""] if p]
+    # Pull in earlier reports of the same issue. The alert often fires on the bubble that finally
+    # lists the IDs, while the description lives in a message before it — without this the overview
+    # is written from "Here are the new players … <ids>" alone and loses the actual symptom.
+    related: List[str] = []
+    if _config.get_p0_issue_watch_overview_merge_related():
+        try:
+            from . import issue_watch as _iw
+
+            related = _iw.related_concern_texts(
+                str(snapshot.get("chat_id") or ""),
+                str(snapshot.get("fingerprint") or ""),
+                exclude_message_id=str(snapshot.get("message_id") or ""),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("issue_watch_overview: related-concern lookup failed: %s", e)
+    if related:
+        log.info(
+            "issue_watch_overview: merged %s earlier report(s) of the same issue into the overview source",
+            len(related),
+        )
+    # Chronological: the earlier description first (that is the actual symptom), then the bubble
+    # that tripped the alert, then the IDs. related_concern_texts returns newest-first.
+    combined_parts = [
+        p
+        for p in (list(reversed(related)) + [concern] + [f"Account IDs: {id_blob}" if id_blob else ""])
+        if p
+    ]
     combined_text = "\n\n".join(combined_parts).strip() or concern or summary
 
     bits: List[str] = []

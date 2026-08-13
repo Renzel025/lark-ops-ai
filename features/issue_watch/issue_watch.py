@@ -411,6 +411,56 @@ def _prune_store(window_sec: float) -> None:
     _REPORTS = [r for r in _REPORTS if float(r.get("ts") or 0) >= cutoff]
 
 
+def related_concern_texts(
+    chat_id: str,
+    fingerprint: str,
+    *,
+    exclude_message_id: str = "",
+    limit: int = 2,
+    window_sec: float = 0.0,
+) -> List[str]:
+    """Earlier reports of the SAME issue in this chat — the detail the alert itself does not carry.
+
+    An alert often fires on the follow-up bubble that finally lists the player IDs ("Here are the
+    new players … <ids>"), while the description that matters ("new players cannot enter Jili games
+    since 1900H, error X") was a separate message before it. Those earlier reports are already in
+    the rolling window, so the overview can be built from the whole story instead of just the
+    message that happened to cross the threshold.
+
+    Newest first, ID-only bubbles skipped, near-duplicates of each other dropped.
+    """
+    cid = (chat_id or "").strip()
+    fp = (fingerprint or "").strip()
+    if not cid or not fp:
+        return []
+    win = window_sec or float(_config.get_p0_issue_watch_window_min() * 60)
+    cutoff = _now_ts() - win
+    ex = (exclude_message_id or "").strip()
+    rows: List[Dict[str, object]] = []
+    with _STORE_LOCK:
+        for r in _REPORTS:
+            if str(r.get("chat_id") or "") != cid or str(r.get("fingerprint") or "") != fp:
+                continue
+            if float(r.get("ts") or 0) < cutoff:
+                continue
+            if ex and str(r.get("message_id") or "") == ex:
+                continue
+            rows.append(dict(r))
+    rows.sort(key=lambda r: float(r.get("ts") or 0), reverse=True)
+    out: List[str] = []
+    for r in rows:
+        t = " ".join(str(r.get("concern_text") or "").split()).strip()
+        if not t or _is_player_id_list_message(t):
+            continue
+        key = re.sub(r"[^a-z0-9]+", "", t.lower())[:120]
+        if any(key and key == re.sub(r"[^a-z0-9]+", "", o.lower())[:120] for o in out):
+            continue
+        out.append(t)
+        if len(out) >= max(1, limit):
+            break
+    return out
+
+
 def _count_unique_reporters(chat_id: str, fingerprint: str, window_sec: float) -> int:
     cutoff = _now_ts() - window_sec
     seen: Set[str] = set()

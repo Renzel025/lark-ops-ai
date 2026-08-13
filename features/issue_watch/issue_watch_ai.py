@@ -492,14 +492,14 @@ def _keyword_classify(message_text: str) -> Optional[dict]:
 def _classify_via_claude(message_text: str) -> Optional[dict]:
     from p0_logic.anthropic_client import anthropic_chat_once
 
-    raw = anthropic_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=280)
+    raw = anthropic_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=500)
     if not (raw or "").strip():
         return None
     return _parse_classification(raw, "claude")
 
 
 def _classify_via_groq(message_text: str) -> Optional[dict]:
-    raw = groq_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=280)
+    raw = groq_chat_once(_ISSUE_WATCH_SYSTEM, f"MESSAGE:\n{message_text[:4500]}", max_tokens=500)
     if not (raw or "").strip():
         return None
     return _parse_classification(raw, "groq")
