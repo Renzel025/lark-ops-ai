@@ -172,6 +172,48 @@ def translate_issue_impact_pair_to_zh(en_issue: str, en_impact: str) -> Tuple[st
         perf_log("groq translate_issue_impact_pair", t0)
 
 
+def _repair_truncated_json_object(text: str) -> Optional[dict]:
+    """Salvage a JSON object the model got cut off mid-way through (hit ``max_tokens``).
+
+    Trims back to the last COMPLETE ``"key": value`` pair at the top level and closes the brace, so
+    a response ending in ``…"summary": "…", "issue_fingerprint":`` still yields the fields that did
+    arrive. Returns ``None`` when nothing usable survives.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    s = text[start:]
+    depth = 0
+    in_str = False
+    esc = False
+    last_pair_end = -1
+    for i, ch in enumerate(s):
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+        elif ch == "," and depth == 1:
+            last_pair_end = i
+    if last_pair_end <= 0:
+        return None
+    try:
+        obj = json.loads(s[:last_pair_end] + "}")
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 def _parse_json_object(raw: str) -> Optional[dict]:
     if not (raw or "").strip():
         return None
@@ -184,13 +226,17 @@ def _parse_json_object(raw: str) -> Optional[dict]:
         return obj if isinstance(obj, dict) else None
     except json.JSONDecodeError:
         m = re.search(r"\{[\s\S]*\}", text)
-        if not m:
-            return None
-        try:
-            obj = json.loads(m.group(0))
-            return obj if isinstance(obj, dict) else None
-        except json.JSONDecodeError:
-            return None
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+                return obj if isinstance(obj, dict) else None
+            except json.JSONDecodeError:
+                pass
+        # No closing brace (or an unparsable one) — most often a max_tokens cut-off.
+        repaired = _repair_truncated_json_object(text)
+        if repaired is not None:
+            log.warning("JSON was truncated — salvaged %s field(s): %s", len(repaired), sorted(repaired))
+        return repaired
 
 
 def groq_p0_keyword_declares_new_bridge(message_text: str) -> Optional[bool]:
