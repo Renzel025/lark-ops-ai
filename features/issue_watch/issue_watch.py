@@ -588,7 +588,12 @@ def _issue_watch_meets_alert_threshold(
     high_conf = confidence >= min_conf
 
     if _config.get_p0_issue_watch_require_player_evidence():
-        return (players_widespread and high_conf), players_widespread, reporters_widespread
+        # The count decides, on its own. MIN_CONFIDENCE does NOT gate this: model confidence is a
+        # self-report about how well it understood the message, while 4 named players is objective
+        # evidence of impact — and the SOP already calls that a P0. Letting 0.85-vs-0.88 veto four
+        # affected players contradicted the "SOP check skipped — major P0 by rule" line right above
+        # it in the log. is_incident_signal is still required to get here.
+        return players_widespread, players_widespread, reporters_widespread
 
     # Legacy path (P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE=0) — kept for rollback.
     player_count_blocks_solo = (
