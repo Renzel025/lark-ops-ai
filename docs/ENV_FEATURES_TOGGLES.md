@@ -131,7 +131,7 @@ alerting, wherever the command was typed. `/on` brings them all back. The state 
 | `P0_ISSUE_WATCH_ENABLED` | **off** | **on** |
 | Sub-options (buzz, declare, thread, etc.) | configured (ready if enabled) | **on** |
 | `P0_ISSUE_WATCH_AI_PROVIDER` | claude | groq |
-| `P0_ISSUE_WATCH_MIN_CONFIDENCE` | 0.75 | 0.88 |
+| `P0_ISSUE_WATCH_MIN_CONFIDENCE` (no longer gates alerts when REQUIRE_PLAYER_EVIDENCE is on) | 0.88 | 0.88 |
 | `P0_ISSUE_WATCH_MIN_REPORTS` | 4 | 2 |
 | `P0_ISSUE_WATCH_MIN_AFFECTED_PLAYERS` | **4** (set it) | **4** |
 

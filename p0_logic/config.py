@@ -2777,6 +2777,10 @@ def parse_issue_watch_mute_command(text: str) -> str:
 
 
 def get_p0_issue_watch_min_confidence() -> float:
+    """``P0_ISSUE_WATCH_MIN_CONFIDENCE`` — classifier confidence floor.
+
+    NOTE: with ``P0_ISSUE_WATCH_REQUIRE_PLAYER_EVIDENCE`` on (the default) this no longer gates a
+    major-P0 alert — the affected-player count decides. It still applies on the legacy path."""
     reload_env_runtime()
     raw = (os.getenv("P0_ISSUE_WATCH_MIN_CONFIDENCE") or "0.88").strip()
     try:
