@@ -488,6 +488,15 @@ def _is_manual_p0_incident_overview_template(text: str) -> bool:
 
 
 # Incident keyword: message contains ``p0`` but explicitly says no / not P0 / no escalation (no Groq).
+# Interrogative: a trailing "?" or an opening question word (after any @mentions). Used to stop a
+# question being mistaken for a denial.
+_P0_QUESTION_RE = re.compile(
+    r"(?is)(?:\?\s*$)"
+    r"|^\W*(?:@[\w_]+\s*)*"
+    r"(?:is|isn'?t|are|aren'?t|was|were|do|does|did|should|shouldn'?t|can|can'?t|could|"
+    r"why|what|how|any\s+chance)\b"
+)
+
 _P0_NEGATION_SUBSTRINGS = (
     "no p0 escalation",
     "not a p0",
@@ -519,6 +528,12 @@ def _is_explicit_p0_negation(text: str) -> bool:
         return False
     if not P0_KEYWORD_RE.search(t):
         return False
+    # A QUESTION is never a negation. "Is this not P0 ?" asks whether it SHOULD be one — the
+    # opposite of declining it — but it contains the substring "not p0" and was being swallowed
+    # silently, so duty was never asked. Under the routing policy only an explicit negation is
+    # silent; everything else, questions included, must reach the duty confirm-DM.
+    if _P0_QUESTION_RE.search(t):
+        return False
     low = " ".join(t.lower().split())
     for s in _P0_NEGATION_SUBSTRINGS:
         if s in low:
@@ -529,11 +544,11 @@ def _is_explicit_p0_negation(text: str) -> bool:
         return True
     # "will not be consider(ed) as p0" — ``not`` and ``p0`` are not adjacent (old pattern missed this).
     if re.search(
-        r"(?is)\b(?:will|would)\s+not\s+(?:be\s+)?consider\w*\s+as\s+(?:a\s+)?p0\b",
+        r"(?is)\b(?:will|would)\s+not\s+(?:be\s+)?consider\w*(?:\s+\w+){0,3}\s+as\s+(?:a\s+)?p0\b",
         t,
     ):
         return True
-    if re.search(r"(?is)\bnot\s+consider\w*\s+as\s+(?:a\s+)?p0\b", t):
+    if re.search(r"(?is)\bnot\s+consider\w*(?:\s+\w+){0,3}\s+as\s+(?:a\s+)?p0\b", t):
         return True
     if re.search(
         r"(?is)\b(?:does|do|did)\s+not\s+(?:qualify|count)\s+(?:as\s+)?(?:a\s+)?p0\b",
