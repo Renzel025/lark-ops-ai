@@ -34,6 +34,29 @@ _BUF_TTL = 7200.0      # 2h — older rows are ignored when resolving
 _BARE_P0_RE = re.compile(r"(?is)^\W*(?:p0|priority\s*0|p1|priority\s*1)\W*$")
 _ID_ONLY_RE = re.compile(r"(?is)^[\d\s,;:.\-]+$")
 
+# Talk ABOUT the severity label rather than about the incident: "is this not P0 ?", "should we
+# declare this as p0", "can we consider this as P1", "will declare this as P0". These carry no
+# symptom, so they must never become the concern an overview is written from — duty replying to
+# one of them is normal ("Will declare this as P0" is literally a reply to "Is this not P0 ?").
+_PRIORITY_CHATTER_RE = re.compile(
+    r"(?is)^\W*(?:@[\w_]+\s*)*"                       # leading @mentions
+    r"(?:hi|hello|team|guys|po|ok|okay|yes|no|sure)?[\s,\.]*"
+    r"(?:"
+    r"(?:is|are|it'?s|this|that|so)\b[^.?!]{0,40}\bp[01]\b"          # "is this not P0 ?"
+    r"|(?:can|should|shall|may|let'?s|will|we|i)\b[^.?!]{0,60}"
+    r"\b(?:declare|consider|treat|tag|mark|raise|escalate)\b[^.?!]{0,40}\bp[01]\b"
+    r"|(?:declar\w+|escalat\w+)\b[^.?!]{0,30}\bp[01]\b"
+    r"|\bnot\s+(?:a\s+)?p[01]\b"
+    r")"
+    r"[\s\W]*$"
+)
+
+
+def _is_priority_chatter(text: str) -> bool:
+    """True when the message is only about the P0/P1 label, not about a symptom."""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    return bool(t) and bool(_PRIORITY_CHATTER_RE.match(t))
+
 
 def record_group_message(
     chat_id: str,
@@ -96,9 +119,11 @@ def _is_bare_priority(text: str) -> bool:
 
 
 def _looks_substantive(text: str) -> bool:
-    """A candidate concern: long enough, not a bare 'p0', not just a list of IDs/numbers."""
+    """A candidate concern: long enough, not priority talk, not just a list of IDs/numbers."""
     t = (text or "").strip()
     if len(t) < _config.get_p0_issue_watch_min_text_len():
+        return False
+    if _is_priority_chatter(t):
         return False
     if _is_bare_priority(t) or _ID_ONLY_RE.match(t):
         return False
@@ -190,9 +215,19 @@ def resolve_declaration_concern(
     if row:
         for pid in (str(row.get("parent_id") or ""), str(row.get("root_id") or "")):
             ptext = _text_by_id(cid, pid)
-            if ptext and not _is_bare_priority(ptext) and ptext != decl:
-                log.info("concern_context: resolved concern via reply-parent cid_tail=%s", cid[-8:])
-                return _combine(ptext, decl)
+            if not ptext or ptext == decl or _is_bare_priority(ptext):
+                continue
+            # Duty usually declares by REPLYING to "is this not P0?" — the parent is then priority
+            # talk, not the concern. Fall through to AI-pick / most-recent instead of writing the
+            # overview from a question.
+            if _is_priority_chatter(ptext):
+                log.info(
+                    "concern_context: reply-parent is priority talk (%r) — falling back to AI-pick",
+                    ptext[:60],
+                )
+                continue
+            log.info("concern_context: resolved concern via reply-parent cid_tail=%s", cid[-8:])
+            return _combine(ptext, decl)
 
     concerns = _recent_concerns(cid, exclude_message_id=decl_message_id)
     if not concerns:
