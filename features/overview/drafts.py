@@ -312,6 +312,21 @@ def _save_preview(
             row["broadcast_chat_id"] = bc_id
             row["broadcast_message_id"] = bc_mid
         tx.set(row)
+    # The ONLY record of what an auto-overview said: Cancel deletes the preview JSON, so without
+    # this a rejected overview leaves no trace and there is no way to tell whether the model wrote
+    # it badly or was handed the wrong source text. source_head is the deciding evidence — it is
+    # the concern the Issue line was summarised from.
+    log.info(
+        "overview built: priority=%s open_id_tail=%s target_tail=%s issue=%r impact=%r support=%r "
+        "source_head=%r",
+        prio,
+        (sender_open_id or "")[-8:],
+        (target_chat or "")[-12:],
+        (issue or "")[:160],
+        (impact or "")[:120],
+        (support or "")[:120],
+        " ".join((combined_text or "").split())[:220],
+    )
     return str(md or "").strip()
 
 
