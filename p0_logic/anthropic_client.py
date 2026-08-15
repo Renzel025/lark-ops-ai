@@ -198,7 +198,22 @@ def anthropic_chat_once(
                 t = str(b.get("text") or "")
                 if t:
                     parts.append(t)
-        return "\n".join(parts).strip()
+        out = "\n".join(parts).strip()
+        if not out:
+            # HTTP 200 but nothing usable came back — the one path that used to return "" silently,
+            # leaving callers to log only "classify failed" with no cause. Say WHY: a max_tokens
+            # stop with the budget spent before any text, or content that is all non-text blocks.
+            usage = data.get("usage") or {}
+            log.warning(
+                "anthropic_chat_once: 200 but NO text — stop_reason=%s block_types=%s "
+                "max_tokens=%s out_tokens=%s model=%s",
+                data.get("stop_reason"),
+                [b.get("type") for b in blocks if isinstance(b, dict)] or "(no blocks)",
+                payload.get("max_tokens"),
+                usage.get("output_tokens"),
+                payload.get("model"),
+            )
+        return out
     except Exception as e:
         log.warning("anthropic_chat_once: parse failed: %s", e)
         return ""
