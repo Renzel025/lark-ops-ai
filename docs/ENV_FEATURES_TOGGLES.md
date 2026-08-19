@@ -217,8 +217,8 @@ alerting, wherever the command was typed. `/on` brings them all back. The state 
 | `P0_COMMAND_ONLY_DECLARE` | nothing but `/p0` / `/p1` may reach `start_p0` | keyword prose can auto-declare again | **on** |
 | `P0_COMMAND_OPEN_IDS` | comma/space list of open ids allowed to declare | falls back to `P0_DM_INSTRUCTION_OPEN_IDS` | unset |
 
-`/p0` and `/p1` accept an optional reason (`/p0 deposit failing for 6 players`), and replying `/p0`
-to the report itself builds the overview from that message. The gate lives in one place —
+`/p0` and `/p1` are the whole command — nothing follows them. The overview is built from the
+issues discussed above, exactly as the old typed `p0` did. The gate lives in one place —
 `start_p0(..., via_command=True)` — so every other caller is refused at the same choke point.
 An unresolvable allowlist lets the command through rather than bricking declaration.
 
