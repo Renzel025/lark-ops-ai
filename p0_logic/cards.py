@@ -787,6 +787,28 @@ def build_p1_meeting_confirm_card(confirm_nonce: str, source_chat_id: str = "") 
         # Carried so a click from a DM (P0_P1_CONFIRM_DM) still resolves the source incident group.
         val_yes["source_chat_id"] = src
         val_no["source_chat_id"] = src
+    # Buttons off (default): the card just announces the detection and duty gets buzzed. Typing
+    # "create meeting" / "yes" still starts the VC — see P1_CONFIRM_BUTTONS_ENABLED.
+    if not _config.get_p1_confirm_buttons_enabled():
+        return {
+            "schema": "2.0",
+            "config": {"enable_forward": True},
+            "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": (
+                                "P1 was mentioned in this chat. "
+                                "Type **create meeting** if a Lark video meeting is needed."
+                            ),
+                        },
+                    },
+                ]
+            },
+        }
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
@@ -865,6 +887,25 @@ def build_p0_keyword_confirm_dm_card(
     ]
     if quoted:
         body_lines.append("> {}".format(quoted.replace("\n", " ")))
+    # Buttons off (default): notify-only. Duty declares by typing p0 in the detection group, so the
+    # card never creates a meeting on a stray tap — see P0_KEYWORD_CONFIRM_BUTTONS_ENABLED.
+    if not _config.get_p0_keyword_confirm_buttons_enabled():
+        body_lines.append(
+            "The bot did not auto-declare this. Type **p0** in that group if a bridge meeting is needed."
+        )
+        return {
+            "schema": "2.0",
+            "config": {"enable_forward": True, "update_multi": True},
+            "header": {
+                "template": "orange",
+                "title": {"tag": "plain_text", "content": "⚠️ P0 mentioned"},
+            },
+            "body": {
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+                ]
+            },
+        }
     body_lines.append("The bot did not auto-declare this. Create a P0 meeting?")
     return {
         "schema": "2.0",

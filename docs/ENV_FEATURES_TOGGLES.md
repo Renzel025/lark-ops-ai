@@ -105,7 +105,7 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_ISSUE_WATCH_ENABLED` | on | off | **off** |
 | `P0_ISSUE_WATCH_AUTO_OVERVIEW` | on | off | **on** |
 | `P0_ISSUE_WATCH_BUZZ_ENABLED` | on | off | **on** |
-| `P0_ISSUE_WATCH_DECLARE_P0_ENABLED` | on | off | **on** |
+| `P0_ISSUE_WATCH_DECLARE_P0_ENABLED` | Declare as P0 / Not now buttons on the alert DM | notify-only, declare by typing p0 in the group | **off** |
 | `P0_ISSUE_WATCH_DECLARE_REPLY_AI` | on | off | **on** |
 | `P0_ISSUE_WATCH_DECLARE_REPLY_IN_THREAD` | on | off | **on** |
 | `P0_ISSUE_WATCH_DECLARE_ALSO_SEND_TO_GROUP` | on | off | **on** |
@@ -208,6 +208,19 @@ alerting, wherever the command was typed. `/on` brings them all back. The state 
 | **Groq keyword gate** | `P0_KEYWORD_GROQ_GATE=on` | off | default off |
 | **Gemini** | `GEMINI_API_KEY` set + `P0_KEYWORD_AI_PROVIDER=auto` or `gemini` | no key = skipped | dev code only until merge |
 | **Severity bot DM** | `P0_SEVERITY_PROMPT_ENABLED=on` | off | default off |
+
+**P0/P1 keyword card — buttons & buzz:**
+
+| Variable | ON | OFF | Default |
+|----------|----|-----|---------|
+| `P0_KEYWORD_CONFIRM_BUTTONS_ENABLED` | Yes/No buttons on the "P0 mentioned" duty DM | notify-only card | **off** |
+| `P1_CONFIRM_BUTTONS_ENABLED` | Create meeting / Don't need buttons on the "P1 mentioned" card | notify-only card | **off** |
+| `P0_KEYWORD_BUZZ_ENABLED` | Lark 加急 duty on the P0/P1 keyword card | no buzz | **on** |
+| `P0_KEYWORD_LARK_URGENT_MODE` | `app` / `phone` / `sms` | `off` | falls back to `P0_ONGOING_LARK_URGENT_MODE` |
+
+With the buttons off, the card only reports the detection — duty declares by typing `p0` (or
+`create meeting` for P1) in the chat. The buzz is what actually pages them, so keep it on.
+Buzz needs the `im:message.urgent*` scopes on the primary Lark app.
 
 **Thread confirm extras:**
 

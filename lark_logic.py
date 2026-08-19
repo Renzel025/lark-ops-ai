@@ -29,14 +29,23 @@ from p0_logic.config import (
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge
 from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card, build_p0_keyword_confirm_dm_card
-from p0_logic.lark_client import post_card_to_chat, post_text_to_chat, post_card_to_open_id
+from p0_logic.lark_client import (
+    post_card_to_chat,
+    post_text_to_chat,
+    post_card_to_open_id,
+    urgent_message_for_users,
+)
 from features.screenshot.graph_screenshot_request import (
     try_handle_graph_screenshot_request,
     _strip_leading_mentions,
     _mentions_our_bot,
 )
 from features.issue_watch.issue_watch import try_handle_issue_watch
-from p0_logic.config import get_p0_edit_rescan_enabled
+from p0_logic.config import (
+    get_p0_edit_rescan_enabled,
+    get_p0_keyword_buzz_enabled,
+    get_p0_keyword_lark_urgent_mode,
+)
 from p0_logic import (
     start_p0,
     cancel_p0_session,
@@ -207,9 +216,14 @@ def _send_p0_keyword_confirm_dm(
         _p0_keyword_confirm_prune_locked()
         _P0_KEYWORD_CONFIRM_PENDING[nonce] = entry
     card = build_p0_keyword_confirm_dm_card(nonce, entry["phrase"], entry["source_chat_name"])
+    # The card carries no buttons by default, so the buzz IS the page — without it a "p0" mention
+    # would sit unread in a DM. Same 加急 path the Major-P0 alert already uses.
+    buzz_on = get_p0_keyword_buzz_enabled()
+    urgent_mode = get_p0_keyword_lark_urgent_mode()
     tails: List[str] = []
+    buzzed = 0
     for oid in recipients:
-        st, body, _mid = post_card_to_open_id(oid, token, card)
+        st, body, mid = post_card_to_open_id(oid, token, card)
         tails.append(oid[-8:] if len(oid) > 8 else oid)
         if st != 200:
             log.warning(
@@ -218,11 +232,28 @@ def _send_p0_keyword_confirm_dm(
                 oid[-8:] if len(oid) > 8 else oid,
                 (body or "")[:200],
             )
+            continue
+        if buzz_on and urgent_mode != "off" and mid:
+            uok, udetail = urgent_message_for_users(token, mid, [oid], mode=urgent_mode)
+            if uok:
+                buzzed += 1
+            else:
+                log.warning(
+                    "Incident group: P0 keyword buzz urgent_%s failed oid_tail=%s detail=%s "
+                    "(enable im:message.urgent on the bot app?)",
+                    urgent_mode,
+                    oid[-8:] if len(oid) > 8 else oid,
+                    (udetail or "")[:300],
+                )
     log.info(
-        "Incident group: P0 keyword confirm DM sent recipients=%s nonce=%s chat_id=%s",
+        "Incident group: P0 keyword confirm DM sent recipients=%s nonce=%s chat_id=%s "
+        "buzz_enabled=%s urgent_%s=%s",
         tails,
         nonce,
         source_incident_chat_id,
+        buzz_on,
+        urgent_mode,
+        buzzed,
     )
 
 
