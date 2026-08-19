@@ -2241,6 +2241,7 @@ def start_p0(
     issue_watch_alert_key: str = "",
     announce_declaration: bool = False,
     declaration_text: str = "",
+    via_command: bool = False,
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -2251,6 +2252,11 @@ def start_p0(
     production incident groups (e.g. when someone re-pastes an overview template).
     Explicit user actions (P0 thread confirm, P1 confirm Yes) should leave this
     False so users get a clear reason why nothing happened.
+
+    ``via_command`` — set ONLY by the ``/p0`` / ``/p1`` group commands. Under
+    ``P0_COMMAND_ONLY_DECLARE`` (default on) every other caller is refused here, which is what makes
+    "the only way to create a meeting is /p0 or /p1" true at one choke point instead of at each of
+    the five call sites that can reach this function.
     """
     from . import participants as _participants
 
@@ -2260,6 +2266,21 @@ def start_p0(
     trigger_lark_user_id = (trigger_lark_user_id or "").strip()
     priority = (priority or "P0").strip().upper()
     if not chat_id:
+        return
+    if _config.get_p0_command_only_declare() and not via_command:
+        log.info(
+            "start_p0 refused: P0_COMMAND_ONLY_DECLARE is on — %s must be declared with /p0 or /p1 "
+            "chat_id=%s trigger_tail=%s",
+            priority,
+            chat_id,
+            trigger_open_id[-8:] if len(trigger_open_id) > 8 else trigger_open_id,
+        )
+        if not silent_when_blocked and token:
+            _lark.post_text_to_chat(
+                _config.get_session_meeting_card_post_chat_id(chat_id),
+                token,
+                "ℹ️ Meetings are created with **/p0** or **/p1** only. Type the command in this group.",
+            )
         return
     # Multi-meeting mode: every declaration creates its own coexisting VC + session (keyed per
     # meeting). When off, classic one-meeting-per-group behaviour (guards + cooldown apply).

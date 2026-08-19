@@ -1500,6 +1500,57 @@ def get_p0_keyword_confirm_dm_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+_P0_DECLARE_COMMAND_RE = re.compile(r"(?is)^\s*/(p0|p1)\b[\s:.-]*(.*)$")
+
+
+def parse_p0_declare_command(text: str) -> Tuple[str, str]:
+    """
+    Parse the only command that may create a meeting: ``/p0`` / ``/p1`` (optionally with a reason).
+
+    Returns ``("P0"|"P1", reason)`` or ``("", "")``. Strip @mentions before calling — a leading
+    ``@bot`` is fine, but the slash is mandatory so a bare "p0" in prose can never match.
+    """
+    m = _P0_DECLARE_COMMAND_RE.match(text or "")
+    if not m:
+        return "", ""
+    return m.group(1).upper(), (m.group(2) or "").strip()
+
+
+def get_p0_command_declare_enabled() -> bool:
+    """``P0_COMMAND_DECLARE_ENABLED`` — the ``/p0`` / ``/p1`` group commands (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_COMMAND_DECLARE_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_command_only_declare() -> bool:
+    """
+    ``P0_COMMAND_ONLY_DECLARE`` — when on (**default**), ``/p0`` and ``/p1`` are the ONLY way a
+    meeting is created. Keyword prose ("we declare this as p0"), the Issue Watch declare button and
+    the P0/P1 card confirmations all stop short of ``start_p0`` and only notify + buzz duty.
+
+    Set to ``0`` to restore the old keyword auto-declare behaviour.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_COMMAND_ONLY_DECLARE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_command_open_ids() -> List[str]:
+    """
+    Open ids allowed to run ``/p0`` / ``/p1`` — ``P0_COMMAND_OPEN_IDS``, falling back to the OM duty
+    DM list (``P0_DM_INSTRUCTION_OPEN_IDS``).
+
+    An empty result means **no allowlist resolved**; callers let the command through rather than
+    bricking declaration entirely on a misconfigured ``.env``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_COMMAND_OPEN_IDS") or "").strip()
+    if raw:
+        return [x.strip() for x in re.split(r"[,\s]+", raw) if x.strip()]
+    return [x for x in (get_dm_instruction_open_ids() or []) if x]
+
+
 def get_p0_keyword_confirm_buttons_enabled() -> bool:
     """
     ``P0_KEYWORD_CONFIRM_BUTTONS_ENABLED`` — Yes/No buttons on the "P0 mentioned" duty DM.

@@ -209,6 +209,19 @@ alerting, wherever the command was typed. `/on` brings them all back. The state 
 | **Gemini** | `GEMINI_API_KEY` set + `P0_KEYWORD_AI_PROVIDER=auto` or `gemini` | no key = skipped | dev code only until merge |
 | **Severity bot DM** | `P0_SEVERITY_PROMPT_ENABLED=on` | off | default off |
 
+**Declare by command only:**
+
+| Variable | ON | OFF | Default |
+|----------|----|-----|---------|
+| `P0_COMMAND_DECLARE_ENABLED` | `/p0` and `/p1` create the meeting | commands ignored | **on** |
+| `P0_COMMAND_ONLY_DECLARE` | nothing but `/p0` / `/p1` may reach `start_p0` | keyword prose can auto-declare again | **on** |
+| `P0_COMMAND_OPEN_IDS` | comma/space list of open ids allowed to declare | falls back to `P0_DM_INSTRUCTION_OPEN_IDS` | unset |
+
+`/p0` and `/p1` accept an optional reason (`/p0 deposit failing for 6 players`), and replying `/p0`
+to the report itself builds the overview from that message. The gate lives in one place —
+`start_p0(..., via_command=True)` — so every other caller is refused at the same choke point.
+An unresolvable allowlist lets the command through rather than bricking declaration.
+
 **P0/P1 keyword card — buttons & buzz:**
 
 | Variable | ON | OFF | Default |
