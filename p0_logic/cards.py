@@ -787,6 +787,28 @@ def build_p1_meeting_confirm_card(confirm_nonce: str, source_chat_id: str = "") 
         # Carried so a click from a DM (P0_P1_CONFIRM_DM) still resolves the source incident group.
         val_yes["source_chat_id"] = src
         val_no["source_chat_id"] = src
+    # Buttons off (default): the card just announces the detection and duty gets buzzed. Typing
+    # "create meeting" / "yes" still starts the VC — see P1_CONFIRM_BUTTONS_ENABLED.
+    if not _config.get_p1_confirm_buttons_enabled():
+        return {
+            "schema": "2.0",
+            "config": {"enable_forward": True},
+            "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": (
+                                "P1 was mentioned in this chat. "
+                                "Type **/p1** if a Lark video meeting is needed."
+                            ),
+                        },
+                    },
+                ]
+            },
+        }
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
@@ -865,6 +887,25 @@ def build_p0_keyword_confirm_dm_card(
     ]
     if quoted:
         body_lines.append("> {}".format(quoted.replace("\n", " ")))
+    # Buttons off (default): notify-only. Duty declares by typing p0 in the detection group, so the
+    # card never creates a meeting on a stray tap — see P0_KEYWORD_CONFIRM_BUTTONS_ENABLED.
+    if not _config.get_p0_keyword_confirm_buttons_enabled():
+        body_lines.append(
+            "The bot did not auto-declare this. Type **/p0** in that group if a bridge meeting is needed."
+        )
+        return {
+            "schema": "2.0",
+            "config": {"enable_forward": True, "update_multi": True},
+            "header": {
+                "template": "orange",
+                "title": {"tag": "plain_text", "content": "⚠️ P0 mentioned"},
+            },
+            "body": {
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+                ]
+            },
+        }
     body_lines.append("The bot did not auto-declare this. Create a P0 meeting?")
     return {
         "schema": "2.0",
@@ -1071,9 +1112,11 @@ def _help_commands_md() -> str:
         "commands help for overview automation\n\n"
         "Typed in DM or incident group\n"
         '• type "/help" — show this card (also "help", "h", "commands")\n\n'
+        "Declare — OM duty only, in the incident group\n"
+        '• type "/p0" — create the P0 meeting\n'
+        '• type "/p1" — create the P1 meeting\n'
+        "  Nothing else creates a meeting: a plain \"p0\" in chat only notifies + buzzes duty.\n\n"
         "Typed in the incident group\n"
-        '• type "p0" — declare a P0 and open the meeting\n'
-        '• type "p1" — declare a P1 (bot asks whether to create the meeting)\n'
         '• type "end meeting" / "em" / "pe" — end the active meeting\n'
         '• type "cancel meeting" / "cm" — cancel it (join link recalled)\n\n'
         "@bot in the incident group — page people into the LIVE meeting\n"
@@ -2081,12 +2124,12 @@ def build_issue_watch_alert_card(
         )
     else:
         footer = (
-            "*Issue might be P0 — declare in the group if a bridge meeting is needed. "
+            "*Issue might be P0 — type **/p0** in the group if a bridge meeting is needed. "
             "After declare, duty gets a suggested overview in DM.*"
         )
         if auto_overview_buttons:
             footer = (
-                "*After you declare P0 in the detection group, duty gets a suggested overview in DM.*"
+                "*After you type /p0 in the detection group, duty gets a suggested overview in DM.*"
             )
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": footer}})
     if not supplemental_player_ids and not (declared_note or "").strip():

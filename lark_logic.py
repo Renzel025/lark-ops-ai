@@ -29,14 +29,27 @@ from p0_logic.config import (
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge
 from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
 from p0_logic.cards import build_help_commands_card, build_p0_keyword_confirm_dm_card
-from p0_logic.lark_client import post_card_to_chat, post_text_to_chat, post_card_to_open_id
+from p0_logic.lark_client import (
+    post_card_to_chat,
+    post_text_to_chat,
+    post_card_to_open_id,
+    urgent_message_for_users,
+)
 from features.screenshot.graph_screenshot_request import (
     try_handle_graph_screenshot_request,
     _strip_leading_mentions,
     _mentions_our_bot,
 )
 from features.issue_watch.issue_watch import try_handle_issue_watch
-from p0_logic.config import get_p0_edit_rescan_enabled
+from p0_logic.config import (
+    get_p0_edit_rescan_enabled,
+    get_p0_keyword_buzz_enabled,
+    get_p0_keyword_lark_urgent_mode,
+    get_p0_command_declare_enabled,
+    get_p0_command_only_declare,
+    get_p0_command_open_ids,
+    parse_p0_declare_command,
+)
 from p0_logic import (
     start_p0,
     cancel_p0_session,
@@ -207,9 +220,14 @@ def _send_p0_keyword_confirm_dm(
         _p0_keyword_confirm_prune_locked()
         _P0_KEYWORD_CONFIRM_PENDING[nonce] = entry
     card = build_p0_keyword_confirm_dm_card(nonce, entry["phrase"], entry["source_chat_name"])
+    # The card carries no buttons by default, so the buzz IS the page — without it a "p0" mention
+    # would sit unread in a DM. Same 加急 path the Major-P0 alert already uses.
+    buzz_on = get_p0_keyword_buzz_enabled()
+    urgent_mode = get_p0_keyword_lark_urgent_mode()
     tails: List[str] = []
+    buzzed = 0
     for oid in recipients:
-        st, body, _mid = post_card_to_open_id(oid, token, card)
+        st, body, mid = post_card_to_open_id(oid, token, card)
         tails.append(oid[-8:] if len(oid) > 8 else oid)
         if st != 200:
             log.warning(
@@ -218,11 +236,109 @@ def _send_p0_keyword_confirm_dm(
                 oid[-8:] if len(oid) > 8 else oid,
                 (body or "")[:200],
             )
+            continue
+        if buzz_on and urgent_mode != "off" and mid:
+            uok, udetail = urgent_message_for_users(token, mid, [oid], mode=urgent_mode)
+            if uok:
+                buzzed += 1
+            else:
+                log.warning(
+                    "Incident group: P0 keyword buzz urgent_%s failed oid_tail=%s detail=%s "
+                    "(enable im:message.urgent on the bot app?)",
+                    urgent_mode,
+                    oid[-8:] if len(oid) > 8 else oid,
+                    (udetail or "")[:300],
+                )
     log.info(
-        "Incident group: P0 keyword confirm DM sent recipients=%s nonce=%s chat_id=%s",
+        "Incident group: P0 keyword confirm DM sent recipients=%s nonce=%s chat_id=%s "
+        "buzz_enabled=%s urgent_%s=%s",
         tails,
         nonce,
         source_incident_chat_id,
+        buzz_on,
+        urgent_mode,
+        buzzed,
+    )
+
+
+def _handle_p0_declare_command(
+    *,
+    priority: str,
+    chat_id: str,
+    notify_chat: str,
+    token: str,
+    user_id: str,
+    sender_lark_user_id: str,
+    source_chat_name: str,
+    text_raw: str,
+    message_id: str,
+    message_create_time: str,
+) -> None:
+    """
+    ``/p0`` / ``/p1`` typed in an incident group — the only path allowed to create a meeting.
+
+    Restricted to the OM duty accounts in ``P0_COMMAND_OPEN_IDS`` (falls back to the duty DM list).
+    An unresolvable allowlist lets the command through rather than bricking declaration outright.
+    """
+    slash = "/" + priority.lower()
+    allowed = get_p0_command_open_ids()
+    if not allowed:
+        log.warning(
+            "Incident group: %s allowlist is EMPTY (P0_COMMAND_OPEN_IDS and P0_DM_INSTRUCTION_OPEN_IDS "
+            "both unset) — letting the command through chat_id=%s",
+            slash,
+            chat_id,
+        )
+    elif (user_id or "").strip() not in allowed:
+        log.info(
+            "Incident group: %s refused (not OM duty) chat_id=%s user_tail=%s",
+            slash,
+            chat_id,
+            (user_id or "")[-8:],
+        )
+        if token:
+            post_text_to_chat(
+                notify_chat,
+                token,
+                "⚠️ Only OM duty can declare. Ask OM duty to type **{}** in this group.".format(slash),
+            )
+        return
+
+    kw_dedupe = _keyword_trigger_dedupe_key(
+        chat_id, user_id, message_id, message_create_time, text_raw
+    )
+    if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
+        log.info("Incident group: %s skipped (duplicate Lark delivery) chat_id=%s", slash, chat_id)
+        return
+
+    # The command is just the trigger. The overview is built from the issues discussed above
+    # (reply-parent, then AI-pick, then most-recent) — same as the old typed "p0".
+    concern = ""
+    try:
+        from features.overview import concern_context as _concern_ctx
+
+        concern = _concern_ctx.resolve_declaration_concern(
+            chat_id, decl_message_id=message_id, decl_text=""
+        )
+    except Exception as _cc_err:  # noqa: BLE001
+        log.warning("concern_context: %s resolve failed chat_id=%s err=%s", slash, chat_id, _cc_err)
+
+    log.info(
+        "Incident group: %s declared by OM duty chat_id=%s user_tail=%s concern=%r",
+        slash,
+        chat_id,
+        (user_id or "")[-8:],
+        (concern or "")[:160],
+    )
+    start_p0(
+        chat_id,
+        token,
+        user_id,
+        priority=priority,
+        source_chat_name=source_chat_name,
+        trigger_lark_user_id=sender_lark_user_id,
+        declaration_text=concern,
+        via_command=True,
     )
 
 
@@ -1287,6 +1403,28 @@ def process_message(
                     log.warning("incident group help card failed HTTP=%s body=%s", st, (body or "")[:300])
             return
 
+        # /p0 and /p1 — the ONLY commands that create a meeting. Checked before every keyword
+        # heuristic so a declaration is a deliberate, unambiguous act instead of a phrase the AI
+        # had to judge. Everything else (prose "p0", Issue Watch, card confirms) now only notifies.
+        if is_detection and get_p0_command_declare_enabled():
+            _cmd_pri = parse_p0_declare_command(
+                _strip_leading_mentions(text_raw, mention_names).strip()
+            )
+            if _cmd_pri:
+                _handle_p0_declare_command(
+                    priority=_cmd_pri,
+                    chat_id=chat_id,
+                    notify_chat=notify_chat,
+                    token=token,
+                    user_id=user_id,
+                    sender_lark_user_id=sender_lark_user_id,
+                    source_chat_name=source_chat_name,
+                    text_raw=text_raw,
+                    message_id=message_id,
+                    message_create_time=message_create_time,
+                )
+                return
+
         # Ring commands page duty/escalation into the already-active meeting. They REQUIRE a leading
         # slash (/m /e /fe /fpms /pms /scpms /sfpms …); @mentioning the bot alone is NOT enough, so a
         # bare "sfpms" / stray letter in normal chat (even with @bot) can never page. Checked before
@@ -1606,10 +1744,13 @@ def process_message(
             # When Issue Watch is on, only *explicit* P0 declarations start a meeting — player
             # reports (incl. Lark footer ``Message p0 detection dev``) go to Issue Watch DM first.
             _p0_kw_hit = (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text)
+            # Command-only mode: an explicit "we declare this as p0" is no longer special — it goes
+            # to the duty DM + buzz like any other mention. Only /p0 creates.
+            _command_only = get_p0_command_only_declare()
             _p0_skip_for_issue_watch = (
                 _p0_kw_hit
                 and get_p0_issue_watch_enabled()
-                and not _is_explicit_direct_p0_declaration(kw_text)
+                and (_command_only or not _is_explicit_direct_p0_declaration(kw_text))
             )
             if _p0_skip_for_issue_watch:
                 log.info(
@@ -1629,6 +1770,25 @@ def process_message(
                     text_raw=text_raw,
                     message_id=message_id,
                 )
+            if _p0_kw_hit and _command_only and not _p0_skip_for_issue_watch:
+                # Command-only with Issue Watch off — nothing downstream would page anyone, and the
+                # creation path below is refused at start_p0 anyway. Notify duty and stop here so the
+                # group does not get a "use /p0" reply on every mention.
+                log.info(
+                    "Incident group: P0 keyword notify-only (P0_COMMAND_ONLY_DECLARE) chat_id=%s text_head=%r",
+                    chat_id,
+                    (text_raw or "")[:120],
+                )
+                _maybe_p0_keyword_confirm_dm(
+                    chat_id=chat_id,
+                    token=token,
+                    user_id=user_id,
+                    sender_lark_user_id=sender_lark_user_id,
+                    source_chat_name=source_chat_name,
+                    text_raw=text_raw,
+                    message_id=message_id,
+                )
+                return
             if _p0_kw_hit and not _p0_skip_for_issue_watch:
                 if _is_manual_p0_incident_overview_template(text_raw):
                     log.info(

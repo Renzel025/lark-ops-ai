@@ -1500,6 +1500,98 @@ def get_p0_keyword_confirm_dm_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+_P0_DECLARE_COMMAND_RE = re.compile(r"(?i)^\s*/(p0|p1)\s*$")
+
+
+def parse_p0_declare_command(text: str) -> str:
+    """
+    Parse the only command that may create a meeting: exactly ``/p0`` or ``/p1``.
+
+    Returns ``"P0"`` / ``"P1"`` / ``""``. Nothing may follow the command — "/p0 asap" is not a
+    command. Strip @mentions before calling; the slash is mandatory so prose can never match.
+    """
+    m = _P0_DECLARE_COMMAND_RE.match(text or "")
+    return m.group(1).upper() if m else ""
+
+
+def get_p0_command_declare_enabled() -> bool:
+    """``P0_COMMAND_DECLARE_ENABLED`` — the ``/p0`` / ``/p1`` group commands (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_COMMAND_DECLARE_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_command_only_declare() -> bool:
+    """
+    ``P0_COMMAND_ONLY_DECLARE`` — when on (**default**), ``/p0`` and ``/p1`` are the ONLY way a
+    meeting is created. Keyword prose ("we declare this as p0"), the Issue Watch declare button and
+    the P0/P1 card confirmations all stop short of ``start_p0`` and only notify + buzz duty.
+
+    Set to ``0`` to restore the old keyword auto-declare behaviour.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_COMMAND_ONLY_DECLARE") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_command_open_ids() -> List[str]:
+    """
+    Open ids allowed to run ``/p0`` / ``/p1`` — ``P0_COMMAND_OPEN_IDS``, falling back to the OM duty
+    DM list (``P0_DM_INSTRUCTION_OPEN_IDS``).
+
+    An empty result means **no allowlist resolved**; callers let the command through rather than
+    bricking declaration entirely on a misconfigured ``.env``.
+    """
+    reload_env_runtime()
+    raw = (os.getenv("P0_COMMAND_OPEN_IDS") or "").strip()
+    if raw:
+        return [x.strip() for x in re.split(r"[,\s]+", raw) if x.strip()]
+    return [x for x in (get_dm_instruction_open_ids() or []) if x]
+
+
+def get_p0_keyword_confirm_buttons_enabled() -> bool:
+    """
+    ``P0_KEYWORD_CONFIRM_BUTTONS_ENABLED`` — Yes/No buttons on the "P0 mentioned" duty DM.
+
+    **Default ``0`` (off)**: the DM is a pure notification (plus buzz) and duty declares by typing
+    ``p0`` in the detection group. Set to ``1`` to bring the one-click create/dismiss buttons back.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_CONFIRM_BUTTONS_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p1_confirm_buttons_enabled() -> bool:
+    """
+    ``P1_CONFIRM_BUTTONS_ENABLED`` — Create meeting / Don't need buttons on the "P1 mentioned" card.
+
+    **Default ``0`` (off)**: the card only announces that P1 was mentioned and buzzes duty. Typing
+    ``create meeting`` / ``yes`` in the chat still starts the VC, so no path is lost.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P1_CONFIRM_BUTTONS_ENABLED") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_keyword_buzz_enabled() -> bool:
+    """``P0_KEYWORD_BUZZ_ENABLED`` — Lark 加急 (buzz) duty on the P0/P1 keyword card (default on)."""
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_BUZZ_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def get_p0_keyword_lark_urgent_mode() -> str:
+    """
+    Buzz mode for the P0/P1 keyword card: ``app`` | ``phone`` | ``sms`` | ``off``.
+    Falls back to ``P0_ONGOING_LARK_URGENT_MODE`` when unset.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_KEYWORD_LARK_URGENT_MODE") or "").strip().lower()
+    if v:
+        return v if v in ("app", "phone", "sms", "off") else "app"
+    return get_p0_ongoing_lark_urgent_mode()
+
+
 def get_p0_keyword_ai_triage() -> bool:
     """
     ``P0_KEYWORD_AI_TRIAGE`` — when ``1`` (default) and an AI key is set (``ANTHROPIC_API_KEY``,
@@ -3093,9 +3185,14 @@ def get_p0_issue_watch_lark_urgent_mode() -> str:
 
 
 def get_p0_issue_watch_declare_p0_enabled() -> bool:
-    """``P0_ISSUE_WATCH_DECLARE_P0_ENABLED`` — DM alert buttons to declare P0 from duty (default on)."""
+    """
+    ``P0_ISSUE_WATCH_DECLARE_P0_ENABLED`` — Declare as P0 / Not now buttons on the Major-P0 alert DM.
+
+    **Default ``0`` (off)**: the alert only reports the detection and buzzes duty, who declares by
+    typing ``p0`` in the detection group. Set to ``1`` to restore one-click declare from the DM.
+    """
     reload_env_runtime()
-    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_P0_ENABLED") or "1").strip().lower()
+    v = (os.getenv("P0_ISSUE_WATCH_DECLARE_P0_ENABLED") or "0").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 

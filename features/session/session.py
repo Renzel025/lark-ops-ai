@@ -1830,8 +1830,34 @@ def consume_p1_prompt_for_confirm(chat_id: str, nonce_from_button: str = "") -> 
         return dict(p)
 
 
+def _p1_buzz_duty(token: str, message_id: str, open_ids: List[str]) -> int:
+    """Lark 加急 the P1 card for duty. The card has no buttons by default, so the buzz is the page."""
+    mid = (message_id or "").strip()
+    ids = [x for x in (open_ids or []) if x]
+    if not mid or not ids:
+        return 0
+    if not _config.get_p0_keyword_buzz_enabled():
+        return 0
+    mode = _config.get_p0_keyword_lark_urgent_mode()
+    if mode == "off":
+        return 0
+    done = 0
+    for oid in ids:
+        ok, detail = _lark.urgent_message_for_users(token, mid, [oid], mode=mode)
+        if ok:
+            done += 1
+        else:
+            log.warning(
+                "P1 buzz urgent_%s failed oid_tail=%s detail=%s (enable im:message.urgent on the bot app?)",
+                mode,
+                oid[-8:] if len(oid) > 8 else oid,
+                (detail or "")[:300],
+            )
+    return done
+
+
 def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: str) -> bool:
-    """Post Yes/No card in the same chat as meeting cards (``get_session_meeting_card_post_chat_id``)."""
+    """Post the "P1 mentioned" card in the same chat as meeting cards (``get_session_meeting_card_post_chat_id``)."""
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
     if not chat_id or not token:
@@ -1848,16 +1874,19 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
         recipients = [x for x in (_config.get_dm_instruction_open_ids() or []) if x]
         if recipients:
             ok_any = False
+            buzzed = 0
             for oid in recipients:
-                st, body, _mid = _lark.post_card_to_open_id(oid, token, card)
+                st, body, mid = _lark.post_card_to_open_id(oid, token, card)
                 if st == 200:
                     ok_any = True
+                    buzzed += _p1_buzz_duty(token, mid, [oid])
                 else:
                     log.warning(
                         "request_p1_meeting_confirmation DM failed oid_tail=%s HTTP=%s body=%s",
                         oid[-8:] if len(oid) > 8 else oid, st, (body or "")[:300],
                     )
             if ok_any:
+                log.info("request_p1_meeting_confirmation: DM sent=%s buzzed=%s", len(recipients), buzzed)
                 return True
             log.warning("request_p1_meeting_confirmation: all DM posts failed — falling back to group post")
         else:
@@ -1866,10 +1895,14 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
                 "is empty — posting the P1 prompt to the group instead"
             )
     prompt_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
-    st, body, _ = _lark.post_card_to_chat(prompt_chat, token, card)
+    st, body, mid = _lark.post_card_to_chat(prompt_chat, token, card)
     if st != 200:
         log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
+    # Group post: buzz duty on that card so a "p1" in a busy group still reaches them. Lark only
+    # buzzes users who are members of the chat — a non-member duty just logs a warning.
+    buzzed = _p1_buzz_duty(token, mid, [x for x in (_config.get_dm_instruction_open_ids() or []) if x])
+    log.info("request_p1_meeting_confirmation: group card posted chat_id=%s buzzed=%s", prompt_chat, buzzed)
     return True
 
 
@@ -2208,6 +2241,7 @@ def start_p0(
     issue_watch_alert_key: str = "",
     announce_declaration: bool = False,
     declaration_text: str = "",
+    via_command: bool = False,
 ) -> None:
     """
     Create a new P0/P1 VC meeting session.
@@ -2218,6 +2252,11 @@ def start_p0(
     production incident groups (e.g. when someone re-pastes an overview template).
     Explicit user actions (P0 thread confirm, P1 confirm Yes) should leave this
     False so users get a clear reason why nothing happened.
+
+    ``via_command`` — set ONLY by the ``/p0`` / ``/p1`` group commands. Under
+    ``P0_COMMAND_ONLY_DECLARE`` (default on) every other caller is refused here, which is what makes
+    "the only way to create a meeting is /p0 or /p1" true at one choke point instead of at each of
+    the five call sites that can reach this function.
     """
     from . import participants as _participants
 
@@ -2227,6 +2266,21 @@ def start_p0(
     trigger_lark_user_id = (trigger_lark_user_id or "").strip()
     priority = (priority or "P0").strip().upper()
     if not chat_id:
+        return
+    if _config.get_p0_command_only_declare() and not via_command:
+        log.info(
+            "start_p0 refused: P0_COMMAND_ONLY_DECLARE is on — %s must be declared with /p0 or /p1 "
+            "chat_id=%s trigger_tail=%s",
+            priority,
+            chat_id,
+            trigger_open_id[-8:] if len(trigger_open_id) > 8 else trigger_open_id,
+        )
+        if not silent_when_blocked and token:
+            _lark.post_text_to_chat(
+                _config.get_session_meeting_card_post_chat_id(chat_id),
+                token,
+                "ℹ️ Meetings are created with **/p0** or **/p1** only. Type the command in this group.",
+            )
         return
     # Multi-meeting mode: every declaration creates its own coexisting VC + session (keyed per
     # meeting). When off, classic one-meeting-per-group behaviour (guards + cooldown apply).
