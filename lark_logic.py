@@ -312,18 +312,19 @@ def _handle_p0_declare_command(
         log.info("Incident group: %s skipped (duplicate Lark delivery) chat_id=%s", slash, chat_id)
         return
 
-    # Concern for the auto-overview: the text typed after the command wins; otherwise fall back to
-    # the reply-parent / AI-pick / most-recent resolution, so "/p0" as a reply to the report works.
+    # Concern for the auto-overview — UNCHANGED from the old typed-"p0" path: always resolve from the
+    # issues above (reply-parent, then AI-pick, then most-recent). Anything typed after the command
+    # is passed as the declaration text, so it is appended only when it adds detail, never a
+    # replacement for the report the group was already discussing.
     concern = (reason or "").strip()
-    if not concern:
-        try:
-            from features.overview import concern_context as _concern_ctx
+    try:
+        from features.overview import concern_context as _concern_ctx
 
-            concern = _concern_ctx.resolve_declaration_concern(
-                chat_id, decl_message_id=message_id, decl_text=""
-            )
-        except Exception as _cc_err:  # noqa: BLE001
-            log.warning("concern_context: %s resolve failed chat_id=%s err=%s", slash, chat_id, _cc_err)
+        concern = _concern_ctx.resolve_declaration_concern(
+            chat_id, decl_message_id=message_id, decl_text=reason
+        ) or concern
+    except Exception as _cc_err:  # noqa: BLE001
+        log.warning("concern_context: %s resolve failed chat_id=%s err=%s", slash, chat_id, _cc_err)
 
     log.info(
         "Incident group: %s declared by OM duty chat_id=%s user_tail=%s concern=%r",

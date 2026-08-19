@@ -1115,8 +1115,9 @@ def _help_commands_md() -> str:
         "Declare — OM duty only, in the incident group\n"
         '• type "/p0" — declare a P0 and open the meeting\n'
         '• type "/p1" — declare a P1 and open the meeting\n'
-        '• add a reason after it: "/p0 deposit failing for 6 players"\n'
-        '• or reply "/p0" to the report itself — the overview is built from that message\n'
+        "  The overview is still built from the issues discussed above, same as before.\n"
+        '• reply "/p0" to a specific report to pin the overview to that message\n'
+        '• "/p0 <note>" — the note is added to the overview, it does not replace it\n'
         "  Nothing else creates a meeting: a plain \"p0\" in chat only notifies + buzzes duty.\n\n"
         "Typed in the incident group\n"
         '• type "end meeting" / "em" / "pe" — end the active meeting\n'
