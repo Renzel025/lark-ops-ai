@@ -3529,6 +3529,20 @@ def get_p0_vc_oauth_redirect_uri() -> str:
     return (os.getenv("P0_VC_OAUTH_REDIRECT_URI") or "").strip()
 
 
+def get_p0_vc_oauth_reprompt_cooldown_min() -> int:
+    """
+    ``P0_VC_OAUTH_REPROMPT_COOLDOWN_MIN`` — minutes between "please re-authorize" DMs to the same
+    person (default 30). Anti-spam only: ring failures re-check on every retry/join, and without a
+    cooldown a stuck expired token would DM the same duty member on every one of those attempts.
+    """
+    reload_env_runtime()
+    try:
+        v = int((os.getenv("P0_VC_OAUTH_REPROMPT_COOLDOWN_MIN") or "30").strip())
+    except Exception:
+        v = 30
+    return max(1, v)
+
+
 def get_p0_vc_oauth_scope() -> str:
     """
     ``P0_VC_OAUTH_SCOPE`` — Lark user OAuth scopes for VC ring + recording fan-out.

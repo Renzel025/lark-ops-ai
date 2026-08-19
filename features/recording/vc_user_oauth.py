@@ -78,6 +78,30 @@ def has_user_token(open_id: str) -> bool:
     return bool((row or {}).get("refresh_token") or (row or {}).get("access_token"))
 
 
+def recently_prompted_for_oauth(open_id: str) -> bool:
+    """True if we already DM'd this person a re-authorize link within the cooldown window.
+
+    Anti-spam only — NOT a proxy for "has a valid token" (that used to be ``has_user_token``,
+    which checks mere on-disk PRESENCE and stays true forever once someone authorized once, even
+    after their refresh token expires — silently suppressing every future re-auth prompt).
+    """
+    row = load_user_token_row(open_id) or {}
+    last = int(row.get("last_oauth_prompt_ts") or 0)
+    if not last:
+        return False
+    cooldown_sec = _config.get_p0_vc_oauth_reprompt_cooldown_min() * 60
+    return (time.time() - last) < cooldown_sec
+
+
+def note_oauth_prompted(open_id: str) -> None:
+    oid = (open_id or "").strip()
+    if not oid:
+        return
+    row = load_user_token_row(oid) or {}
+    row["last_oauth_prompt_ts"] = int(time.time())
+    _save_user_token_row(oid, row)
+
+
 def _oauth_scope_with_offline(scope: str) -> str:
     parts = [p.strip() for p in (scope or "").split() if p.strip()]
     if "offline_access" not in parts:
@@ -560,7 +584,12 @@ def get_user_access_token(open_id: str, *, force_refresh: bool = False) -> str:
                 _save_user_token_row(oid, row)
                 log.info("vc_user_oauth: refreshed open_id_tail=%s", oid[-8:])
             return access
-        return access
+        # Every base failed to refresh — ``access`` here is the token that just failed the
+        # ``expires_at > now`` check above, so handing it back guarantees a 401 at the caller
+        # instead of the re-auth prompt. Report "no token" so the caller detects this and DMs
+        # the user to re-authorize (see ``maybe_prompt_oauth_dm``).
+        log.warning("vc_user_oauth: refresh exhausted all bases open_id_tail=%s — treating as unauthorized", oid[-8:])
+        return ""
     except Exception as e:
         log.warning("vc_user_oauth: refresh exception open_id_tail=%s err=%s", oid[-8:], e)
-        return access
+        return ""
