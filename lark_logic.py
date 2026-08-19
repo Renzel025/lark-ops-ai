@@ -214,12 +214,19 @@ def _send_p0_keyword_confirm_dm(
         "source_chat_name": (source_chat_name or "").strip(),
         "phrase": (phrase or "").strip()[:300],
         "concern_text": _concern_text.strip()[:1200],
+        "source_message_id": (message_id or "").strip(),
         "created_at": time.time(),
     }
     with _P0_KEYWORD_CONFIRM_LOCK:
         _p0_keyword_confirm_prune_locked()
         _P0_KEYWORD_CONFIRM_PENDING[nonce] = entry
-    card = build_p0_keyword_confirm_dm_card(nonce, entry["phrase"], entry["source_chat_name"])
+    card = build_p0_keyword_confirm_dm_card(
+        nonce,
+        entry["phrase"],
+        entry["source_chat_name"],
+        source_incident_chat_id=entry["source_incident_chat_id"],
+        source_message_id=entry["source_message_id"],
+    )
     # The card carries no buttons by default, so the buzz IS the page — without it a "p0" mention
     # would sit unread in a DM. Same 加急 path the Major-P0 alert already uses.
     buzz_on = get_p0_keyword_buzz_enabled()
@@ -2025,7 +2032,13 @@ def process_message(
                     )
                 except Exception as _cc_err:  # noqa: BLE001
                     log.warning("concern_context: P1 resolve failed chat_id=%s err=%s", chat_id, _cc_err)
-                set_p1_prompt_pending(chat_id, user_id, declaration_text=_p1_concern)
+                set_p1_prompt_pending(
+                    chat_id,
+                    user_id,
+                    declaration_text=_p1_concern,
+                    phrase=text_raw,
+                    source_message_id=message_id,
+                )
                 if not request_p1_meeting_confirmation(chat_id, token, user_id):
                     pop_p1_prompt_pending(chat_id)
                     log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)

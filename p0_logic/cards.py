@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from . import config as _config
 from . import groq_client as _groq
+from . import lark_client as _lark
 from features.session import session as _session
 from . import text_processing as _text
 
@@ -774,7 +775,13 @@ def build_meeting_cancelled_card(
     }
 
 
-def build_p1_meeting_confirm_card(confirm_nonce: str, source_chat_id: str = "") -> Dict[str, Any]:
+def build_p1_meeting_confirm_card(
+    confirm_nonce: str,
+    source_chat_id: str = "",
+    phrase: str = "",
+    source_chat_name: str = "",
+    source_message_id: str = "",
+) -> Dict[str, Any]:
     """Shown when someone says P1 — **Create meeting** or **Don't need** (typed ``create meeting`` still works)."""
     nonce = (confirm_nonce or "").strip()
     src = (source_chat_id or "").strip()
@@ -787,42 +794,56 @@ def build_p1_meeting_confirm_card(confirm_nonce: str, source_chat_id: str = "") 
         # Carried so a click from a DM (P0_P1_CONFIRM_DM) still resolves the source incident group.
         val_yes["source_chat_id"] = src
         val_no["source_chat_id"] = src
+    grp = (source_chat_name or "").strip() or "an incident group"
+    quoted = (phrase or "").strip()
+    if len(quoted) > 300:
+        quoted = quoted[:300] + "…"
+    msg_link = _lark.build_message_open_applink(src, source_message_id)
+    body_lines = ["**P1 is being mentioned** in **{}**.".format(grp)]
+    if quoted:
+        body_lines.append("> {}".format(quoted.replace("\n", " ")))
     # Buttons off (default): the card just announces the detection and duty gets buzzed. Typing
     # "create meeting" / "yes" still starts the VC — see P1_CONFIRM_BUTTONS_ENABLED.
     if not _config.get_p1_confirm_buttons_enabled():
+        body_lines.append("Type **/p1** in that group if a Lark video meeting is needed.")
+        elements: List[Dict[str, Any]] = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+        ]
+        if msg_link:
+            elements.append(
+                _button_open_url(
+                    content="Open source message",
+                    url=msg_link,
+                    button_type="default",
+                    element_id="open_src_msg",
+                )
+            )
         return {
             "schema": "2.0",
             "config": {"enable_forward": True},
             "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
-            "body": {
-                "elements": [
-                    {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": (
-                                "P1 was mentioned in this chat. "
-                                "Type **/p1** if a Lark video meeting is needed."
-                            ),
-                        },
-                    },
-                ]
-            },
+            "body": {"elements": elements},
         }
+    body_lines.append("Do you want to create a Lark video meeting now?")
+    elements = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+    ]
+    if msg_link:
+        elements.append(
+            _button_open_url(
+                content="Open source message",
+                url=msg_link,
+                button_type="default",
+                element_id="open_src_msg",
+            )
+        )
+    elements.append({"tag": "hr"})
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
         "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
         "body": {
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": "P1 was mentioned in this chat. Do you want to create a Lark video meeting now?",
-                    },
-                },
-                {"tag": "hr"},
+            "elements": elements + [
                 {
                     "tag": "column_set",
                     "flex_mode": "none",
@@ -866,6 +887,8 @@ def build_p0_keyword_confirm_dm_card(
     nonce: str,
     phrase: str,
     source_chat_name: str = "",
+    source_incident_chat_id: str = "",
+    source_message_id: str = "",
 ) -> Dict[str, Any]:
     """
     DM'd to duty when a group ``p0`` mention was NOT auto-declared (AI/Groq said not a fresh
@@ -887,12 +910,25 @@ def build_p0_keyword_confirm_dm_card(
     ]
     if quoted:
         body_lines.append("> {}".format(quoted.replace("\n", " ")))
+    msg_link = _lark.build_message_open_applink(source_incident_chat_id, source_message_id)
     # Buttons off (default): notify-only. Duty declares by typing p0 in the detection group, so the
     # card never creates a meeting on a stray tap — see P0_KEYWORD_CONFIRM_BUTTONS_ENABLED.
     if not _config.get_p0_keyword_confirm_buttons_enabled():
         body_lines.append(
             "The bot did not auto-declare this. Type **/p0** in that group if a bridge meeting is needed."
         )
+        elements: List[Dict[str, Any]] = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+        ]
+        if msg_link:
+            elements.append(
+                _button_open_url(
+                    content="Open source message",
+                    url=msg_link,
+                    button_type="default",
+                    element_id="open_src_msg",
+                )
+            )
         return {
             "schema": "2.0",
             "config": {"enable_forward": True, "update_multi": True},
@@ -900,13 +936,22 @@ def build_p0_keyword_confirm_dm_card(
                 "template": "orange",
                 "title": {"tag": "plain_text", "content": "⚠️ P0 mentioned"},
             },
-            "body": {
-                "elements": [
-                    {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
-                ]
-            },
+            "body": {"elements": elements},
         }
     body_lines.append("The bot did not auto-declare this. Create a P0 meeting?")
+    elements = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
+    ]
+    if msg_link:
+        elements.append(
+            _button_open_url(
+                content="Open source message",
+                url=msg_link,
+                button_type="default",
+                element_id="open_src_msg",
+            )
+        )
+    elements.append({"tag": "hr"})
     return {
         "schema": "2.0",
         "config": {"enable_forward": True, "update_multi": True},
@@ -915,9 +960,7 @@ def build_p0_keyword_confirm_dm_card(
             "title": {"tag": "plain_text", "content": "⚠️ P0 mentioned — create meeting?"},
         },
         "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
-                {"tag": "hr"},
+            "elements": elements + [
                 {
                     "tag": "column_set",
                     "flex_mode": "none",

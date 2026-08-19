@@ -1773,12 +1773,22 @@ def get_p1_prompt_pending(chat_id: str) -> Optional[Dict[str, Any]]:
         return dict(p) if p else None
 
 
-def set_p1_prompt_pending(chat_id: str, trigger_open_id: str, declaration_text: str = "") -> str:
+def set_p1_prompt_pending(
+    chat_id: str,
+    trigger_open_id: str,
+    declaration_text: str = "",
+    phrase: str = "",
+    source_message_id: str = "",
+) -> str:
     """Store pending P1 meeting confirmation; returns nonce embedded in the Yes/No card buttons.
 
     ``declaration_text`` — the concern this P1 refers to, resolved at prompt time. Carried through
     the Yes click into ``start_p0`` so P1 gets the same auto-filled overview preview as P0
     (``P0_TYPED_DECLARE_AUTO_OVERVIEW``); without it the duty DM falls back to the green manual card.
+
+    ``phrase`` / ``source_message_id`` — the raw triggering text and its message id, shown on the
+    "P1 mentioned" card (quoted text + an "Open source message" link) so duty can see WHERE it was
+    detected, same as the P0 keyword confirm card.
     """
     chat_id = (chat_id or "").strip()
     trigger_open_id = (trigger_open_id or "").strip()
@@ -1791,6 +1801,8 @@ def set_p1_prompt_pending(chat_id: str, trigger_open_id: str, declaration_text: 
             "ts": int(time.time()),
             "nonce": nonce,
             "declaration_text": (declaration_text or "").strip(),
+            "phrase": (phrase or "").strip()[:300],
+            "source_message_id": (source_message_id or "").strip(),
         }
     return nonce
 
@@ -1867,7 +1879,14 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
     if not nonce:
         log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
         return False
-    card = _cards.build_p1_meeting_confirm_card(nonce, source_chat_id=chat_id)
+    chat_label = _lark.get_group_chat_name(chat_id, token)
+    card = _cards.build_p1_meeting_confirm_card(
+        nonce,
+        source_chat_id=chat_id,
+        phrase=str((pend or {}).get("phrase") or ""),
+        source_chat_name=chat_label,
+        source_message_id=str((pend or {}).get("source_message_id") or ""),
+    )
     # P0_P1_CONFIRM_DM: send the prompt to the duty DM(s) instead of the group. The buttons carry the
     # source chat id, so a click from the DM still creates/declines the P1 for this group.
     if _config.p0_p1_confirm_dm_enabled():
