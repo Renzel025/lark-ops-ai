@@ -781,13 +781,21 @@ def format_declare_reply_with_mentions(reply_text: str, ring_targets: List[str])
 
 
 def maybe_prompt_oauth_dm(operator_open_id: str, tenant_token: str) -> None:
+    """
+    DM ``operator_open_id`` a re-authorize link. Every caller reaches this only after a real
+    ``get_user_access_token`` call just found no usable token, so this function does not re-derive
+    validity — it only throttles so the same person is not DM'd on every retry/join while stuck
+    unauthorized. (Previously gated on ``has_user_token``, which checks mere on-disk PRESENCE and
+    stays true forever after the first authorization — so once someone's refresh token expired,
+    this prompt silently never fired again and the ring just failed quietly.)
+    """
     if not _config.get_p0_vc_ring_enabled():
         return
     oid = (operator_open_id or "").strip()
     tok = (tenant_token or "").strip()
     if not oid or not tok:
         return
-    if _oauth.has_user_token(oid):
+    if _oauth.recently_prompted_for_oauth(oid):
         return
     url = _oauth.build_authorize_url(oid)
     if not url:
@@ -796,10 +804,12 @@ def maybe_prompt_oauth_dm(operator_open_id: str, tenant_token: str) -> None:
     _lark.post_text_to_open_id(
         oid,
         tok,
-        "To auto-ring tagged users into the P0 VC, authorize this bot once (VC invite permission):\n"
+        "⚠️ Your P0 VC auto-invite authorization has expired or was never completed. "
+        "Re-authorize now (VC invite permission) so tagged users get rung when you join:\n"
         f"{url}\n\n"
-        "Authorize first, then join the P0 VC — tagged users will be rung when you enter.",
+        "Authorize, then join the P0 VC — tagged users will be rung when you enter.",
     )
+    _oauth.note_oauth_prompted(oid)
 
 
 def _resolve_declarer_open_id(
