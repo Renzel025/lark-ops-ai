@@ -264,7 +264,6 @@ def _send_p0_keyword_confirm_dm(
 def _handle_p0_declare_command(
     *,
     priority: str,
-    reason: str,
     chat_id: str,
     notify_chat: str,
     token: str,
@@ -312,9 +311,8 @@ def _handle_p0_declare_command(
         log.info("Incident group: %s skipped (duplicate Lark delivery) chat_id=%s", slash, chat_id)
         return
 
-    # The command is just the trigger. The overview is always built from the issues discussed above
-    # (reply-parent, then AI-pick, then most-recent) — same as the old typed "p0". Anything typed
-    # after the command is ignored here so "/p0" and "/p0 asap" produce the identical overview.
+    # The command is just the trigger. The overview is built from the issues discussed above
+    # (reply-parent, then AI-pick, then most-recent) — same as the old typed "p0".
     concern = ""
     try:
         from features.overview import concern_context as _concern_ctx
@@ -1409,13 +1407,12 @@ def process_message(
         # heuristic so a declaration is a deliberate, unambiguous act instead of a phrase the AI
         # had to judge. Everything else (prose "p0", Issue Watch, card confirms) now only notifies.
         if is_detection and get_p0_command_declare_enabled():
-            _cmd_pri, _cmd_reason = parse_p0_declare_command(
+            _cmd_pri = parse_p0_declare_command(
                 _strip_leading_mentions(text_raw, mention_names).strip()
             )
             if _cmd_pri:
                 _handle_p0_declare_command(
                     priority=_cmd_pri,
-                    reason=_cmd_reason,
                     chat_id=chat_id,
                     notify_chat=notify_chat,
                     token=token,

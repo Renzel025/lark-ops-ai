@@ -1500,20 +1500,18 @@ def get_p0_keyword_confirm_dm_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-_P0_DECLARE_COMMAND_RE = re.compile(r"(?is)^\s*/(p0|p1)\b[\s:.-]*(.*)$")
+_P0_DECLARE_COMMAND_RE = re.compile(r"(?i)^\s*/(p0|p1)\s*$")
 
 
-def parse_p0_declare_command(text: str) -> Tuple[str, str]:
+def parse_p0_declare_command(text: str) -> str:
     """
-    Parse the only command that may create a meeting: ``/p0`` / ``/p1`` (optionally with a reason).
+    Parse the only command that may create a meeting: exactly ``/p0`` or ``/p1``.
 
-    Returns ``("P0"|"P1", reason)`` or ``("", "")``. Strip @mentions before calling — a leading
-    ``@bot`` is fine, but the slash is mandatory so a bare "p0" in prose can never match.
+    Returns ``"P0"`` / ``"P1"`` / ``""``. Nothing may follow the command — "/p0 asap" is not a
+    command. Strip @mentions before calling; the slash is mandatory so prose can never match.
     """
     m = _P0_DECLARE_COMMAND_RE.match(text or "")
-    if not m:
-        return "", ""
-    return m.group(1).upper(), (m.group(2) or "").strip()
+    return m.group(1).upper() if m else ""
 
 
 def get_p0_command_declare_enabled() -> bool:
