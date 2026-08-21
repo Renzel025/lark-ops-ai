@@ -27,6 +27,29 @@ _CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claud
 _OAUTH_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _LEGACY_API_KEY_HAIKU = "claude-3-5-haiku-20241022"
 _OAUTH_AUTH_MODES = frozenset({"auth_token", "oauth_file", "bearer"})
+# Models where extended thinking runs ON by default — thinking tokens come out of the SAME
+# max_tokens budget as the answer. A tight budget (this file's classification/extraction callers
+# all ask for well under 500) can be entirely consumed by thinking, returning no text at all (see
+# the "200 but NO text" log below). None of these calls declare tools, so the documented
+# disabled-thinking pitfall (a tool call leaking into visible text) cannot occur here; capping
+# spend via low effort — rather than disabling thinking outright — avoids the OTHER documented
+# pitfall (stray <thinking> tag leakage into the response).
+_THINKING_ON_BY_DEFAULT_PREFIXES = (
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+)
+# Classification/extraction floor — every caller here asks for a short, deterministic answer
+# (a bracket number, one sentence, a few fields), never open-ended prose.
+_MIN_MAX_TOKENS = 256
+
+
+def _apply_low_effort_if_supported(payload: dict, model: str) -> None:
+    if (model or "").strip().startswith(_THINKING_ON_BY_DEFAULT_PREFIXES):
+        payload["output_config"] = {"effort": "low"}
 
 
 def _api_key() -> str:
@@ -151,10 +174,11 @@ def anthropic_chat_once(
         headers = _apply_oauth_headers(headers)
     payload = {
         "model": _effective_model(auth_mode, model),
-        "max_tokens": max(64, min(int(max_tokens), 4096)),
+        "max_tokens": max(_MIN_MAX_TOKENS, min(int(max_tokens), 4096)),
         "system": system,
         "messages": [{"role": "user", "content": user_text}],
     }
+    _apply_low_effort_if_supported(payload, payload["model"])
     log.info("anthropic_chat_once: model=%s auth=%s", payload["model"], auth_mode)
     try:
         resp = requests.post(
@@ -283,6 +307,7 @@ def anthropic_vision_ocr(image_bytes: bytes, *, model: Optional[str] = None) -> 
             }
         ],
     }
+    _apply_low_effort_if_supported(payload, payload["model"])
     log.info("anthropic_vision_ocr: model=%s auth=%s bytes=%s", payload["model"], auth_mode, len(image_bytes))
     try:
         resp = requests.post(ANTHROPIC_MESSAGES_URL, headers=headers, json=payload, timeout=_config.REQ_TIMEOUT)
