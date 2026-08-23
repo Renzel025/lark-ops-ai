@@ -606,6 +606,38 @@ def _draft_priority_for_preview(draft: Dict[str, Any], target_chat: str) -> str:
     return pr if pr in ("P0", "P1") else "P0"
 
 
+def draft_has_content(draft: Dict[str, Any]) -> bool:
+    """True if the draft has any pasted text or a screenshot with OCR text — i.e. whether
+    ``_build_preview_from_draft`` has anything to summarize at all."""
+    combined, _mentions = _compose_combined_source_text(draft or {})
+    return bool(combined)
+
+
+def build_placeholder_preview_from_empty_draft(
+    sender_open_id: str, target_chat: str, start_epoch: int, draft: Dict[str, Any]
+) -> str:
+    """
+    Auto-overview for a ``/p0``/``/p1`` declare with nothing to build a concern from — the draft was
+    seeded empty (see ``P0_TYPED_DECLARE_PLACEHOLDER_OVERVIEW_ENABLED``). Skips the AI/support-map
+    pipeline entirely (there is no text for either to read) and saves a clearly-labeled placeholder
+    preview instead — duty can still tap Edit to fill in real details.
+    """
+    prio = _draft_priority_for_preview(draft, target_chat)
+    src_inc = str((draft or {}).get("source_incident_chat_id") or "").strip()
+    return _save_preview(
+        sender_open_id=sender_open_id,
+        target_chat=target_chat,
+        start_epoch=start_epoch,
+        combined_text="",
+        mention_names=[],
+        issue="No issue is specified",
+        impact=_config.get_overview_impact_scope_default(),
+        support="Not specified",
+        priority=prio,
+        source_incident_chat_id=src_inc,
+    )
+
+
 def _build_preview_from_draft(
     sender_open_id: str, tenant_token: str, target_chat: str, start_epoch: int, draft: Dict[str, Any]
 ) -> str:

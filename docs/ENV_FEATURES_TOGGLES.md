@@ -222,6 +222,19 @@ issues discussed above, exactly as the old typed `p0` did. The gate lives in one
 `start_p0(..., via_command=True)` — so every other caller is refused at the same choke point.
 An unresolvable allowlist lets the command through rather than bricking declaration.
 
+**Declaring into an empty chat:**
+
+| Variable | ON | OFF | Default |
+|----------|----|-----|---------|
+| `P0_TYPED_DECLARE_PLACEHOLDER_OVERVIEW_ENABLED` | still auto-generate + DM a preview when there's nothing to summarize | fall back to the green manual "paste your text" card | **on** |
+
+When `/p0`/`/p1` is typed with nothing substantive in the `P0_TYPED_DECLARE_CONCERN_WINDOW_MIN`
+lookback, there's no AI call — nothing to summarize — so the preview is saved directly with fixed
+placeholders: **Issue** "No issue is specified", **Impact scope** `P0_OVERVIEW_IMPACT_SCOPE_DEFAULT`
+(default `Not specified`, commonly set to `0`), **Support request** "Not specified". Duty still gets
+a real preview card (Send to group / Generate / Edit / Cancel) and can Edit it before sending — only
+the manual instruction card is skipped, not overview generation itself.
+
 **P0/P1 keyword card — buttons & buzz:**
 
 | Variable | ON | OFF | Default |

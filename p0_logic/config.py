@@ -3134,6 +3134,20 @@ def get_p0_typed_declare_auto_overview_enabled() -> bool:
     return (os.getenv("P0_TYPED_DECLARE_AUTO_OVERVIEW") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_p0_typed_declare_placeholder_overview_enabled() -> bool:
+    """
+    ``P0_TYPED_DECLARE_PLACEHOLDER_OVERVIEW_ENABLED`` — when a ``/p0``/``/p1`` declare has NOTHING
+    to build a concern from (empty chat, nothing in the lookback window — see
+    ``P0_TYPED_DECLARE_CONCERN_WINDOW_MIN``), still auto-generate and DM a preview card instead of
+    falling back to the green "paste your text" instruction card. The card shows fixed placeholders
+    (Issue: "No issue is specified", Impact scope: ``P0_OVERVIEW_IMPACT_SCOPE_DEFAULT``, Support:
+    "Not specified") — no AI call, nothing to summarize. Duty can still Edit it. Default on.
+    """
+    reload_env_runtime()
+    v = (os.getenv("P0_TYPED_DECLARE_PLACEHOLDER_OVERVIEW_ENABLED") or "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_typed_declare_concern_ai_pick_enabled() -> bool:
     """``P0_TYPED_DECLARE_CONCERN_AI_PICK`` — when a typed "p0" is NOT a reply to a specific concern,
     let Claude pick which recent group message is the concern being declared (used to build the
