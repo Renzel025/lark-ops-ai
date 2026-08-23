@@ -925,13 +925,21 @@ def autofill_overview_preview_now(sender_open_id: str, tenant_token: str) -> boo
         return False
     _chat_id, sess = _session.find_session_by_target_chat(target_chat)
     start_epoch = int(sess.get("start_epoch") or time.time()) if sess else int(time.time())
-    try:
-        md = _drafts.build_preview_from_draft(
-            sender_open_id=oid, tenant_token=tok, target_chat=target_chat, start_epoch=start_epoch, draft=draft
-        )
-    except Exception as e:  # noqa: BLE001
-        log.warning("autofill overview: preview build failed open_id_tail=%s err=%s", oid[-8:], e)
-        return False
+    if not _drafts.draft_has_content(draft):
+        # Nothing was reported before the declare (empty concern) — there is nothing for the AI/
+        # support pipeline to read. Post a labeled placeholder instead of silently falling back to
+        # the manual card, so duty at least gets a startable overview to Edit.
+        if not _config.get_p0_typed_declare_placeholder_overview_enabled():
+            return False
+        md = _drafts.build_placeholder_preview_from_empty_draft(oid, target_chat, start_epoch, draft)
+    else:
+        try:
+            md = _drafts.build_preview_from_draft(
+                sender_open_id=oid, tenant_token=tok, target_chat=target_chat, start_epoch=start_epoch, draft=draft
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("autofill overview: preview build failed open_id_tail=%s err=%s", oid[-8:], e)
+            return False
     if not md:
         return False
     prev = _drafts.get_preview(oid) or {}
