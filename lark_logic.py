@@ -7,6 +7,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from wiki_ai_logic import handle_wiki_ai
+from p0_logic import text_processing as _text
 from p0_logic.config import (
     get_incident_group_chat_ids,
     get_p0_keyword_groq_gate,
@@ -561,53 +562,9 @@ def _text_for_priority_keyword_trigger(text: str, *, chat_label: str = "") -> st
     return _strip_lark_composer_message_footer(text, chat_label=chat_label)
 
 
-_OVERVIEW_TEMPLATE_MARKERS = (
-    "incident overview",
-    "事故概览",
-    "incident start",
-    "事故开始",
-    "impact scope",
-    "影响范围",
-    "support request",
-    "支援请求",
-    "reported time",
-    "reporter",
-    "affected players",
-    "affected user",
-)
-
-
-def _is_manual_p0_incident_overview_template(text: str) -> bool:
-    """
-    Humans often paste the bilingual **P0 Incident Overview** block (Send overview / manual share).
-    Originally we only checked the first line for ``P0 Incident Overview`` / ``P0 事故概览`` — but
-    real pastes vary (leading emoji like ``📍``, ``**`` markdown, quoted-reply prefixes, custom
-    templates with ``🕐`` instead of ``🕒``, etc.) so we use two layers:
-
-    Layer 1 — first-line title check (tolerant to leading emoji / decoration / markdown).
-    Layer 2 — multi-marker heuristic: if the body contains 2+ overview field markers
-              (``Issue / Impact Scope / Support Request / Reported Time / 事故概览 / 影响范围 / …``),
-              treat as a manual overview paste even if the title line is malformed or missing.
-
-    Either layer matching → skip the keyword trigger silently.
-    """
-    t = (text or "").strip()
-    if not t:
-        return False
-
-    first = t.split("\n")[0].strip()
-    first_clean = re.sub(r"^[^A-Za-z\u4e00-\u9fff]+", "", first).strip()
-    if first_clean:
-        if re.match(r"(?is)(?:P0|P1)\s+Incident\s+Overview\b", first_clean):
-            return True
-        if re.match(r"(?is)(?:P0|P1)\s*事故概览", first_clean):
-            return True
-
-    body_lc = t.lower()
-    marker_hits = sum(1 for m in _OVERVIEW_TEMPLATE_MARKERS if m in body_lc)
-    if marker_hits >= 2:
-        return True
-    return False
+# Moved to p0_logic/text_processing.py as is_manual_p0_incident_overview_template() — Issue Watch
+# needs the same detector and importing lark_logic.py from a features/ module would invert the
+# dependency direction (features should not reach up into the top-level router).
 
 
 # Incident keyword: message contains ``p0`` but explicitly says no / not P0 / no escalation (no Groq).
@@ -1797,7 +1754,7 @@ def process_message(
                 )
                 return
             if _p0_kw_hit and not _p0_skip_for_issue_watch:
-                if _is_manual_p0_incident_overview_template(text_raw):
+                if _text.is_manual_p0_incident_overview_template(text_raw):
                     log.info(
                         "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
                         text_raw[:200],

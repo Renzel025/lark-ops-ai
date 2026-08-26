@@ -249,3 +249,52 @@ def build_impact_scope(text: str) -> str:
         return bare_line
     # No player IDs, no count, no vague phrase — nothing about impact in the source at all.
     return _config.get_overview_impact_scope_default()
+
+
+OVERVIEW_TEMPLATE_MARKERS = (
+    "incident overview",
+    "事故概览",
+    "incident start",
+    "事故开始",
+    "impact scope",
+    "影响范围",
+    "support request",
+    "支援请求",
+    "reported time",
+    "reporter",
+    "affected players",
+    "affected user",
+)
+
+
+def is_manual_p0_incident_overview_template(text: str) -> bool:
+    """
+    True for a pasted/re-sent **P0/P1 Incident Overview** block — the bot's own overview format
+    (Send overview / manual share), whether a human pasted it or it's a reply quoting one. Shared by
+    the keyword-trigger path (skip re-declaring off a paste) and Issue Watch (skip re-detecting the
+    incident it was written to describe as a brand-new signal).
+
+    Originally we only checked the first line for ``P0 Incident Overview`` / ``P0 事故概览`` — but
+    real pastes vary (leading emoji like ``📍``, ``**`` markdown, quoted-reply prefixes, custom
+    templates with ``🕐`` instead of ``🕒``, etc.) so we use two layers:
+
+    Layer 1 — first-line title check (tolerant to leading emoji / decoration / markdown).
+    Layer 2 — multi-marker heuristic: if the body contains 2+ overview field markers
+              (``Issue / Impact Scope / Support Request / Reported Time / 事故概览 / 影响范围 / …``),
+              treat as a manual overview paste even if the title line is malformed or missing.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+
+    first = t.split("\n")[0].strip()
+    first_clean = re.sub(r"^[^A-Za-z\u4e00-\u9fff]+", "", first).strip()
+    if first_clean:
+        if re.match(r"(?is)(?:P0|P1)\s+Incident\s+Overview\b", first_clean):
+            return True
+        if re.match(r"(?is)(?:P0|P1)\s*事故概览", first_clean):
+            return True
+
+    body_lc = t.lower()
+    marker_hits = sum(1 for m in OVERVIEW_TEMPLATE_MARKERS if m in body_lc)
+    return marker_hits >= 2

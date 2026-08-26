@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from p0_logic import cards as _cards
 from p0_logic import config as _config
 from p0_logic import lark_client as _lark
+from p0_logic import text_processing as _text
 from . import issue_watch_mute as _mute
 from .issue_watch_ai import classify_issue_watch_message, extract_player_ids, is_maintenance_or_test_message
 
@@ -269,6 +270,11 @@ def _should_skip_noise(text: str) -> bool:
     t = (text or "").strip()
     if _is_player_id_list_message(t):
         return False
+    # A pasted/re-sent P0/P1 Incident Overview IS the summary of an incident already declared —
+    # evaluating it as fresh chatter re-detects the same incident and fires a second Major P0
+    # Detection alert on top of the overview that already covers it.
+    if _text.is_manual_p0_incident_overview_template(t):
+        return True
     if is_maintenance_or_test_message(t):
         return True
     if len(t) < _config.get_p0_issue_watch_min_text_len():
