@@ -142,6 +142,7 @@ alerting, wherever the command was typed. `/on` brings them all back. The state 
 | Variable | ON | OFF | Default |
 |----------|----|-----|---------|
 | `P0_GRAPH_SCREENSHOT_ENABLED` | on | off | **off** |
+| `P0_GRAPH_SCREENSHOT_ON_P1` | also auto-capture (initial + repeat interval) on a **P1** declare | P0 only | **off** |
 | `P0_GRAPH_SCREENSHOT_ON_DEMAND` | on | off | **on** |
 | `P0_GRAPH_SCREENSHOT_AI` | on | off | **on** |
 

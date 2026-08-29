@@ -261,11 +261,23 @@ def _effective_fast_capture() -> bool:
     return _config.get_p0_graph_screenshot_fast_capture()
 
 
-def _has_active_p0_session() -> bool:
+def _priority_screenshot_eligible(priority: str) -> bool:
+    """P0 always qualifies; P1 only when P0_GRAPH_SCREENSHOT_ON_P1 is on."""
+    from p0_logic import config as _config
+
+    pri = (priority or "").strip().upper()
+    if pri == "P0":
+        return True
+    if pri == "P1":
+        return _config.get_p0_graph_screenshot_on_p1_enabled()
+    return False
+
+
+def _has_screenshot_eligible_session() -> bool:
     from features.session.session import P0_SESSIONS
 
     for sess in P0_SESSIONS.values():
-        if str(sess.get("priority") or "").strip().upper() == "P0":
+        if _priority_screenshot_eligible(str(sess.get("priority") or "")):
             return True
     return False
 
@@ -302,8 +314,8 @@ def _graph_screenshot_interval_tick() -> None:
         mins = _config.get_p0_graph_screenshot_interval_min()
         if mins <= 0:
             return
-        if not _has_active_p0_session():
-            log.info("p0 graph screenshot interval: no active P0 — stopped")
+        if not _has_screenshot_eligible_session():
+            log.info("p0 graph screenshot interval: no screenshot-eligible session — stopped")
             return
         chat_id = _config.get_p0_graph_screenshot_target_chat_id()
         if not _config.get_p0_graph_screenshot_url() or not chat_id:
@@ -331,7 +343,7 @@ def _graph_screenshot_interval_tick() -> None:
         if (
             _config.p0_graph_screenshot_enabled()
             and _config.get_p0_graph_screenshot_interval_min() > 0
-            and _has_active_p0_session()
+            and _has_screenshot_eligible_session()
         ):
             delay = float(_config.get_p0_graph_screenshot_interval_min()) * 60.0
             _schedule_graph_screenshot_interval_tick(delay)
@@ -356,11 +368,11 @@ def start_p0_graph_screenshot_interval(source_chat_label: str) -> None:
 
 
 def on_p0_session_ended_for_graph_screenshot() -> None:
-    """Call when a P0/P1 session ends; stops the repeat timer if no P0 remains."""
-    if _has_active_p0_session():
+    """Call when a P0/P1 session ends; stops the repeat timer if no screenshot-eligible session remains."""
+    if _has_screenshot_eligible_session():
         return
     _stop_graph_screenshot_interval()
-    log.info("p0 graph screenshot interval: stopped (no active P0)")
+    log.info("p0 graph screenshot interval: stopped (no screenshot-eligible session)")
 
 
 def _apply_kiosk_to_grafana_url(url: str, enable: bool, *, hide_time_picker: bool = True) -> str:
@@ -3011,16 +3023,21 @@ def schedule_on_demand_graph_screenshot(
 def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
     """
     Non-blocking: captures Grafana for each auto range (default **6h** only) and posts to
-    ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Only runs for **P0** when env is enabled.
+    ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Runs for **P0** always; for **P1** only when
+    ``P0_GRAPH_SCREENSHOT_ON_P1`` is on.
 
     If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
-    until no **P0** session remains (see ``on_p0_session_ended_for_graph_screenshot``).
+    until no screenshot-eligible session remains (see ``on_p0_session_ended_for_graph_screenshot``).
     """
     from p0_logic import config as _config
 
     pri = (priority or "").strip().upper()
-    if pri != "P0":
-        log.debug("p0 graph screenshot: skipped — priority=%s (P0 only)", pri or "?")
+    if not _priority_screenshot_eligible(pri):
+        log.info(
+            "p0 graph screenshot: skipped — priority=%s not eligible "
+            "(P0 always; P1 needs P0_GRAPH_SCREENSHOT_ON_P1=1)",
+            pri or "?",
+        )
         return
     if not _config.p0_graph_screenshot_enabled():
         log.info("p0 graph screenshot: skipped — set P0_GRAPH_SCREENSHOT_ENABLED=1")

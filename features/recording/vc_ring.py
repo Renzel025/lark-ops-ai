@@ -801,7 +801,7 @@ def maybe_prompt_oauth_dm(operator_open_id: str, tenant_token: str) -> None:
     if not url:
         log.warning("vc_ring: OAuth URL not configured — set P0_VC_OAUTH_REDIRECT_URI + public base")
         return
-    _lark.post_text_to_open_id(
+    st, body = _lark.post_text_to_open_id(
         oid,
         tok,
         "⚠️ Your P0 VC auto-invite authorization has expired or was never completed. "
@@ -809,6 +809,16 @@ def maybe_prompt_oauth_dm(operator_open_id: str, tenant_token: str) -> None:
         f"{url}\n\n"
         "Authorize, then join the P0 VC — tagged users will be rung when you enter.",
     )
+    if st == 200:
+        log.info("vc_ring: re-authorize DM sent inviter_tail=%s", oid[-8:])
+    else:
+        log.warning(
+            "vc_ring: re-authorize DM FAILED to send inviter_tail=%s HTTP=%s body=%s",
+            oid[-8:], st, (body or "")[:300],
+        )
+    # Cooldown starts even on a failed send — a hard Lark-side failure (e.g. bot blocked) would
+    # otherwise retry every single ring attempt. A real fix there needs a human anyway; this just
+    # keeps the log from being spammed identically to the successful case.
     _oauth.note_oauth_prompted(oid)
 
 
