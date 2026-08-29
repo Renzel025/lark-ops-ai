@@ -1870,6 +1870,15 @@ def p0_graph_screenshot_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def get_p0_graph_screenshot_on_p1_enabled() -> bool:
+    """``P0_GRAPH_SCREENSHOT_ON_P1`` — also auto-capture Grafana (initial + repeat interval) when
+    the declaration is a **P1**. Default **off** — screenshots are P0-only unless set. P0 is
+    unaffected either way."""
+    reload_env_runtime()
+    v = (os.getenv("P0_GRAPH_SCREENSHOT_ON_P1") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def get_p0_graph_screenshot_url() -> str:
     reload_env_runtime()
     return (os.getenv("P0_GRAPH_SCREENSHOT_URL") or "").strip()
