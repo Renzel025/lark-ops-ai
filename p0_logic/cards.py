@@ -127,6 +127,30 @@ def format_duration(start_epoch: int, end_epoch: Optional[int] = None) -> str:
 MEETING_JOIN_LINK_LABEL = "join in meeting link"
 
 
+def build_meeting_topic_banner_card(emergency_topic: str = "", priority: str = "P0") -> Dict[str, Any]:
+    """
+    Group/topic name in **bold** — a plain Lark text message can't render bold at all, so this tiny
+    card exists purely to show it. Posted immediately before ``build_p0_meeting_created_text`` (which
+    keeps its own topic/created/join-label/link content unchanged); a card header title is always
+    bold in Lark's client, no markdown needed.
+
+    Deliberately header-only, no body: the "created" / "join in meeting link" text stays in the
+    plain-text message that follows, so this banner has no state to clean up on cancel/end — its
+    absence of a matching recall is not a bug, there's nothing here that would look stale.
+    """
+    prio = (priority or "P0").strip().upper()
+    topic = (emergency_topic or "").strip() or MEETING_TOPIC
+    return {
+        "schema": "2.0",
+        "config": {"enable_forward": True},
+        "header": {
+            "template": "red" if prio == "P0" else "orange",
+            "title": {"tag": "plain_text", "content": topic[:100]},
+        },
+        "body": {"elements": []},
+    }
+
+
 def build_p0_meeting_created_text(
     link: str,
     *,

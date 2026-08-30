@@ -2133,12 +2133,18 @@ def _post_meeting_link_unfurl_notice(
 ) -> str:
     """
     Option A: one plain-text message — topic, P0 created, join label, raw URL (Lark unfurl below).
-    No card, no markdown asterisks.
+    No card, no markdown asterisks — except the topic banner posted just above it, which IS a card
+    (a plain Lark text message cannot render bold at all; a card header title always is).
     """
     cid = (chat_id or "").strip()
     url = (link or "").strip()
     if not cid or not token:
         return ""
+    try:
+        banner = _cards.build_meeting_topic_banner_card(emergency_topic, priority=priority)
+        _lark.post_card_to_chat(cid, token, banner)
+    except Exception as e:  # noqa: BLE001 — best-effort, never block the notice below
+        log.warning("meeting topic banner post exception chat_id_tail=%s err=%s", cid[-12:], e)
     # First a SEPARATE standalone "We declare this issue as P0" message, then (below) the meeting
     # notice + join link as its own message. Two messages, not one combined block. Skipped for fan-out
     # / mirror groups (include_declare_reply=False) — those get the link notice only.
