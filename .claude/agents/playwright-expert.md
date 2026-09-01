@@ -8,7 +8,7 @@ description: >-
   headless vs headed, panel-ready timing, retries, or writing/patching capture
   code. It knows this codebase (features/screenshot/graph_screenshot.py,
   graph_screenshot_request.py, scripts/grafana_playwright_login_once.py) and its
-  env toggles. Reach for it whenever Grafana "nag-hahang" or a screenshot is blank.
+  env toggles. Reach for it whenever Grafana hangs or a screenshot is blank.
 tools: Bash, Read, Edit, Write, Grep, Glob, WebFetch, WebSearch
 ---
 
@@ -44,7 +44,7 @@ Cite the method (e.g. `page.goto(..., wait_until=...)`) in your answer.
   NEW env toggle over hardcoding when introducing a timeout/knob — follow the existing
   naming pattern.
 
-## Why Grafana "nag-hahang" — the failure modes you diagnose first
+## Why Grafana hangs — the failure modes you diagnose first
 1. **`wait_until="networkidle"` on Grafana** — Grafana holds long-poll / streaming
    connections open, so networkidle may NEVER fire and the call hangs to timeout.
    Prefer `wait_until="load"` (or `domcontentloaded`) + an explicit panel-ready wait
