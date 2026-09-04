@@ -1619,9 +1619,14 @@ def _send_dm_auto_invite_calling_prompt(
     except Exception as e:  # noqa: BLE001
         log.warning("DM auto-invite prompt: gate check failed open_id_tail=%s: %s", oid[-8:], e)
         return
-    # People being auto-rung (exclude the DM recipient themselves if they're on the list).
+    # People being auto-rung (exclude the DM recipient themselves, and anyone excluded for this
+    # specific detection group — see P0_VC_AUTO_INVITE_EXCLUDE_BY_GROUP).
     try:
-        auto_ids = [o for o in _config.get_p0_vc_auto_invite_open_ids() if o and o != oid]
+        _excluded = _config.get_p0_vc_auto_invite_exclude_ids_for_chat(source_incident_chat_id)
+        auto_ids = [
+            o for o in _config.get_p0_vc_auto_invite_open_ids()
+            if o and o != oid and o not in _excluded
+        ]
     except Exception:  # noqa: BLE001
         auto_ids = []
     if not auto_ids:
@@ -2373,9 +2378,10 @@ def start_p0(
         # this, if the declarer is the only configured auto-invitee the session has no ring targets
         # ("vc_ring: no ring targets"). Set P0_VC_AUTO_INVITE_INCLUDE_DECLARER=0 to skip the declarer.
         _incl_declarer = _config.get_p0_vc_auto_invite_include_declarer()
+        _excluded_for_group = _config.get_p0_vc_auto_invite_exclude_ids_for_chat(chat_id)
         _auto_invite_ids = [
             o for o in _config.get_p0_vc_auto_invite_open_ids()
-            if o and (_incl_declarer or o != trigger_open_id)
+            if o and (_incl_declarer or o != trigger_open_id) and o not in _excluded_for_group
         ]
         # P1 does not page the standing auto-invite list (P0_VC_AUTO_INVITE_ON_P1 to restore).
         # Ring targets passed in by the caller (Issue Watch mentions, /c @name) are untouched.

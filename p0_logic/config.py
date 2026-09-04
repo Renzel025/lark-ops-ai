@@ -3512,6 +3512,35 @@ def get_p0_vc_auto_invite_open_ids() -> List[str]:
     return _parse_ou_id_csv(os.getenv("P0_VC_AUTO_INVITE_OPEN_IDS") or "")
 
 
+def get_p0_vc_auto_invite_exclude_ids_for_chat(chat_id: str) -> FrozenSet[str]:
+    """
+    ``P0_VC_AUTO_INVITE_EXCLUDE_BY_GROUP`` — per-group exclusions from the fixed
+    ``P0_VC_AUTO_INVITE_OPEN_IDS`` list, so someone on the standing list can be left out for one
+    detection group's P0s while still auto-called for every other group's.
+
+    Format: one ``oc_...=ou_a,ou_b`` entry per group, entries separated by ``;``::
+
+        P0_VC_AUTO_INVITE_EXCLUDE_BY_GROUP=oc_63a5a0d9e6d11de78f5d2aee1ea37445=ou_7faefd7f7af5e4006ef74c33bab61862,ou_cc09e0ecf7e009e3399420ef58beffd9
+
+    Empty (default) = no exclusions, every group gets the full list.
+    """
+    reload_env_runtime()
+    cid = (chat_id or "").strip()
+    if not cid:
+        return frozenset()
+    raw = (os.getenv("P0_VC_AUTO_INVITE_EXCLUDE_BY_GROUP") or "").strip()
+    if not raw:
+        return frozenset()
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if "=" not in entry:
+            continue
+        key, _, ids_part = entry.partition("=")
+        if key.strip() == cid:
+            return frozenset(_parse_ou_id_csv(ids_part))
+    return frozenset()
+
+
 def get_p0_vc_ring_retry_enabled() -> bool:
     """``P0_VC_RING_RETRY_ENABLED`` — re-ring (re-invite) a rung user who has NOT joined the VC yet,
     up to ``P0_VC_RING_RETRY_MAX_ATTEMPTS`` total rings spaced ``P0_VC_RING_RETRY_INTERVAL_SEC`` apart,
