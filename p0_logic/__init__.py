@@ -35,11 +35,7 @@ find_session_by_target_chat = session.find_session_by_target_chat
 resolve_source_incident_chat_for_session_command = session.resolve_source_incident_chat_for_session_command
 get_active_session = session.get_active_session
 get_active_target_chat = session.get_active_target_chat
-get_p1_prompt_pending = session.get_p1_prompt_pending
-set_p1_prompt_pending = session.set_p1_prompt_pending
-pop_p1_prompt_pending = session.pop_p1_prompt_pending
-consume_p1_prompt_for_confirm = session.consume_p1_prompt_for_confirm
-request_p1_meeting_confirmation = session.request_p1_meeting_confirmation
+notify_p1_mentioned = session.notify_p1_mentioned
 get_last_ended_snapshot = session.get_last_ended_snapshot
 get_dm_target_chat_for_operator = session.get_dm_target_chat_for_operator
 enqueue_dm_instruction_if_needed = session.enqueue_dm_instruction_if_needed
@@ -143,11 +139,7 @@ __all__ = [
     "resolve_source_incident_chat_for_session_command",
     "get_active_session",
     "get_active_target_chat",
-    "get_p1_prompt_pending",
-    "set_p1_prompt_pending",
-    "pop_p1_prompt_pending",
-    "consume_p1_prompt_for_confirm",
-    "request_p1_meeting_confirmation",
+    "notify_p1_mentioned",
     "get_last_ended_snapshot",
     "get_dm_target_chat_for_operator",
     "enqueue_dm_instruction_if_needed",

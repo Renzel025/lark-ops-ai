@@ -776,24 +776,17 @@ def build_meeting_cancelled_card(
 
 
 def build_p1_meeting_confirm_card(
-    confirm_nonce: str,
     source_chat_id: str = "",
     phrase: str = "",
     source_chat_name: str = "",
     source_message_id: str = "",
 ) -> Dict[str, Any]:
-    """Shown when someone says P1 — **Create meeting** or **Don't need** (typed ``create meeting`` still works)."""
-    nonce = (confirm_nonce or "").strip()
+    """
+    "P1 mentioned" notice — purely informational, no buttons, nothing to confirm. Duty declares by
+    typing **/p1** in the group (the only path that can ever create a meeting); this card cannot
+    lead to one on its own.
+    """
     src = (source_chat_id or "").strip()
-    val_yes: Dict[str, Any] = {"action": "p1_confirm_meeting_yes"}
-    val_no: Dict[str, Any] = {"action": "p1_confirm_meeting_no"}
-    if nonce:
-        val_yes["p1_nonce"] = nonce
-        val_no["p1_nonce"] = nonce
-    if src:
-        # Carried so a click from a DM (P0_P1_CONFIRM_DM) still resolves the source incident group.
-        val_yes["source_chat_id"] = src
-        val_no["source_chat_id"] = src
     grp = (source_chat_name or "").strip() or "an incident group"
     quoted = (phrase or "").strip()
     if len(quoted) > 300:
@@ -802,30 +795,8 @@ def build_p1_meeting_confirm_card(
     body_lines = ["**P1 is being mentioned** in **{}**.".format(grp)]
     if quoted:
         body_lines.append("> {}".format(quoted.replace("\n", " ")))
-    # Buttons off (default): the card just announces the detection and duty gets buzzed. Typing
-    # "create meeting" / "yes" still starts the VC — see P1_CONFIRM_BUTTONS_ENABLED.
-    if not _config.get_p1_confirm_buttons_enabled():
-        body_lines.append("Type **/p1** in that group if a Lark video meeting is needed.")
-        elements: List[Dict[str, Any]] = [
-            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
-        ]
-        if msg_link:
-            elements.append(
-                _button_open_url(
-                    content="Open source message",
-                    url=msg_link,
-                    button_type="default",
-                    element_id="open_src_msg",
-                )
-            )
-        return {
-            "schema": "2.0",
-            "config": {"enable_forward": True},
-            "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
-            "body": {"elements": elements},
-        }
-    body_lines.append("Do you want to create a Lark video meeting now?")
-    elements = [
+    body_lines.append("Type **/p1** in that group if a Lark video meeting is needed.")
+    elements: List[Dict[str, Any]] = [
         {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(body_lines)}},
     ]
     if msg_link:
@@ -837,49 +808,11 @@ def build_p1_meeting_confirm_card(
                 element_id="open_src_msg",
             )
         )
-    elements.append({"tag": "hr"})
     return {
         "schema": "2.0",
         "config": {"enable_forward": True},
         "header": {"template": "orange", "title": {"tag": "plain_text", "content": "⚠️ P1 mentioned"}},
-        "body": {
-            "elements": elements + [
-                {
-                    "tag": "column_set",
-                    "flex_mode": "none",
-                    "background_style": "default",
-                    "horizontal_spacing": "8px",
-                    "columns": [
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Create meeting"},
-                                    "type": "primary",
-                                    "value": val_yes,
-                                },
-                            ],
-                        },
-                        {
-                            "tag": "column",
-                            "width": "weighted",
-                            "weight": 1,
-                            "elements": [
-                                {
-                                    "tag": "button",
-                                    "text": {"tag": "plain_text", "content": "Don't need"},
-                                    "type": "default",
-                                    "value": val_no,
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ]
-        },
+        "body": {"elements": elements},
     }
 
 

@@ -10,16 +10,10 @@ from wiki_ai_logic import handle_wiki_ai
 from p0_logic import text_processing as _text
 from p0_logic.config import (
     get_incident_group_chat_ids,
-    get_p0_keyword_groq_gate,
-    get_p0_keyword_supplemental_skip_regex,
-    get_p0_keyword_use_builtin_context_filters,
     get_p0_keyword_ai_triage,
     resolve_priority_keyword_ai_provider,
     get_session_meeting_card_post_chat_id,
     get_p0_trigger_ignore_open_ids,
-    get_p0_auto_declare_trusted_open_ids,
-    get_p0_redeclare_supersedes_active,
-    get_p0_multi_meeting_per_group,
     get_p0_issue_watch_enabled,
     get_p0_keyword_confirm_dm_enabled,
     get_dm_instruction_open_ids,
@@ -27,8 +21,8 @@ from p0_logic.config import (
     HELP_RE,
     RING_CMD_RE,
 )
-from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge
-from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
+from p0_logic.groq_client import classify_priority_keyword
+from features.session.session import notify_p1_mentioned
 from p0_logic.cards import build_help_commands_card, build_p0_keyword_confirm_dm_card
 from p0_logic.lark_client import (
     post_card_to_chat,
@@ -47,7 +41,6 @@ from p0_logic.config import (
     get_p0_keyword_buzz_enabled,
     get_p0_keyword_lark_urgent_mode,
     get_p0_command_declare_enabled,
-    get_p0_command_only_declare,
     get_p0_command_open_ids,
     parse_p0_declare_command,
 )
@@ -59,10 +52,6 @@ from p0_logic import (
     P0_SESSIONS,
     chat_has_active_session,
     handle_dm_generate_overview,
-    get_p1_prompt_pending,
-    set_p1_prompt_pending,
-    pop_p1_prompt_pending,
-    request_p1_meeting_confirmation,
     resolve_source_incident_chat_for_session_command,
 )
 
@@ -393,8 +382,8 @@ def _maybe_p0_keyword_confirm_dm(
     )
 
 
-# Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0") — case-insensitive.
-# Questions ("is this p0?", "can this be a p1?") are ignored via _is_question_about_priority().
+# Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0", "is this p0?") —
+# case-insensitive, no declare-vs-question distinction: every hit just notifies duty.
 P0_KEYWORD_RE = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
 P1_KEYWORD_RE = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
 
@@ -402,132 +391,6 @@ P1_KEYWORD_RE = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
 _P0_SUBJECT = r"(?:it|(?:this|that)(?:\s+(?:one|issue|incident|outage|problem|ticket|case))?)"
 _PRIO01 = r"(?:p0|p1|priority\s*0|priority\s*1)"
 _P0_ONLY = r"(?:p0|priority\s*0)"
-
-# Do not start VC when the user is *asking* about P0/P1 (vs declaring). See _is_question_about_priority().
-_QUESTION_PRIORITY_PHRASE_RE = re.compile(
-    rf"(?is)(?:"
-    rf"is\s+this\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"is\s+that\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"is\s+it\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"are\s+we\s+(?:in\s+)?(?:a\s+)?{_PRIO01}\b|"
-    rf"is\s+this\s+possible\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"is\s+that\s+possible\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"can\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"could\s+we\s+refer\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"can\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"could\s+we\s+tag\s+(?:{_P0_SUBJECT}\s+)?as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"shall\s+we\s+tag\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"should\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"should\s+i\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"can\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"could\s+we\s+declare\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"can\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"could\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"shall\s+we\s+consider\s+{_P0_SUBJECT}\s+as\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"can\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"could\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"should\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"would\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"will\s+this\s+be\s+(?:an?\s+)?{_PRIO01}\b|"
-    rf"does\s+this\s+(?:count|qualify)\s+(?:as\s+)?(?:a\s+)?{_PRIO01}\b|"
-    rf"what\s+is\s+(?:a\s+)?{_PRIO01}\b|"
-    rf"how\s+(?:do|can|to)\s+(?:i|we)\s+(?:know|tell|declare)\s+.*\b(?:p0|p1|priority\s*[01])\b|"
-    rf"any(?:thing|one)\s+.*\b(?:p0|p1|priority\s*[01])\b"
-    rf")"
-)
-
-# Broken-English asks: "is this issue is p0" (extra words between "is … is p0") don't match phrases above.
-_BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE = re.compile(
-    r"(?is)\bis\s+.+?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
-)
-
-# Embedded if/whether clause: "please confirm if issue is p0", "need to check if this is p0".
-_IF_OR_WHETHER_PRIORITY_CLAUSE_RE = re.compile(
-    r"(?is)\b(?:if|whether)\s+.{1,220}?\bis\s+(?:an?\s+)?(?:p0|p1|priority\s*0|priority\s*1)\b"
-)
-
-# Explicit **declaration** ("this is p0", "it's a p1", "declaring p0") — a real statement, not a
-# question — so a stray '?' from an *unrelated* sentence does not suppress a genuine P0 (e.g.
-# "This is P0. @cs is there players reaching out?"). The (?!\s*\?) lookahead keeps a directly
-# questioned "this is p0?" out (that stays a question). "is this p0" won't match (needs "this is").
-_EXPLICIT_PRIORITY_DECLARATION_RE = re.compile(
-    rf"(?is)"
-    rf"\b(?:this|that)\s+is\s+(?:now\s+|already\s+|indeed\s+|a\s+|an\s+)*{_PRIO01}\b(?!\s*\?)"
-    rf"|\bit'?s\s+(?:now\s+|already\s+|a\s+|an\s+)*{_PRIO01}\b(?!\s*\?)"
-    rf"|\b(?:declaring|declare|raising|raise)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?{_PRIO01}\b(?!\s*\?)"
-    rf"|\b{_PRIO01}\s+(?:confirmed|declared)\b(?!\s*\?)"
-)
-
-
-def _is_question_about_priority(text: str) -> bool:
-    """
-    True if the message looks like a question *about* P0/P1 rather than a declaration.
-    Declarations like "this is p0" (statement) still trigger; "is this p0?" does not.
-    A stray '?' from an unrelated sentence no longer suppresses an explicit "this is p0" declaration.
-    """
-    t = (text or "").strip()
-    if not t:
-        return False
-    if not (P0_KEYWORD_RE.search(t) or P1_KEYWORD_RE.search(t)):
-        return False
-    # Explicit question forms always win (asking, not declaring) — checked before the declaration
-    # override and before the blanket '?' so a real "is this p0?" / "if this is p0" stays a question.
-    if _is_p0_thread_confirm_question(t):
-        return True
-    if _QUESTION_PRIORITY_PHRASE_RE.search(t):
-        return True
-    if _BROKEN_ENGLISH_DOUBLE_IS_PRIORITY_RE.search(t):
-        return True
-    if _IF_OR_WHETHER_PRIORITY_CLAUSE_RE.search(t):
-        return True
-    # A clear declaration ("this is p0") is NOT a question even if a stray '?' appears elsewhere.
-    if _EXPLICIT_PRIORITY_DECLARATION_RE.search(t):
-        return False
-    # Bare '?' with a priority keyword and none of the above → treat as a question.
-    if "?" in t:
-        return True
-    return False
-
-
-# Polite asks often omit ``?`` on Lark (e.g. "may we know what are the findings of p0 last tuesday").
-_P0_POLITE_INFO_ASK_RE = re.compile(
-    r"(?is)\b(?:may|could)\s+we\s+(?:know|ask|see|confirm|clarify|understand)(?:\s+more)?\b"
-    r"|\bcan\s+we\s+(?:know|ask|see|confirm|clarify|understand)(?:\s+more)?\b"
-)
-
-# ``p0`` / ``priority 0`` with a **past** calendar anchor (RCA / "last week's bridge"), not a fresh declaration.
-_P0_RELATIVE_DAY = (
-    r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b"
-)
-_P0_WITH_PAST_TIME_ANCHOR_RE = re.compile(
-    r"(?is)(?:\b(?:p0|priority\s*0)\b.{0,120}?\b(?:last|past)\s+(?:"
-    + _P0_RELATIVE_DAY
-    + r"|week|month)\b"
-    r"|\b(?:last|past)\s+(?:"
-    + _P0_RELATIVE_DAY
-    + r"|week|month)\b.{0,120}?\b(?:p0|priority\s*0)\b"
-    r"|\b(?:p0|priority\s*0)\b.{0,120}?\byesterday\b"
-    r"|\byesterday\b.{0,120}?\b(?:p0|priority\s*0)\b)"
-)
-
-
-def _is_p0_informational_ask_or_past_reference(text: str) -> bool:
-    """
-    True when ``p0`` / ``priority 0`` appears in an **informational** question (no trailing ``?``)
-    or next to a **past** date/week/month anchor — not a request to open a new bridge.
-
-    Skipped when ``_P0_MEETING_OR_DECLARE_HINT_RE`` matches (escalate / declare / meeting intent).
-    """
-    t = (text or "").strip()
-    if not t or not P0_KEYWORD_RE.search(t):
-        return False
-    if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
-        return False
-    if _P0_POLITE_INFO_ASK_RE.search(t):
-        return True
-    if _P0_WITH_PAST_TIME_ANCHOR_RE.search(t):
-        return True
-    return False
 
 
 def _is_pasted_meeting_invite_footer(text: str) -> bool:
@@ -638,77 +501,10 @@ def _is_explicit_p0_negation(text: str) -> bool:
     return False
 
 
-# RCA / postmortem or ticket handoff: "P0 issue(s)", "this P0 case", meegle links — not a VC declaration.
-_P0_ISSUE_PROSE_PHRASE_RE = re.compile(
-    r"(?is)"
-    r"\b(?:a|an|the|this|that|on)\s+p0\s+issues?\b|"
-    r"\bp0\s+issues?\b|"
-    r"\b(?:a|an|the|this|that|on)\s+p0\s+cases?\b|"
-    r"\bp0\s+cases?\b|"
-    r"\b(?:a|an|the)\s+priority\s*0\s+issues?\b|"
-    r"\bpriority\s*0\s+issues?\b"
-)
-
-# Ticket / meegle share to @Duty — informational handoff, not "start bridge now".
-_P0_TICKET_HANDOFF_RE = re.compile(
-    r"(?is)\bhere\s+(?:is|are)\s+(?:the\s+)?(?:meegle|ticket|story|link|detail)\b"
-)
-
-# If any of these appear, treat message as possible real escalation even when it also says "P0 issue".
-_P0_MEETING_OR_DECLARE_HINT_RE = re.compile(
-    r"(?is)\b(?:"
-    r"declar\w*|"
-    r"escalat\w*|"
-    r"start(?:ing)?\s+(?:a\s+)?(?:the\s+)?(?:p0\s+)?(?:bridge\s+)?meeting\b|"
-    r"create\s+(?:a\s+)?(?:p0\s+)?meeting\b|"
-    r"open(?:ing)?\s+(?:a\s+)?p0(?:\s+meeting|\s+bridge)?\b|"
-    r"need\s+(?:a\s+)?p0\s+meeting\b|"
-    r"p0\s+meeting\b|"
-    r"p0\s+bridge\b|"
-    r"(?:we(?:'re|\s+are)|i(?:'m|s))\s+(?:on|in)\s+p0\b|"
-    r"going\s+(?:to\s+)?p0\b|"
-    r"treat(?:ed|ing)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?p0\b|"
-    r"tag(?:ged|ging)?\s+(?:this|that|it)\s+as\s+(?:a\s+)?p0\b"
-    r")\b"
-)
-
-
-def _is_p0_issue_prose_without_meeting_intent(text: str) -> bool:
-    """
-    True when ``p0`` appears mainly as a **severity label** ("P0 issue") in explanatory text, not as
-    instruction to open the emergency bridge.
-    """
-    t = (text or "").strip()
-    if not t or not P0_KEYWORD_RE.search(t):
-        return False
-    if not _P0_ISSUE_PROSE_PHRASE_RE.search(t):
-        return False
-    if _P0_MEETING_OR_DECLARE_HINT_RE.search(t):
-        return False
-    return True
-
-
-def _is_p0_ticket_handoff_not_declaration(text: str) -> bool:
-    """
-    True when the line shares a ticket/meegle and mentions P0 as **case context** — not a bridge request.
-    Example (skip): "Hi @Duty here is the meegle on this P0 case …"
-    """
-    t = (text or "").strip()
-    if not t or not P0_KEYWORD_RE.search(t):
-        return False
-    if _is_explicit_direct_p0_declaration(t):
-        return False
-    if _P0_TICKET_HANDOFF_RE.search(t):
-        return True
-    if _is_p0_issue_prose_without_meeting_intent(t):
-        return True
-    return False
-
-
 def _regex_priority_keyword_intent_override(text_raw: str) -> Optional[str]:
     """
     Deterministic declare vs question when phrasing clearly matches regex (overrides Groq mislabels).
-    Returns ``declare_p0``, ``question``, or None (defer to Groq / legacy).
+    Returns ``declare_p0``, ``question``, or None (defer to Groq).
     """
     t = (text_raw or "").strip()
     if not t or not P0_KEYWORD_RE.search(t):
@@ -721,10 +517,6 @@ def _regex_priority_keyword_intent_override(text_raw: str) -> Optional[str]:
         return "question"
     if _is_explicit_direct_p0_declaration(t):
         return "declare_p0"
-    # NOTE: the softer _is_question_about_priority (is-this-p0?, a stray '?') is deliberately NOT a
-    # hard override here. When P0_KEYWORD_AI_TRIAGE is on we want the LLM to classify these — not
-    # pre-label them "question" and skip the model. (Explicit negation / thread-confirm / explicit
-    # declaration stay deterministic above; the legacy no-AI path still uses the regex directly.)
     return None
 
 
@@ -817,79 +609,6 @@ def _priority_keyword_ai_triage(text_raw: str, groq_key: str) -> Optional[Dict[s
     except Exception as e:
         log.warning("Priority keyword AI triage failed: %s", e)
         return None
-
-
-def _legacy_p0_keyword_blocked(text_raw: str) -> bool:
-    """Regex/heuristic path when AI triage is off or unavailable."""
-    if _is_question_about_priority(text_raw):
-        log.info("Incident group: P0 trigger ignored (question about priority) text=%r", text_raw[:200])
-        return True
-    if _is_p0_ticket_handoff_not_declaration(text_raw):
-        log.info(
-            "Incident group: P0 trigger ignored (P0 case / ticket handoff, not a declaration) text_head=%r",
-            text_raw[:200],
-        )
-        return True
-    if get_p0_keyword_use_builtin_context_filters():
-        if _is_p0_informational_ask_or_past_reference(text_raw):
-            log.info(
-                "Incident group: P0 trigger ignored (informational ask or past P0 reference, not new bridge) "
-                "text_head=%r",
-                text_raw[:200],
-            )
-            return True
-        if _is_p0_issue_prose_without_meeting_intent(text_raw):
-            log.info(
-                "Incident group: P0 trigger ignored (narrative 'P0 issue' / severity label, "
-                "no declare/meeting intent) text_head=%r",
-                text_raw[:200],
-            )
-            return True
-        if _is_p0_inside_existing_meeting_context(text_raw):
-            log.info(
-                "Incident group: P0 trigger ignored (status inside existing P0 meeting/call, not new bridge) "
-                "text_head=%r",
-                text_raw[:200],
-            )
-            return True
-    sup_re = get_p0_keyword_supplemental_skip_regex()
-    if sup_re is not None and sup_re.search(text_raw):
-        log.info(
-            "Incident group: P0 trigger ignored (P0_KEYWORD_SUPPLEMENTAL_SKIP_REGEX match) text_head=%r",
-            text_raw[:200],
-        )
-        return True
-    return False
-
-
-# Status line: "... in / during the P0 meeting" refers to activity inside an **existing** bridge — not a new VC request.
-_P0_IN_EXISTING_MEETING_PHRASE_RE = re.compile(
-    r"(?is)\b(?:into|in|during|at|on|within|for|inside)\s+(?:the\s+|a\s+|our\s+)?(?:p0|priority\s*0)\s+meeting\b"
-    r"|(?:in|during|at|on|within)\s+(?:the\s+|a\s+|our\s+)?(?:p0|priority\s*0)\s+(?:call|bridge|huddle)\b"
-)
-# Do not skip when the same line clearly requests opening a **new** P0 meeting.
-_P0_IN_MEETING_CONTEXT_OVERRIDE_RE = re.compile(
-    r"(?is)\b(?:"
-    r"start(?:ing)?\s+(?:a\s+|the\s+|our\s+)?(?:new\s+)?p0\s+meeting\b|"
-    r"open(?:ing)?\s+(?:a\s+|the\s+)?p0\s+meeting\b|"
-    r"create\s+(?:a\s+|the\s+)?p0\s+meeting\b|"
-    r"need\s+(?:a\s+|the\s+)?(?:new\s+)?p0\s+meeting\b|"
-    r"declar\w*\s+(?:a\s+|the\s+)?p0\b|"
-    r"escalat\w*\s+(?:to\s+)?(?:a\s+|the\s+)?p0\b"
-    r")\b"
-)
-
-
-def _is_p0_inside_existing_meeting_context(text: str) -> bool:
-    """True when P0 appears only as *where* work happens (existing meeting/call), not a new bridge request."""
-    t = (text or "").strip()
-    if not t or not P0_KEYWORD_RE.search(t):
-        return False
-    if not _P0_IN_EXISTING_MEETING_PHRASE_RE.search(t):
-        return False
-    if _P0_IN_MEETING_CONTEXT_OVERRIDE_RE.search(t):
-        return False
-    return True
 
 
 def _is_explicit_direct_p0_declaration(text: str) -> bool:
@@ -1008,20 +727,10 @@ COOLDOWN_RESET_RE = re.compile(
     re.IGNORECASE,
 )
 
-# While P1 "create meeting?" is pending — typed confirm / decline (card has **Create meeting** / **Don't need**).
-# Strict whole-line pattern kept for reference; see _matches_p1_pending_create_reply() for handling @mentions + "yes, because …".
-P1_PENDING_CREATE_RE = re.compile(
-    r"^\s*(create\s+meeting|p1\s+create|yes)\s*$",
-    re.IGNORECASE,
-)
-P1_PENDING_DECLINE_RE = re.compile(
-    r"^\s*(not\s+needed|don'?t\s+need|no)\s*$",
-    re.IGNORECASE,
-)
 
 # Detects a *question* about P0 ("is this p0", "can we tag this as p0") vs a declaration.
-# Used only by _is_p0_thread_confirm_question / _is_question_about_priority to keep questions
-# from auto-declaring. (The old designated-asker thread-confirm flow was removed.)
+# Used only by _is_p0_thread_confirm_question to keep questions from auto-declaring.
+# (The old designated-asker thread-confirm flow was removed.)
 # ``?`` optional (not only questions with ``?``); phrase may follow @mentions ("@QA is this P0?").
 P0_THREAD_CONFIRM_QUESTION_RE = re.compile(
     rf"(?is)(?:"
@@ -1089,53 +798,6 @@ def _is_p0_conditional_or_confirm_question(text: str) -> bool:
     return False
 
 
-def _strip_leading_at_mentions_for_confirm(
-    line: str, mention_names: Optional[List[str]] = None
-) -> str:
-    """
-    Lark text may use ``@_user_1`` (single token) or UI-style ``@CP OM Duty`` (spaces in the label).
-    Strip **longest** ``@displayName`` first using webhook ``mentions[].name``, then ``@\\S+`` tokens.
-    """
-    line = (line or "").strip()
-    while True:
-        changed = False
-        names = [n.strip() for n in (mention_names or []) if (n or "").strip()]
-        names.sort(key=len, reverse=True)
-        for n in names:
-            prefix = "@" + n
-            if line.startswith(prefix):
-                line = line[len(prefix) :].lstrip()
-                changed = True
-                break
-        if changed:
-            continue
-        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
-        if nxt != line:
-            line = nxt.strip()
-            continue
-        break
-    return line
-
-
-def _matches_p1_pending_create_reply(
-    text_raw: str, mention_names: Optional[List[str]] = None
-) -> bool:
-    """P1 card typed confirm: allow @mentions and short explanations after **yes** / **create meeting**."""
-    t = (text_raw or "").strip()
-    if not t:
-        return False
-    line = t.split("\n")[0].strip()
-    line = re.sub(r"<[^>]+>", "", line).strip()
-    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
-    s = line.strip()
-    if not s:
-        return False
-    if P1_PENDING_CREATE_RE.match(s):
-        return True
-    return bool(
-        re.match(r"^\s*(?:create\s+meeting|p1\s+create)\b", s, re.IGNORECASE)
-        or re.match(r"^\s*yes\b", s, re.IGNORECASE)
-    )
 
 
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
@@ -1590,41 +1252,6 @@ def process_message(
         ):
             return
 
-        # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
-        pend = get_p1_prompt_pending(session_source)
-        if pend:
-            nonce = str(pend.get("nonce") or "").strip()
-            if _matches_p1_pending_create_reply(text_raw, mention_names):
-                err = handle_p1_meeting_confirm_yes(session_source, token, user_id, nonce)
-                if err == "session_active":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ A meeting session is already active in this chat.",
-                    )
-                elif err == "stale":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
-                return
-            if P1_PENDING_DECLINE_RE.match(text_raw.strip()):
-                err = handle_p1_meeting_confirm_no(session_source, token, nonce)
-                if err == "session_active":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
-                    )
-                elif err == "stale":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
-                return
-
         if p0_group_typed_meeting_commands_enabled() and _matches_typed_end_meeting_command(text_raw):
             if chat_has_active_session(session_source):
                 sess = P0_SESSIONS.get(session_source) or {}
@@ -1704,27 +1331,27 @@ def process_message(
                     chat_id,
                     (text_raw or "")[-60:],
                 )
-            # Trigger P0 if ``p0`` / ``priority 0`` appears anywhere (unless pasted invite footer).
-            # When Issue Watch is on, only *explicit* P0 declarations start a meeting — player
-            # reports (incl. Lark footer ``Message p0 detection dev``) go to Issue Watch DM first.
+            # "p0" / "priority 0" anywhere in the message (unless pasted invite footer) — notify duty.
             _p0_kw_hit = (not _is_pasted_meeting_invite_footer(text_raw)) and P0_KEYWORD_RE.search(kw_text)
-            # Command-only mode: an explicit "we declare this as p0" is no longer special — it goes
-            # to the duty DM + buzz like any other mention. Only /p0 creates.
-            _command_only = get_p0_command_only_declare()
-            _p0_skip_for_issue_watch = (
-                _p0_kw_hit
-                and get_p0_issue_watch_enabled()
-                and (_command_only or not _is_explicit_direct_p0_declaration(kw_text))
-            )
+            if _p0_kw_hit and _text.is_manual_p0_incident_overview_template(text_raw):
+                log.info(
+                    "Incident group: P0 keyword ignored (manual P0 Incident Overview template) text_head=%r",
+                    text_raw[:200],
+                )
+                return
+            # Every non-command "p0" mention just notifies + buzzes duty — /p0 (the command) is the
+            # only thing that can ever create a meeting (start_p0(..., via_command=True) refuses
+            # everything else), so there is nothing to classify declare-vs-question about anymore.
+            _p0_skip_for_issue_watch = _p0_kw_hit and get_p0_issue_watch_enabled()
             if _p0_skip_for_issue_watch:
                 log.info(
-                    "Incident group: P0 keyword deferred to Issue Watch (not explicit declare) chat_id=%s text_tail=%r",
+                    "Incident group: P0 keyword — notifying duty, Issue Watch also analyzes this "
+                    "message chat_id=%s text_tail=%r",
                     chat_id,
                     (text_raw or "")[-80:],
                 )
-                # Also offer the duty a Yes/No "create meeting?" DM (P0_KEYWORD_CONFIRM_DM_ENABLED):
-                # Issue Watch only auto-declares on multi-report/high-confidence, so a single p0
-                # mention would otherwise pass silently. Falls through to Issue Watch after.
+                # No return — Issue Watch's own richer analysis (player counts, categories) still
+                # runs on this same message below.
                 _maybe_p0_keyword_confirm_dm(
                     chat_id=chat_id,
                     token=token,
@@ -1734,198 +1361,22 @@ def process_message(
                     text_raw=text_raw,
                     message_id=message_id,
                 )
-            if _p0_kw_hit and _command_only and not _p0_skip_for_issue_watch:
-                # Command-only with Issue Watch off — nothing downstream would page anyone, and the
-                # creation path below is refused at start_p0 anyway. Notify duty and stop here so the
-                # group does not get a "use /p0" reply on every mention.
-                log.info(
-                    "Incident group: P0 keyword notify-only (P0_COMMAND_ONLY_DECLARE) chat_id=%s text_head=%r",
-                    chat_id,
-                    (text_raw or "")[:120],
-                )
-                _maybe_p0_keyword_confirm_dm(
-                    chat_id=chat_id,
-                    token=token,
-                    user_id=user_id,
-                    sender_lark_user_id=sender_lark_user_id,
-                    source_chat_name=source_chat_name,
-                    text_raw=text_raw,
-                    message_id=message_id,
-                )
-                return
             if _p0_kw_hit and not _p0_skip_for_issue_watch:
-                if _text.is_manual_p0_incident_overview_template(text_raw):
-                    log.info(
-                        "Incident group: P0 trigger ignored (manual P0 Incident Overview template) text_head=%r",
-                        text_raw[:200],
-                    )
-                    return
-                if _is_explicit_p0_negation(text_raw):
-                    log.info(
-                        "Incident group: P0 trigger ignored (explicit not/no p0 or no escalation) text_head=%r",
-                        text_raw[:200],
-                    )
-                    return
-                # When AI triage is ON, do NOT pre-ignore on the blunt regex — let the message reach
-                # the LLM below so Claude decides declare-vs-question. Only the no-AI legacy path
-                # short-circuits here. (Explicit negation is already handled hard, above.)
-                if not get_p0_keyword_ai_triage() and _is_question_about_priority(text_raw):
-                    log.info(
-                        "Incident group: P0 trigger ignored (question about priority) text=%r",
-                        text_raw[:200],
-                    )
-                    _maybe_p0_keyword_confirm_dm(
-                        chat_id=chat_id,
-                        token=token,
-                        user_id=user_id,
-                        sender_lark_user_id=sender_lark_user_id,
-                        source_chat_name=source_chat_name,
-                        text_raw=text_raw,
-                        message_id=message_id,
-                    )
-                    return
-                if (user_id or "").strip() in get_p0_trigger_ignore_open_ids():
-                    log.info("Incident group: P0 trigger ignored (P0_TRIGGER_IGNORE_OPEN_IDS) user_id=%s", user_id)
-                    return
-                if chat_has_active_session(chat_id):
-                    if get_p0_multi_meeting_per_group():
-                        log.info(
-                            "Incident group: multi-meeting mode — starting an additional concurrent P0 chat_id=%s",
-                            chat_id,
-                        )
-                        # fall through: start_p0 creates a new coexisting meeting + session
-                    elif get_p0_redeclare_supersedes_active():
-                        log.info(
-                            "Incident group: re-declare supersedes active session — cancelling then starting new chat_id=%s",
-                            chat_id,
-                        )
-                        cancel_p0_session(chat_id, token, reason="Superseded by a new P0 declaration")
-                        clear_p0_cooldown(chat_id)
-                        # fall through to start a fresh P0 below
-                    else:
-                        log.info("Incident group: session already active chat_id=%s", chat_id)
-                        return
-
-                ai = _priority_keyword_ai_triage(kw_text, groq_key)
-                if ai is not None:
-                    if ai.get("intent") != "declare_p0":
-                        log.info(
-                            "Incident group: P0 AI triage — no meeting (intent=%s) text_head=%r",
-                            ai.get("intent"),
-                            kw_text[:200],
-                        )
-                        _maybe_p0_keyword_confirm_dm(
-                            chat_id=chat_id,
-                            token=token,
-                            user_id=user_id,
-                            sender_lark_user_id=sender_lark_user_id,
-                            source_chat_name=source_chat_name,
-                            text_raw=text_raw,
-                            message_id=message_id,
-                        )
-                        return
-                elif _legacy_p0_keyword_blocked(kw_text):
-                    # Rule: a P0 keyword must NEVER be dropped silently — the legacy regex/heuristic
-                    # path only blocks AUTO-declare, so still offer the duty a Yes/No confirm DM.
-                    # (_maybe_p0_keyword_confirm_dm self-skips explicit negations / past references.)
-                    _maybe_p0_keyword_confirm_dm(
-                        chat_id=chat_id,
-                        token=token,
-                        user_id=user_id,
-                        sender_lark_user_id=sender_lark_user_id,
-                        source_chat_name=source_chat_name,
-                        text_raw=text_raw,
-                        message_id=message_id,
-                    )
-                    return
-                elif get_p0_keyword_groq_gate():
-                    if _is_explicit_direct_p0_declaration(kw_text):
-                        log.info(
-                            "Incident group: P0_KEYWORD_GROQ_GATE bypass (explicit direct declaration) text_head=%r",
-                            kw_text[:200],
-                        )
-                    else:
-                        gv = groq_p0_keyword_declares_new_bridge(kw_text)
-                        if gv is False:
-                            log.info(
-                                "Incident group: P0 trigger ignored (P0_KEYWORD_GROQ_GATE: Groq says not a P0 declaration) "
-                                "text_head=%r",
-                                text_raw[:200],
-                            )
-                            _maybe_p0_keyword_confirm_dm(
-                                chat_id=chat_id,
-                                token=token,
-                                user_id=user_id,
-                                sender_lark_user_id=sender_lark_user_id,
-                                source_chat_name=source_chat_name,
-                                text_raw=text_raw,
-                                message_id=message_id,
-                            )
-                            return
-                        if gv is None:
-                            log.warning(
-                                "Incident group: P0_KEYWORD_GROQ_GATE inconclusive (fail-open proceed) text_head=%r",
-                                text_raw[:200],
-                            )
-
-                # SENDER GATE for auto-create: when a trusted-declarer allowlist is configured, ONLY
-                # those senders (e.g. the CP OM Duty) auto-start a meeting on a declare. Any OTHER
-                # sender's declare is routed to the duty confirm-DM (ask first) — so a stray
-                # "Priority: P0" from a non-duty person never surprise-creates a meeting. This gates
-                # every auto-declare path (AI / legacy / Groq) at their single convergence point.
-                # Empty allowlist = legacy behaviour (all declares auto-start).
-                _trusted_declarers = get_p0_auto_declare_trusted_open_ids()
-                if _trusted_declarers and (user_id or "").strip() not in _trusted_declarers:
-                    log.info(
-                        "Incident group: auto-declare gated — non-trusted sender %s -> confirm-DM (not auto) chat_id=%s",
-                        user_id,
-                        chat_id,
-                    )
-                    _maybe_p0_keyword_confirm_dm(
-                        chat_id=chat_id,
-                        token=token,
-                        user_id=user_id,
-                        sender_lark_user_id=sender_lark_user_id,
-                        source_chat_name=source_chat_name,
-                        text_raw=text_raw,
-                        message_id=message_id,
-                    )
-                    return
-
-                kw_dedupe = _keyword_trigger_dedupe_key(
-                    chat_id, user_id, message_id, message_create_time, text_raw
-                )
-                if not _try_consume_keyword_trigger_dedupe(kw_dedupe):
-                    log.info(
-                        "Incident group: P0 keyword skipped (duplicate Lark delivery, same create_time+text) chat_id=%s",
-                        chat_id,
-                    )
-                    return
-
-                log.info("Incident group: starting P0 session chat_id=%s user_id=%s text=%r", chat_id, user_id, text_raw[:200])
-                # Resolve WHICH concern this "p0" refers to (reply-parent / AI-pick / recent) so the
-                # auto-overview is built from the real issue, not a bare "p0". Falls back to text_raw.
-                _decl_concern = text_raw
-                try:
-                    from features.overview import concern_context as _concern_ctx
-
-                    _decl_concern = _concern_ctx.resolve_declaration_concern(
-                        chat_id, decl_message_id=message_id, decl_text=text_raw
-                    )
-                except Exception as _cc_err:  # noqa: BLE001
-                    log.warning("concern_context: resolve failed chat_id=%s err=%s", chat_id, _cc_err)
-                start_p0(
-                    chat_id,
-                    token,
-                    user_id,
-                    priority="P0",
+                log.info("Incident group: P0 keyword — notifying duty chat_id=%s user_id=%s", chat_id, user_id)
+                _maybe_p0_keyword_confirm_dm(
+                    chat_id=chat_id,
+                    token=token,
+                    user_id=user_id,
+                    sender_lark_user_id=sender_lark_user_id,
                     source_chat_name=source_chat_name,
-                    trigger_lark_user_id=sender_lark_user_id,
-                    declaration_text=_decl_concern,
+                    text_raw=text_raw,
+                    message_id=message_id,
                 )
                 return
 
-            # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
+            # P1 mentioned — notify + buzz duty only. /p1 (the command) is the only thing that can
+            # ever create a meeting (start_p0(..., via_command=True) refuses everything else), so
+            # there is nothing here to confirm and no state to track — see start_p0's refusal gate.
             if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(kw_text):
                 if _is_explicit_p0_negation(text_raw):
                     log.info(
@@ -1939,17 +1390,12 @@ def process_message(
                 if chat_has_active_session(chat_id):
                     log.info("Incident group: session already active chat_id=%s", chat_id)
                     return
-                if get_p1_prompt_pending(chat_id):
-                    log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
-                    return
 
                 ai = _priority_keyword_ai_triage(text_raw, groq_key)
                 if ai is not None:
                     _p1_intent = str(ai.get("intent") or "").strip().lower()
                     # Same policy as P0: only an explicit negation is silent. Anything else — a
-                    # question ("is this p1?"), a mention, a handoff — still ASKS. The P1 card is
-                    # itself a yes/no ask (and goes to the duty DM under P0_P1_CONFIRM_DM), so
-                    # dropping these silently just meant nobody was asked at all.
+                    # question ("is this p1?"), a mention, a handoff — still notifies duty.
                     if _p1_intent in ("negation",) or _is_explicit_p0_negation(text_raw):
                         log.info(
                             "Incident group: P1 trigger ignored (explicit negation) intent=%s text_head=%r",
@@ -1959,8 +1405,8 @@ def process_message(
                         return
                     if _p1_intent != "declare_p1":
                         log.info(
-                            "Incident group: P1 AI triage intent=%s — still offering the create-meeting "
-                            "confirmation (ask, do not drop) text_head=%r",
+                            "Incident group: P1 AI triage intent=%s — still notifying duty (ask, do not drop) "
+                            "text_head=%r",
                             _p1_intent or "(none)",
                             text_raw[:200],
                         )
@@ -1975,30 +1421,8 @@ def process_message(
                     )
                     return
 
-                log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
-                # Same concern resolution as the P0 branch (reply-parent / AI-pick / recent), done
-                # now while the surrounding chat is fresh — the Yes click can land minutes later.
-                # Stored on the pending entry so the P1 duty DM gets an auto-filled overview preview
-                # instead of the green manual card.
-                _p1_concern = text_raw
-                try:
-                    from features.overview import concern_context as _concern_ctx
-
-                    _p1_concern = _concern_ctx.resolve_declaration_concern(
-                        chat_id, decl_message_id=message_id, decl_text=text_raw
-                    )
-                except Exception as _cc_err:  # noqa: BLE001
-                    log.warning("concern_context: P1 resolve failed chat_id=%s err=%s", chat_id, _cc_err)
-                set_p1_prompt_pending(
-                    chat_id,
-                    user_id,
-                    declaration_text=_p1_concern,
-                    phrase=text_raw,
-                    source_message_id=message_id,
-                )
-                if not request_p1_meeting_confirmation(chat_id, token, user_id):
-                    pop_p1_prompt_pending(chat_id)
-                    log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
+                log.info("Incident group: P1 keyword — notifying duty chat_id=%s user_id=%s", chat_id, user_id)
+                notify_p1_mentioned(chat_id, token, user_id, phrase=text_raw, source_message_id=message_id)
                 return
 
             if try_handle_issue_watch(
