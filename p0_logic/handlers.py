@@ -299,18 +299,6 @@ def handle_lark_card_action_show_participants_sync(
     }
 
 
-def _extract_p1_confirm_nonce(payload: Dict[str, Any]) -> str:
-    d = _card_action_value_dict(payload)
-    v = d.get("p1_nonce")
-    if v is None:
-        v = _deep_get(payload, "event", "action", "value", "p1_nonce") or _deep_get(
-            payload, "action", "value", "p1_nonce"
-        )
-    if v is None:
-        return ""
-    return str(v).strip()
-
-
 def _scan_open_chat_id_nested(obj: Any) -> str:
     """Last resort: any `open_chat_id` string in nested dict/list (Lark layouts vary)."""
     if isinstance(obj, dict):
@@ -376,27 +364,6 @@ def _patch_p0_keyword_confirm_result(
     if st != 200:
         log.warning(
             "p0_keyword_confirm: patch card HTTP=%s mid_tail=%s body=%r",
-            st,
-            mid[-12:] if len(mid) > 12 else mid,
-            (body or "")[:200],
-        )
-
-
-def _patch_p1_confirm_result(
-    tenant_token: str,
-    card_message_id: str,
-    text: str,
-    template: str = "grey",
-) -> None:
-    """PATCH the P1 'create meeting?' confirm card in place with the chosen outcome (created / declined)."""
-    mid = (card_message_id or "").strip()
-    if not mid:
-        return
-    card = _cards.build_p0_keyword_confirm_result_card(text, template=template, title="⚠️ P1 mentioned")
-    st, body = _lark.patch_interactive_card(tenant_token, mid, card)
-    if st != 200:
-        log.warning(
-            "p1_confirm: patch card HTTP=%s mid_tail=%s body=%r",
             st,
             mid[-12:] if len(mid) > 12 else mid,
             (body or "")[:200],
@@ -1156,56 +1123,6 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
     try:
         sender_open_id = _extract_card_action_sender_open_id(payload)
         _maybe_merge_dm_scope_from_card(sender_open_id, payload)
-
-        if action_name == "p1_confirm_meeting_yes":
-            # Prefer the source group carried in the button value (set when the card is DM'd via
-            # P0_P1_CONFIRM_DM); fall back to the click's chat for the in-group card.
-            chat_id = str(_card_action_value_dict(payload).get("source_chat_id") or "").strip() \
-                or _extract_card_action_open_chat_id(payload)
-            if not chat_id:
-                log.warning("p1_confirm_meeting_yes missing open_chat_id payload=%s", json.dumps(payload, ensure_ascii=False)[:2000])
-                return
-            nonce = _extract_p1_confirm_nonce(payload)
-            card_mid = _extract_card_action_open_message_id(payload)
-            err = _session.handle_p1_meeting_confirm_yes(chat_id, tenant_token, sender_open_id, nonce)
-            if err == "session_active":
-                _patch_p1_confirm_result(tenant_token, card_mid, "ℹ️ A meeting session is already active.")
-                return
-            if err == "stale":
-                _patch_p1_confirm_result(
-                    tenant_token, card_mid, "⌛ This P1 confirmation is out of date or was already answered."
-                )
-                return
-            # Updates the confirm card in place (works whether it's in the group or a DM).
-            _patch_p1_confirm_result(
-                tenant_token, card_mid, "✅ **Meeting created** — the invite is posted in the group.", template="green"
-            )
-            return
-
-        if action_name == "p1_confirm_meeting_no":
-            chat_id = str(_card_action_value_dict(payload).get("source_chat_id") or "").strip() \
-                or _extract_card_action_open_chat_id(payload)
-            if not chat_id:
-                return
-            nonce = _extract_p1_confirm_nonce(payload)
-            card_mid = _extract_card_action_open_message_id(payload)
-            # The card patch below is the acknowledgement — suppress the separate text reply when we
-            # have a card to update (always true for a button click).
-            err = _session.handle_p1_meeting_confirm_no(
-                chat_id, tenant_token, nonce, suppress_reply=bool(card_mid)
-            )
-            if err == "session_active":
-                _patch_p1_confirm_result(tenant_token, card_mid, "ℹ️ A meeting is already active in this chat.")
-                return
-            if err == "stale":
-                _patch_p1_confirm_result(
-                    tenant_token, card_mid, "⌛ This P1 confirmation is out of date or was already answered."
-                )
-                return
-            _patch_p1_confirm_result(
-                tenant_token, card_mid, "🚫 **No meeting created.** Type **p1** in the group again when you need one."
-            )
-            return
 
         if action_name in ("p0_keyword_confirm_yes", "p0_keyword_confirm_no", "p0_keyword_confirm_cancel"):
             # DM Yes/No for a group ``p0`` mention that was NOT auto-declared

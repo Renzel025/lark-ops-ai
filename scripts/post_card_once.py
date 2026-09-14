@@ -61,7 +61,7 @@ REGISTRY = {
     "ongoing_dm_buzz_minor": (C.build_p0_ongoing_dm_buzz_card, dict(source_chat_label="P0 detection dev", meeting_no="885910443", duration_text="10 minutes", severity_tier="minor"), "dm"),
     "p1_fifteen_min_confirm":(C.build_p1_fifteen_min_confirm_card, dict(meeting_no="885910443"), "chat"),
     "p1_escalated":          (C.build_p1_escalated_card, dict(meeting_no="885910443"), "chat"),
-    "p1_meeting_confirm":    (C.build_p1_meeting_confirm_card, dict(confirm_nonce="test-nonce-123"), "dm"),
+    "p1_meeting_confirm":    (C.build_p1_meeting_confirm_card, dict(phrase="this is p1", source_chat_name="P1 detection dev"), "dm"),
     "keyword_confirm_dm":    (C.build_p0_keyword_confirm_dm_card, dict(nonce="test-nonce-123", phrase="this is p0", source_chat_name="P0 detection dev"), "dm"),
     "keyword_confirm_result":(C.build_p0_keyword_confirm_result_card, dict(text="P0 meeting created.", title="P0 mention confirmation"), "dm"),
     "keyword_confirm_dismissed": (C.build_p0_keyword_confirm_dismissed_card, dict(nonce="test-nonce-123"), "dm"),

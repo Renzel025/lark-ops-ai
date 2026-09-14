@@ -1561,18 +1561,6 @@ def get_p0_keyword_confirm_buttons_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-def get_p1_confirm_buttons_enabled() -> bool:
-    """
-    ``P1_CONFIRM_BUTTONS_ENABLED`` — Create meeting / Don't need buttons on the "P1 mentioned" card.
-
-    **Default ``0`` (off)**: the card only announces that P1 was mentioned and buzzes duty. Typing
-    ``create meeting`` / ``yes`` in the chat still starts the VC, so no path is lost.
-    """
-    reload_env_runtime()
-    v = (os.getenv("P1_CONFIRM_BUTTONS_ENABLED") or "0").strip().lower()
-    return v in ("1", "true", "yes", "on")
-
-
 def get_p0_keyword_buzz_enabled() -> bool:
     """``P0_KEYWORD_BUZZ_ENABLED`` — Lark 加急 (buzz) duty on the P0/P1 keyword card (default on)."""
     reload_env_runtime()

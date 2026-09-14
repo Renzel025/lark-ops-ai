@@ -22,10 +22,6 @@ P0_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _LAST_P0_BY_CHAT: Dict[str, int] = {}
 _LAST_P0_LOCK = threading.Lock()
 
-# P1 keyword: waiting for Yes/No on "create meeting?" card (keyed by incident group chat_id)
-P1_PROMPT_PENDING: Dict[str, Dict[str, Any]] = {}
-_P1_PROMPT_LOCK = threading.Lock()
-
 # Last successful ``end_p0_session`` fields per incident chat (in-memory) — replay ended card if user types "end" again.
 _LAST_ENDED_SNAPSHOT_BY_CHAT: Dict[str, Dict[str, str]] = {}
 _LAST_ENDED_SNAPSHOT_LOCK = threading.Lock()
@@ -1769,84 +1765,6 @@ def _send_dm_instruction_card_logged(
         log.error("%s exception priority=%s open_id=%s err=%s", label, priority, oid, e)
 
 
-def get_p1_prompt_pending(chat_id: str) -> Optional[Dict[str, Any]]:
-    chat_id = (chat_id or "").strip()
-    if not chat_id:
-        return None
-    with _P1_PROMPT_LOCK:
-        p = P1_PROMPT_PENDING.get(chat_id)
-        return dict(p) if p else None
-
-
-def set_p1_prompt_pending(
-    chat_id: str,
-    trigger_open_id: str,
-    declaration_text: str = "",
-    phrase: str = "",
-    source_message_id: str = "",
-) -> str:
-    """Store pending P1 meeting confirmation; returns nonce embedded in the Yes/No card buttons.
-
-    ``declaration_text`` — the concern this P1 refers to, resolved at prompt time. Carried through
-    the Yes click into ``start_p0`` so P1 gets the same auto-filled overview preview as P0
-    (``P0_TYPED_DECLARE_AUTO_OVERVIEW``); without it the duty DM falls back to the green manual card.
-
-    ``phrase`` / ``source_message_id`` — the raw triggering text and its message id, shown on the
-    "P1 mentioned" card (quoted text + an "Open source message" link) so duty can see WHERE it was
-    detected, same as the P0 keyword confirm card.
-    """
-    chat_id = (chat_id or "").strip()
-    trigger_open_id = (trigger_open_id or "").strip()
-    if not chat_id:
-        return ""
-    nonce = secrets.token_hex(8)
-    with _P1_PROMPT_LOCK:
-        P1_PROMPT_PENDING[chat_id] = {
-            "trigger_open_id": trigger_open_id,
-            "ts": int(time.time()),
-            "nonce": nonce,
-            "declaration_text": (declaration_text or "").strip(),
-            "phrase": (phrase or "").strip()[:300],
-            "source_message_id": (source_message_id or "").strip(),
-        }
-    return nonce
-
-
-def pop_p1_prompt_pending(chat_id: str) -> Optional[Dict[str, Any]]:
-    chat_id = (chat_id or "").strip()
-    if not chat_id:
-        return None
-    with _P1_PROMPT_LOCK:
-        p = P1_PROMPT_PENDING.pop(chat_id, None)
-        return dict(p) if p else None
-
-
-def consume_p1_prompt_for_confirm(chat_id: str, nonce_from_button: str = "") -> Optional[Dict[str, Any]]:
-    """
-    Remove P1 meeting-confirm pending only if button nonce matches (stops stale card clicks).
-    If payload has no nonce (legacy card), only consume when stored pending has no nonce.
-    """
-    chat_id = (chat_id or "").strip()
-    want = (nonce_from_button or "").strip()
-    if not chat_id:
-        return None
-    with _P1_PROMPT_LOCK:
-        p = P1_PROMPT_PENDING.get(chat_id)
-        if not p:
-            return None
-        stored = str(p.get("nonce") or "").strip()
-        if want:
-            if stored != want:
-                log.warning("P1 confirm ignored: nonce mismatch chat_id=%s", chat_id)
-                return None
-        else:
-            if stored:
-                log.warning("P1 confirm ignored: card missing nonce but server expects one chat_id=%s", chat_id)
-                return None
-        P1_PROMPT_PENDING.pop(chat_id, None)
-        return dict(p)
-
-
 def _p1_buzz_duty(token: str, message_id: str, open_ids: List[str]) -> int:
     """Lark 加急 the P1 card for duty. The card has no buttons by default, so the buzz is the page."""
     mid = (message_id or "").strip()
@@ -1873,27 +1791,32 @@ def _p1_buzz_duty(token: str, message_id: str, open_ids: List[str]) -> int:
     return done
 
 
-def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: str) -> bool:
-    """Post the "P1 mentioned" card in the same chat as meeting cards (``get_session_meeting_card_post_chat_id``)."""
+def notify_p1_mentioned(
+    chat_id: str,
+    token: str,
+    trigger_open_id: str,
+    *,
+    phrase: str = "",
+    source_message_id: str = "",
+) -> bool:
+    """
+    Post the "P1 mentioned" notice (+ buzz duty). Purely informational — there is nothing to click
+    or confirm; duty declares by typing ``/p1`` in the group (the only path that can ever create a
+    meeting, see ``start_p0(..., via_command=True)``). No pending state is stored anywhere: a
+    message that merely *mentions* P1 can never, by itself, lead to a meeting later.
+    """
     chat_id = (chat_id or "").strip()
     token = (token or "").strip()
     if not chat_id or not token:
         return False
-    pend = get_p1_prompt_pending(chat_id)
-    nonce = str((pend or {}).get("nonce") or "").strip()
-    if not nonce:
-        log.error("request_p1_meeting_confirmation: no pending nonce for chat_id=%s", chat_id)
-        return False
     chat_label = _lark.get_group_chat_name(chat_id, token)
     card = _cards.build_p1_meeting_confirm_card(
-        nonce,
         source_chat_id=chat_id,
-        phrase=str((pend or {}).get("phrase") or ""),
+        phrase=phrase,
         source_chat_name=chat_label,
-        source_message_id=str((pend or {}).get("source_message_id") or ""),
+        source_message_id=source_message_id,
     )
-    # P0_P1_CONFIRM_DM: send the prompt to the duty DM(s) instead of the group. The buttons carry the
-    # source chat id, so a click from the DM still creates/declines the P1 for this group.
+    # P0_P1_CONFIRM_DM: send the notice to the duty DM(s) instead of the group.
     if _config.p0_p1_confirm_dm_enabled():
         recipients = [x for x in (_config.get_dm_instruction_open_ids() or []) if x]
         if recipients:
@@ -1906,27 +1829,27 @@ def request_p1_meeting_confirmation(chat_id: str, token: str, trigger_open_id: s
                     buzzed += _p1_buzz_duty(token, mid, [oid])
                 else:
                     log.warning(
-                        "request_p1_meeting_confirmation DM failed oid_tail=%s HTTP=%s body=%s",
+                        "notify_p1_mentioned DM failed oid_tail=%s HTTP=%s body=%s",
                         oid[-8:] if len(oid) > 8 else oid, st, (body or "")[:300],
                     )
             if ok_any:
-                log.info("request_p1_meeting_confirmation: DM sent=%s buzzed=%s", len(recipients), buzzed)
+                log.info("notify_p1_mentioned: DM sent=%s buzzed=%s", len(recipients), buzzed)
                 return True
-            log.warning("request_p1_meeting_confirmation: all DM posts failed — falling back to group post")
+            log.warning("notify_p1_mentioned: all DM posts failed — falling back to group post")
         else:
             log.info(
-                "request_p1_meeting_confirmation: P0_P1_CONFIRM_DM on but P0_DM_INSTRUCTION_OPEN_IDS "
-                "is empty — posting the P1 prompt to the group instead"
+                "notify_p1_mentioned: P0_P1_CONFIRM_DM on but P0_DM_INSTRUCTION_OPEN_IDS "
+                "is empty — posting the P1 notice to the group instead"
             )
     prompt_chat = _config.get_session_meeting_card_post_chat_id(chat_id)
     st, body, mid = _lark.post_card_to_chat(prompt_chat, token, card)
     if st != 200:
-        log.error("request_p1_meeting_confirmation failed HTTP=%s body=%s", st, (body or "")[:500])
+        log.error("notify_p1_mentioned failed HTTP=%s body=%s", st, (body or "")[:500])
         return False
     # Group post: buzz duty on that card so a "p1" in a busy group still reaches them. Lark only
     # buzzes users who are members of the chat — a non-member duty just logs a warning.
     buzzed = _p1_buzz_duty(token, mid, [x for x in (_config.get_dm_instruction_open_ids() or []) if x])
-    log.info("request_p1_meeting_confirmation: group card posted chat_id=%s buzzed=%s", prompt_chat, buzzed)
+    log.info("notify_p1_mentioned: group card posted chat_id=%s buzzed=%s", prompt_chat, buzzed)
     return True
 
 
@@ -2008,64 +1931,6 @@ def dm_preview_allowed_for_incident(source_incident_chat_id: str, target_chat: s
         _cid, sess = find_session_by_target_chat(tc)
         return bool(sess)
     return False
-
-
-def handle_p1_meeting_confirm_yes(
-    chat_id: str, token: str, fallback_trigger_open_id: str, nonce: str
-) -> str:
-    """
-    Consume P1 "create meeting?" pending and start a P1 VC. Used by card **create** action and typed **create meeting**.
-
-    Returns ``""`` on success, or ``"session_active"`` / ``"stale"``.
-    """
-    chat_id = (chat_id or "").strip()
-    token = (token or "").strip()
-    if not chat_id or not token:
-        return "stale"
-    if chat_has_active_session(chat_id):
-        return "session_active"
-    pending = consume_p1_prompt_for_confirm(chat_id, nonce)
-    if not pending:
-        return "stale"
-    trigger = str(pending.get("trigger_open_id") or "").strip() or (fallback_trigger_open_id or "").strip()
-    start_p0(
-        chat_id,
-        token,
-        trigger,
-        priority="P1",
-        declaration_text=str(pending.get("declaration_text") or "").strip(),
-    )
-    return ""
-
-
-def handle_p1_meeting_confirm_no(
-    chat_id: str, token: str, nonce: str, reply_open_id: str = "", suppress_reply: bool = False
-) -> str:
-    """
-    Consume P1 prompt and skip VC. Returns ``""``, ``"session_active"``, or ``"stale"``.
-
-    ``suppress_reply``: skip the text acknowledgement entirely — used by the card-button path, which
-    PATCHes the confirm card in place instead. ``reply_open_id`` (typed/legacy path): DM the "no
-    meeting" note to that user instead of posting it in the group.
-    """
-    chat_id = (chat_id or "").strip()
-    token = (token or "").strip()
-    if not chat_id or not token:
-        return "stale"
-    if chat_has_active_session(chat_id):
-        return "session_active"
-    pending = consume_p1_prompt_for_confirm(chat_id, nonce)
-    if not pending:
-        return "stale"
-    if suppress_reply:
-        return ""
-    msg = "ℹ️ No P1 meeting will be created. Type **p1** in this group again when you need a new meeting."
-    rid = (reply_open_id or "").strip()
-    if rid:
-        _lark.post_text_to_open_id(rid, token, msg)
-    else:
-        _lark.post_text_to_chat(chat_id, token, msg)
-    return ""
 
 
 def p0_cooldown(chat_id: str) -> bool:
@@ -2309,7 +2174,6 @@ def start_p0(
     # Multi-meeting mode: every declaration creates its own coexisting VC + session (keyed per
     # meeting). When off, classic one-meeting-per-group behaviour (guards + cooldown apply).
     multi = _config.get_p0_multi_meeting_per_group()
-    pop_p1_prompt_pending(chat_id)
     _clear_last_ended_snapshot(chat_id)
     # Bot warnings during start: same chat as meeting cards (incident vs mirror — see config).
     notify_chat = _config.get_session_meeting_card_post_chat_id(chat_id)

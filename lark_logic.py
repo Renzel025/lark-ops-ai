@@ -28,7 +28,7 @@ from p0_logic.config import (
     RING_CMD_RE,
 )
 from p0_logic.groq_client import classify_priority_keyword, groq_p0_keyword_declares_new_bridge
-from features.session.session import handle_p1_meeting_confirm_no, handle_p1_meeting_confirm_yes
+from features.session.session import notify_p1_mentioned
 from p0_logic.cards import build_help_commands_card, build_p0_keyword_confirm_dm_card
 from p0_logic.lark_client import (
     post_card_to_chat,
@@ -59,10 +59,6 @@ from p0_logic import (
     P0_SESSIONS,
     chat_has_active_session,
     handle_dm_generate_overview,
-    get_p1_prompt_pending,
-    set_p1_prompt_pending,
-    pop_p1_prompt_pending,
-    request_p1_meeting_confirmation,
     resolve_source_incident_chat_for_session_command,
 )
 
@@ -1008,16 +1004,6 @@ COOLDOWN_RESET_RE = re.compile(
     re.IGNORECASE,
 )
 
-# While P1 "create meeting?" is pending — typed confirm / decline (card has **Create meeting** / **Don't need**).
-# Strict whole-line pattern kept for reference; see _matches_p1_pending_create_reply() for handling @mentions + "yes, because …".
-P1_PENDING_CREATE_RE = re.compile(
-    r"^\s*(create\s+meeting|p1\s+create|yes)\s*$",
-    re.IGNORECASE,
-)
-P1_PENDING_DECLINE_RE = re.compile(
-    r"^\s*(not\s+needed|don'?t\s+need|no)\s*$",
-    re.IGNORECASE,
-)
 
 # Detects a *question* about P0 ("is this p0", "can we tag this as p0") vs a declaration.
 # Used only by _is_p0_thread_confirm_question / _is_question_about_priority to keep questions
@@ -1089,53 +1075,6 @@ def _is_p0_conditional_or_confirm_question(text: str) -> bool:
     return False
 
 
-def _strip_leading_at_mentions_for_confirm(
-    line: str, mention_names: Optional[List[str]] = None
-) -> str:
-    """
-    Lark text may use ``@_user_1`` (single token) or UI-style ``@CP OM Duty`` (spaces in the label).
-    Strip **longest** ``@displayName`` first using webhook ``mentions[].name``, then ``@\\S+`` tokens.
-    """
-    line = (line or "").strip()
-    while True:
-        changed = False
-        names = [n.strip() for n in (mention_names or []) if (n or "").strip()]
-        names.sort(key=len, reverse=True)
-        for n in names:
-            prefix = "@" + n
-            if line.startswith(prefix):
-                line = line[len(prefix) :].lstrip()
-                changed = True
-                break
-        if changed:
-            continue
-        nxt = re.sub(r"^\s*@\S+\s+", "", line, count=1)
-        if nxt != line:
-            line = nxt.strip()
-            continue
-        break
-    return line
-
-
-def _matches_p1_pending_create_reply(
-    text_raw: str, mention_names: Optional[List[str]] = None
-) -> bool:
-    """P1 card typed confirm: allow @mentions and short explanations after **yes** / **create meeting**."""
-    t = (text_raw or "").strip()
-    if not t:
-        return False
-    line = t.split("\n")[0].strip()
-    line = re.sub(r"<[^>]+>", "", line).strip()
-    line = _strip_leading_at_mentions_for_confirm(line, mention_names)
-    s = line.strip()
-    if not s:
-        return False
-    if P1_PENDING_CREATE_RE.match(s):
-        return True
-    return bool(
-        re.match(r"^\s*(?:create\s+meeting|p1\s+create)\b", s, re.IGNORECASE)
-        or re.match(r"^\s*yes\b", s, re.IGNORECASE)
-    )
 
 
 def _clean_mention_names(raw_mentions: Any) -> List[str]:
@@ -1590,41 +1529,6 @@ def process_message(
         ):
             return
 
-        # Typed P1 prompt reply (before cancel so "no" does not collide with other routes)
-        pend = get_p1_prompt_pending(session_source)
-        if pend:
-            nonce = str(pend.get("nonce") or "").strip()
-            if _matches_p1_pending_create_reply(text_raw, mention_names):
-                err = handle_p1_meeting_confirm_yes(session_source, token, user_id, nonce)
-                if err == "session_active":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ A meeting session is already active in this chat.",
-                    )
-                elif err == "stale":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
-                return
-            if P1_PENDING_DECLINE_RE.match(text_raw.strip()):
-                err = handle_p1_meeting_confirm_no(session_source, token, nonce)
-                if err == "session_active":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ A meeting is already active in this chat. Just type **cancel meeting** if you want to end it.",
-                    )
-                elif err == "stale":
-                    post_text_to_chat(
-                        notify_chat,
-                        token,
-                        "ℹ️ This P1 confirmation is out of date or was already answered.",
-                    )
-                return
-
         if p0_group_typed_meeting_commands_enabled() and _matches_typed_end_meeting_command(text_raw):
             if chat_has_active_session(session_source):
                 sess = P0_SESSIONS.get(session_source) or {}
@@ -1925,7 +1829,9 @@ def process_message(
                 )
                 return
 
-            # Trigger P1 if ``p1`` / ``priority 1`` appears anywhere (unless pasted invite footer).
+            # P1 mentioned — notify + buzz duty only. /p1 (the command) is the only thing that can
+            # ever create a meeting (start_p0(..., via_command=True) refuses everything else), so
+            # there is nothing here to confirm and no state to track — see start_p0's refusal gate.
             if (not _is_pasted_meeting_invite_footer(text_raw)) and P1_KEYWORD_RE.search(kw_text):
                 if _is_explicit_p0_negation(text_raw):
                     log.info(
@@ -1939,17 +1845,12 @@ def process_message(
                 if chat_has_active_session(chat_id):
                     log.info("Incident group: session already active chat_id=%s", chat_id)
                     return
-                if get_p1_prompt_pending(chat_id):
-                    log.info("Incident group: P1 confirmation already pending chat_id=%s", chat_id)
-                    return
 
                 ai = _priority_keyword_ai_triage(text_raw, groq_key)
                 if ai is not None:
                     _p1_intent = str(ai.get("intent") or "").strip().lower()
                     # Same policy as P0: only an explicit negation is silent. Anything else — a
-                    # question ("is this p1?"), a mention, a handoff — still ASKS. The P1 card is
-                    # itself a yes/no ask (and goes to the duty DM under P0_P1_CONFIRM_DM), so
-                    # dropping these silently just meant nobody was asked at all.
+                    # question ("is this p1?"), a mention, a handoff — still notifies duty.
                     if _p1_intent in ("negation",) or _is_explicit_p0_negation(text_raw):
                         log.info(
                             "Incident group: P1 trigger ignored (explicit negation) intent=%s text_head=%r",
@@ -1959,8 +1860,8 @@ def process_message(
                         return
                     if _p1_intent != "declare_p1":
                         log.info(
-                            "Incident group: P1 AI triage intent=%s — still offering the create-meeting "
-                            "confirmation (ask, do not drop) text_head=%r",
+                            "Incident group: P1 AI triage intent=%s — still notifying duty (ask, do not drop) "
+                            "text_head=%r",
                             _p1_intent or "(none)",
                             text_raw[:200],
                         )
@@ -1975,30 +1876,8 @@ def process_message(
                     )
                     return
 
-                log.info("Incident group: P1 keyword — posting meeting confirmation card chat_id=%s user_id=%s", chat_id, user_id)
-                # Same concern resolution as the P0 branch (reply-parent / AI-pick / recent), done
-                # now while the surrounding chat is fresh — the Yes click can land minutes later.
-                # Stored on the pending entry so the P1 duty DM gets an auto-filled overview preview
-                # instead of the green manual card.
-                _p1_concern = text_raw
-                try:
-                    from features.overview import concern_context as _concern_ctx
-
-                    _p1_concern = _concern_ctx.resolve_declaration_concern(
-                        chat_id, decl_message_id=message_id, decl_text=text_raw
-                    )
-                except Exception as _cc_err:  # noqa: BLE001
-                    log.warning("concern_context: P1 resolve failed chat_id=%s err=%s", chat_id, _cc_err)
-                set_p1_prompt_pending(
-                    chat_id,
-                    user_id,
-                    declaration_text=_p1_concern,
-                    phrase=text_raw,
-                    source_message_id=message_id,
-                )
-                if not request_p1_meeting_confirmation(chat_id, token, user_id):
-                    pop_p1_prompt_pending(chat_id)
-                    log.error("Incident group: failed to post P1 confirmation card chat_id=%s", chat_id)
+                log.info("Incident group: P1 keyword — notifying duty chat_id=%s user_id=%s", chat_id, user_id)
+                notify_p1_mentioned(chat_id, token, user_id, phrase=text_raw, source_message_id=message_id)
                 return
 
             if try_handle_issue_watch(
