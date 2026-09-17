@@ -384,8 +384,11 @@ def _maybe_p0_keyword_confirm_dm(
 
 # Keyword anywhere in the sentence (e.g. "this is p0", "we tag this as a P0", "is this p0?") —
 # case-insensitive, no declare-vs-question distinction: every hit just notifies duty.
-P0_KEYWORD_RE = re.compile(r"\bp0\b|\bpriority\s*0\b", re.IGNORECASE)
-P1_KEYWORD_RE = re.compile(r"\bp1\b|\bpriority\s*1\b", re.IGNORECASE)
+# NOTE: \b is useless here — Python counts CJK as word characters, so "这属于p0" has no
+# boundary before the "p" and never matched. Bound on ASCII alphanumerics/underscore instead
+# so "p0" glued to Chinese text is seen, while "ap0"/"p00"/"p0_issue" stay ignored as before.
+P0_KEYWORD_RE = re.compile(r"(?<![0-9A-Za-z_])(?:p0|priority\s*0)(?![0-9A-Za-z_])", re.IGNORECASE)
+P1_KEYWORD_RE = re.compile(r"(?<![0-9A-Za-z_])(?:p1|priority\s*1)(?![0-9A-Za-z_])", re.IGNORECASE)
 
 # Shared subject: "it", "this", "this one", "this issue", "that outage", …
 _P0_SUBJECT = r"(?:it|(?:this|that)(?:\s+(?:one|issue|incident|outage|problem|ticket|case))?)"
