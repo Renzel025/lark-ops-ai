@@ -1571,6 +1571,17 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                                 start_epoch=start_epoch,
                                 sent_by_open_id=sender_open_id,
                             )
+                            # Back-link to the PRIMARY row so a later DM "Save" can find and PATCH
+                            # this copy too — the edit session only carries the primary
+                            # chat_id/message_id, so without this the fan-out card keeps the
+                            # pre-edit text forever.
+                            if post_mid:
+                                _group_overview_store.attach_fanout_message(
+                                    lark_overview_dest,
+                                    post_mid,
+                                    fanout_chat_id=oc_extra,
+                                    fanout_message_id=mid_f_s,
+                                )
                     else:
                         log.warning(
                             "send_preview: detection fan-out failed HTTP=%s lark_code=%s lark_msg=%r dest=%s",
@@ -1798,6 +1809,34 @@ def handle_lark_card_action(payload: Dict[str, Any], tenant_token: str) -> None:
                         "save_edit group: overview-bot PATCH failed chat_id=%s primary_mid=%s",
                         group_cid,
                         group_mid[:20],
+                    )
+                # Detection fan-out copies are SEPARATE messages in other groups, each with its own
+                # message_id — patch every one, or they keep showing the pre-edit overview while the
+                # primary group updates. A failure here is logged, not fatal: the primary already saved.
+                for _sib in _group_overview_store.get_fanout_messages(group_cid, group_mid):
+                    _sib_cid = _sib["chat_id"]
+                    _sib_mid = _sib["message_id"]
+                    _sib_ok, _ = _patch_group_overview_cards(tenant_token, _sib_cid, _sib_mid, gcard)
+                    if not _sib_ok:
+                        log.warning(
+                            "save_edit group: fan-out PATCH failed chat_id=%s message_id=%s",
+                            _sib_cid,
+                            _sib_mid[:20],
+                        )
+                        continue
+                    _group_overview_store.update_group_overview_md(
+                        _sib_cid,
+                        _sib_mid,
+                        md=new_md,
+                        issue=new_issue,
+                        impact=new_impact,
+                        support=new_support,
+                        start_epoch=new_start_epoch,
+                    )
+                    log.info(
+                        "save_edit group: fan-out overview patched chat_id=%s message_id=%s",
+                        _sib_cid,
+                        _sib_mid[:20],
                     )
                 _group_overview_store.update_group_overview_md(
                     group_cid,
