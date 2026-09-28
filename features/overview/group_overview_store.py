@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("lark-ops-ai")
 
@@ -136,6 +136,51 @@ def attach_broadcast_message(
         row["broadcast_chat_id"] = bcid
         row["broadcast_message_id"] = bmid
         row["updated_at"] = int(time.time())
+
+
+def attach_fanout_message(
+    group_chat_id: str,
+    group_message_id: str,
+    *,
+    fanout_chat_id: str,
+    fanout_message_id: str,
+) -> None:
+    """Link a detection fan-out copy (``OVERVIEW_DETECTION_FANOUT_CHAT_IDS``) to the primary row.
+
+    The fan-out loop posts a SEPARATE card per extra group, each stored under its own
+    ``chat_id:message_id`` key. Without this back-link the DM edit session — which only carries the
+    primary ``group_chat_id``/``group_message_id`` — has no way to reach those copies, so Save left
+    them showing the pre-edit text. Appends to a ``fanout_messages`` list, deduped by message_id.
+    """
+    cid = (group_chat_id or "").strip()
+    mid = (group_message_id or "").strip()
+    fcid = (fanout_chat_id or "").strip()
+    fmid = (fanout_message_id or "").strip()
+    if not cid or not mid or not fcid or not fmid:
+        return
+    k = _key(cid, mid)
+    with _LOCK:
+        row = _BY_KEY.get(k)
+        if not row:
+            return
+        siblings = list(row.get("fanout_messages") or [])
+        if any(str(s.get("message_id") or "") == fmid for s in siblings):
+            return
+        siblings.append({"chat_id": fcid, "message_id": fmid})
+        row["fanout_messages"] = siblings
+        row["updated_at"] = int(time.time())
+
+
+def get_fanout_messages(group_chat_id: str, group_message_id: str) -> List[Dict[str, str]]:
+    """Fan-out copies linked to this primary overview row. Empty when there are none."""
+    row = get_group_overview(group_chat_id, group_message_id) or {}
+    out: List[Dict[str, str]] = []
+    for s in row.get("fanout_messages") or []:
+        cid = str(s.get("chat_id") or "").strip()
+        mid = str(s.get("message_id") or "").strip()
+        if cid and mid:
+            out.append({"chat_id": cid, "message_id": mid})
+    return out
 
 
 def update_group_overview_md(
