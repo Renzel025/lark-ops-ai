@@ -210,6 +210,16 @@ def _capture_ctx_clear() -> None:
     _capture_ctx.trigger_message_id = ""
 
 
+def _wait_post_gate() -> None:
+    """Block this capture thread's posts until the P0-declare gate (Bitable cards + notice) is set."""
+    gate = getattr(_capture_ctx, "post_gate", None)
+    if gate is None or gate.is_set():
+        return
+    sec = float(getattr(_capture_ctx, "post_gate_sec", 60) or 60)
+    if not gate.wait(sec):
+        log.warning("p0 graph screenshot: post gate not released after %ss — posting anyway", sec)
+
+
 def _get_trigger_message_id() -> str:
     return str(getattr(_capture_ctx, "trigger_message_id", "") or "").strip()
 
@@ -3020,7 +3030,13 @@ def schedule_on_demand_graph_screenshot(
     return "started"
 
 
-def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_label: str) -> None:
+def schedule_p0_graph_screenshot(
+    tenant_token: str,
+    priority: str,
+    source_chat_label: str,
+    *,
+    post_after: Optional[threading.Event] = None,
+) -> None:
     """
     Non-blocking: captures Grafana for each auto range (default **6h** only) and posts to
     ``P0_GRAPH_SCREENSHOT_TARGET_CHAT_ID``. Runs for **P0** always; for **P1** only when
@@ -3028,6 +3044,10 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
 
     If ``P0_GRAPH_SCREENSHOT_INTERVAL_MIN`` > 0, also schedules repeat captures every N minutes
     until no screenshot-eligible session remains (see ``on_p0_session_ended_for_graph_screenshot``).
+
+    ``post_after``: optional event set by the declare-time Bitable thread once its cards are posted.
+    The capture renders immediately, but the "Capturing…" notice and the images wait for it (capped by
+    ``P0_GRAPH_SCREENSHOT_WAIT_BITABLE_MAX_SEC``) so Grafana posts never interleave with the cards.
     """
     from p0_logic import config as _config
 
@@ -3073,18 +3093,42 @@ def schedule_p0_graph_screenshot(tenant_token: str, priority: str, source_chat_l
     range_hint = range_labels[0] if len(range_labels) == 1 else ", ".join(range_labels)
     from p0_logic import lark_client as _lark
 
+    wait_sec = _config.get_p0_graph_screenshot_wait_bitable_max_sec() if post_after is not None else 0
+    notice_done = threading.Event()
+
+    def _post_notice() -> None:
+        # Hold the "Capturing…" notice until the declare Bitable cards are out (bounded), so the
+        # chat reads cards → Capturing… → images instead of interleaving the two threads' posts.
+        try:
+            if wait_sec > 0 and post_after is not None and not post_after.wait(wait_sec):
+                log.warning(
+                    "p0 graph screenshot: Bitable cards not done after %ss — posting anyway", wait_sec
+                )
+            if _config.get_p0_graph_screenshot_capturing_notice_enabled():
+                _lark.post_text_to_chat(
+                    chat_id,
+                    tok,
+                    f"📊 Capturing Grafana dashboard (last {range_hint})…",
+                )
+        finally:
+            notice_done.set()
+
     def _run() -> None:
-        # Post the "Capturing…" notice from INSIDE the daemon thread so that nothing
+        # Post the "Capturing…" notice from INSIDE a daemon thread so that nothing
         # Grafana-related — not even this status POST — runs synchronously on the caller
         # (start_p0) thread. A slow/hung Lark POST here can no longer delay the Bitable step.
         # Suppressible so the Bitable card lands first (P0_GRAPH_SCREENSHOT_CAPTURING_NOTICE=0).
-        if _config.get_p0_graph_screenshot_capturing_notice_enabled():
-            _lark.post_text_to_chat(
-                chat_id,
-                tok,
-                f"📊 Capturing Grafana dashboard (last {range_hint})…",
-            )
-        _capture_and_post_ranges_thread_body(tok, chat_id, label)
+        if wait_sec > 0:
+            # Render in parallel with the Bitable wait; the image post waits on notice_done.
+            threading.Thread(target=_post_notice, name="p0-graph-notice", daemon=True).start()
+            _capture_ctx.post_gate = notice_done
+            _capture_ctx.post_gate_sec = wait_sec + 15
+        else:
+            _post_notice()
+        try:
+            _capture_and_post_ranges_thread_body(tok, chat_id, label)
+        finally:
+            _capture_ctx.post_gate = None
 
     threading.Thread(target=_run, name="p0-graph-screenshot", daemon=True).start()
     start_p0_graph_screenshot_interval(label)
@@ -3226,6 +3270,7 @@ def post_p0_graph_screenshots_to_chat(
     if not tok or not cid:
         log.warning("p0 graph screenshot: post skipped — missing token or chat_id")
         return
+    _wait_post_gate()
     cap = _config.get_p0_graph_screenshot_caption()
     range_disp = _config.get_p0_graph_screenshot_range_display(range_label) if range_label else ""
     if cap:
@@ -3321,6 +3366,7 @@ def _post_capture_failure_to_chat(
             " Check server logs (`journalctl -u lark-ops-ai`) — often Playwright hang, "
             "Grafana login, or blank capture."
         )
+    _wait_post_gate()
     st, _ = _lark.post_text_to_chat(cid, tok, msg)
     if st != 200:
         log.warning("p0 graph screenshot: failure notice HTTP=%s", st)
