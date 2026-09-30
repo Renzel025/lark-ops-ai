@@ -2337,6 +2337,20 @@ def get_p0_graph_screenshot_capturing_notice_enabled() -> bool:
     )
 
 
+def get_p0_graph_screenshot_wait_bitable_max_sec() -> int:
+    """
+    On P0 declare, hold the "📊 Capturing…" notice and the screenshot posts until the declare-time
+    Bitable deploy/ops cards have all posted, so the two never interleave in the chat. The capture
+    itself still renders in parallel. ``P0_GRAPH_SCREENSHOT_WAIT_BITABLE_MAX_SEC`` caps the wait
+    (default 45); ``0`` disables the wait (old racy ordering).
+    """
+    reload_env_runtime()
+    try:
+        return max(0, int((os.getenv("P0_GRAPH_SCREENSHOT_WAIT_BITABLE_MAX_SEC") or "45").strip()))
+    except ValueError:
+        return 45
+
+
 def get_p0_graph_screenshot_include_login_panel() -> bool:
     """
     ``P0_GRAPH_SCREENSHOT_INCLUDE_LOGIN_PANEL`` — ``0`` (recommended): **two** PNGs like manual VNC —

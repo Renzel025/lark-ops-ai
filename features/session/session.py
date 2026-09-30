@@ -2388,14 +2388,21 @@ def start_p0(
     # Dispatch the Bitable deploy/ops cards in a BACKGROUND THREAD so they post in PARALLEL with the DM
     # overview generation (2× Claude one-shot, ~13s) and the Grafana screenshot — instead of waiting at
     # the tail of this sequential flow, which made the cards appear ~1-2 min after declare.
+    # Set once the Bitable cards are all posted; the Grafana thread holds its posts until then so the
+    # two never interleave in the chat (see schedule_p0_graph_screenshot post_after).
+    bitable_done: Optional[threading.Event] = None
     if priority == "P0" and not _cancelled_midflight():
-        def _run_declare_bitable(_tok=token, _cid=chat_id, _prio=priority):
+        bitable_done = threading.Event()
+
+        def _run_declare_bitable(_tok=token, _cid=chat_id, _prio=priority, _done=bitable_done):
             try:
                 from features.overview import bitable_adjustments as _bitable_adj
 
                 _bitable_adj.maybe_post_adjustment_notice_on_p0_declare(_tok, source_chat_id=_cid, priority=_prio)
             except Exception as e:  # noqa: BLE001
                 log.warning("start_p0: adjustment bitable on declare failed: %s", e)
+            finally:
+                _done.set()
 
         threading.Thread(target=_run_declare_bitable, daemon=True, name="declare-bitable").start()
         log.info(
@@ -2428,7 +2435,7 @@ def start_p0(
         try:
             from features.screenshot.graph_screenshot import schedule_p0_graph_screenshot
 
-            schedule_p0_graph_screenshot(token, priority, chat_label)
+            schedule_p0_graph_screenshot(token, priority, chat_label, post_after=bitable_done)
         except Exception as e:
             log.warning("start_p0: graph screenshot hook failed: %s", e)
     try:
