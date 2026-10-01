@@ -3,12 +3,12 @@ Issue Watch mute — ``/off`` silences major-P0 detection everywhere, ``/on`` br
 
 For when the classifier keeps flagging non-incident chatter: duty types ``/off`` in any detection
 group (or in the alert DM) and no further alerts are evaluated or sent for ANY detection group,
-until someone types ``/on``. One switch, so it does not matter which group the noise came from or
-where the command was typed.
+until it auto-resumes (``P0_ISSUE_WATCH_MUTE_MAX_MIN``, default 3h) or someone types ``/on``. One
+switch, so it does not matter which group the noise came from or where the command was typed.
 
 State is held in memory and mirrored to ``P0_SHARED_STATE_DIR`` when that is set, so
 ``systemctl restart`` does not silently un-mute detection that duty deliberately quieted.
-An optional ``P0_ISSUE_WATCH_MUTE_MAX_MIN`` adds an auto-resume timer (default 0 = only ``/on``).
+``P0_ISSUE_WATCH_MUTE_MAX_MIN`` sets the auto-resume timer (default 180 min; 0 = only ``/on``).
 """
 from __future__ import annotations
 
@@ -133,8 +133,7 @@ def muted_until() -> int:
 def describe_mute_window() -> str:
     """Auto-resume tail for the ``/off`` acknowledgement, e.g. ``auto-resumes in 2h``.
 
-    Empty by default: a mute holds until ``/on``, and only an explicit
-    ``P0_ISSUE_WATCH_MUTE_MAX_MIN`` adds a timer.
+    Empty only when ``P0_ISSUE_WATCH_MUTE_MAX_MIN=0`` (mute holds until ``/on``).
     """
     max_min = _config.get_p0_issue_watch_mute_max_min()
     if max_min <= 0:
@@ -152,5 +151,6 @@ def mute_hint_text() -> Optional[str]:
     window = f" ({window})" if window else ""
     return (
         f"*Wrongly detected? Type **/off** here or in a detection group to mute major P0 detection"
-        f"{window} — it stays off for every group until someone types **/on**.*"
+        f"{window} — it stays off for every group until "
+        f"{'it auto-resumes or ' if window else ''}someone types **/on**.*"
     )

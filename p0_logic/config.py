@@ -2859,16 +2859,16 @@ def get_p0_issue_watch_mute_command_enabled() -> bool:
 
 
 def get_p0_issue_watch_mute_max_min() -> int:
-    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — optional auto-resume for a ``/off`` group, in minutes.
+    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — auto-resume a ``/off`` mute after N minutes.
 
-    Default **0** = the mute holds until someone types ``/on`` (no timer). Set a positive number
-    only if you want a forgotten ``/off`` to expire on its own."""
+    Default **180** (3h) so a forgotten ``/off`` never leaves detection silenced for days; ``/on``
+    still resumes early. ``0`` = no timer (the mute holds until someone types ``/on``)."""
     reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "0").strip()
+    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "180").strip()
     try:
         return max(0, int(raw))
     except ValueError:
-        return 0
+        return 180
 
 
 def parse_issue_watch_mute_command(text: str) -> str:

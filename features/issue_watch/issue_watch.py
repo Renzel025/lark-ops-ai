@@ -651,7 +651,7 @@ def _apply_mute_command(
             f"🔇 Major P0 detection is already muted{window}. Type /on to resume."
             if already
             else f"🔇 Major P0 detection muted{window} — no alerts from any detection group "
-            "until someone types /on."
+            f"until {'then, or until ' if window else ''}someone types /on."
         )
     else:
         was_muted = _mute.unmute()
