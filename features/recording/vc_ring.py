@@ -1,5 +1,6 @@
 """
-VC auto-ring: invite @mentioned users when duty joins an ongoing P0 meeting.
+VC ring: invite the targets of the @bot ring commands (and the declare-time auto-invite list) into
+the ongoing P0 meeting. A plain @mention in chat never rings anyone.
 
 Requires ``P0_VC_RING_ENABLED=1``, duty ``user_access_token`` (OAuth), and
 ``PATCH /vc/v1/meetings/{meeting_id}/invite``.
@@ -8,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from p0_logic import cards as _cards
@@ -19,53 +19,12 @@ from . import vc_user_oauth as _oauth
 
 log = logging.getLogger("lark-ops-ai")
 
-_DUTY_MENTION_LOCK = threading.Lock()
-# detection chat_id -> {open_id, ids[], ts}
-_DUTY_MENTIONS_BY_CHAT: Dict[str, Dict[str, Any]] = {}
 
 # Re-ring scheduler (P0_VC_RING_RETRY_ENABLED): ring an invited-but-not-joined user again, up to
 # P0_VC_RING_RETRY_MAX_ATTEMPTS total, spaced P0_VC_RING_RETRY_INTERVAL_SEC apart, stopping on join.
 # chat_id -> {meeting_id, targets:{open_id:{attempts:int}}, joined:set[open_id], timer:threading.Timer}
 _RERING_LOCK = threading.Lock()
 _RERING_STATE: Dict[str, Dict[str, Any]] = {}
-
-
-def _is_duty_open_id(open_id: str) -> bool:
-    oid = (open_id or "").strip()
-    if not oid:
-        return False
-    allowed = set(_config.get_dm_instruction_open_ids())
-    return oid in allowed if allowed else True
-
-
-def note_duty_mentions_in_chat(
-    chat_id: str,
-    duty_open_id: str,
-    mention_open_ids: List[str],
-    *,
-    tenant_token: str = "",
-) -> None:
-    """Duty @mentioned users in detection group — merged on declare and during active P0."""
-    if not _config.get_p0_vc_ring_enabled():
-        return
-    cid = (chat_id or "").strip()
-    oid = (duty_open_id or "").strip()
-    if not cid or not oid or not _is_duty_open_id(oid):
-        return
-    ids = _filter_ring_targets(mention_open_ids, operator_open_id=oid)
-    if not ids:
-        return
-    with _DUTY_MENTION_LOCK:
-        _DUTY_MENTIONS_BY_CHAT[cid] = {"open_id": oid, "ids": ids, "ts": time.time()}
-    log.info(
-        "vc_ring: duty mentions stored chat_tail=%s duty_tail=%s targets=%s",
-        cid[-12:] if len(cid) > 12 else cid,
-        oid[-8:],
-        len(ids),
-    )
-    _merge_duty_mentions_into_active_session(
-        cid, ids, operator_open_id=oid, tenant_token=tenant_token
-    )
 
 
 def _pending_ring_targets(sess: Dict[str, Any]) -> List[str]:
@@ -75,14 +34,14 @@ def _pending_ring_targets(sess: Dict[str, Any]) -> List[str]:
     return [x for x in all_targets if x not in invited]
 
 
-def _merge_duty_mentions_into_active_session(
+def _merge_ring_targets_into_active_session(
     chat_id: str,
     new_ids: List[str],
     *,
     operator_open_id: str = "",
     tenant_token: str = "",
 ) -> None:
-    """If P0 is already live, append duty @mentions and ring new users when VC is active."""
+    """If P0 is already live, append ring-command targets and ring new users when VC is active."""
     cid = (chat_id or "").strip()
     if not cid or not new_ids:
         return
@@ -122,20 +81,6 @@ def _merge_duty_mentions_into_active_session(
         )
 
 
-def pop_duty_mentions_for_chat(chat_id: str) -> List[str]:
-    cid = (chat_id or "").strip()
-    if not cid:
-        return []
-    with _DUTY_MENTION_LOCK:
-        row = _DUTY_MENTIONS_BY_CHAT.pop(cid, None)
-    if not row:
-        return []
-    # Expire after 2h
-    if time.time() - float(row.get("ts") or 0) > 7200:
-        return []
-    return list(row.get("ids") or [])
-
-
 def invite_open_ids_into_active_meeting(
     chat_id: str,
     target_open_ids: List[str],
@@ -172,7 +117,7 @@ def invite_open_ids_into_active_meeting(
     trigger = str(sess.get("trigger_open_id") or operator_open_id or "").strip()
     if not _filter_ring_targets(raw, operator_open_id=trigger):
         return "no_targets"
-    _merge_duty_mentions_into_active_session(
+    _merge_ring_targets_into_active_session(
         cid, raw, operator_open_id=operator_open_id, tenant_token=tenant_token
     )
     # The actual ring uses a fixed inviter's OAuth (or the declarer's when none is configured);
@@ -645,15 +590,13 @@ def resolve_ring_targets_from_snapshot(
     detection_chat_id: str,
     operator_open_id: str,
 ) -> List[str]:
-    """Merge concern @mentions (on alert) + duty @mentions stored before declare."""
+    """Concern @mentions captured on the Issue Watch alert."""
     concern: List[str] = []
     if snap:
         raw = snap.get("concern_mention_open_ids") or snap.get("mention_open_ids") or []
         if isinstance(raw, list):
             concern = [str(x).strip() for x in raw]
-    duty_ids = pop_duty_mentions_for_chat(detection_chat_id)
-    merged = duty_ids + [x for x in concern if x not in duty_ids]
-    return _filter_ring_targets(merged, operator_open_id=operator_open_id)
+    return _filter_ring_targets(concern, operator_open_id=operator_open_id)
 
 
 def _major_check_person_ring_open_ids(
@@ -752,7 +695,7 @@ def resolve_declare_ring_targets(
     include_major_check_persons: bool = True,
 ) -> List[str]:
     """
-    Ring targets at Issue Watch declare: concern/duty @mentions + ``P0_MAJOR_CHECK_PERSON_IDS``.
+    Ring targets at Issue Watch declare: concern @mentions + ``P0_MAJOR_CHECK_PERSON_IDS``.
 
     ``include_major_check_persons=False`` drops the check persons (P0_MAJOR_CHECK_PERSON_AUTO_INVITE off)
     so only the concern @mentions ring here; the on-call auto-invite list is seeded separately in start_p0.

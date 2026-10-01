@@ -78,8 +78,8 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 
 **Optional Bitable tuning (numbers, not on/off):**
 
-- `P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS` (default 8)
-- `P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS` (default 16)
+- `P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS` (default 0 = no cap, all rows in the window)
+- `P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS` (default 0 = no cap, all rows in the window)
 - `P0_ADJUSTMENT_BITABLE_OPS_PAGE_SIZE` / `DEPLOY_PAGE_SIZE` (default 8)
 
 ### Prod vs dev (overview / Bitable)
@@ -116,13 +116,13 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 | `P0_RAG_DOC_TOKEN` | SOP docx **or** `/wiki/` token | blank = RAG off | blank |
 | `P0_RAG_FULL_DOC_MAX_CHARS` | inject whole doc at/below this | above = retrieval | **12000** |
 | `P0_ISSUE_WATCH_MUTE_COMMAND` | on | off | **on** |
-| `P0_ISSUE_WATCH_MUTE_MAX_MIN` | minutes until a `/off` group auto-resumes | `0` = until `/on` | **0** |
+| `P0_ISSUE_WATCH_MUTE_MAX_MIN` | minutes until a `/off` mute auto-resumes (default 180 = 3h) | `0` = until `/on` | **180** |
 
 **`/off` and `/on`** — when the classifier keeps flagging non-incident chatter, type `/off` in any
 detection group or in the alert DM: it is **one global switch**, so every detection group stops
 alerting, wherever the command was typed. `/on` brings them all back. The state survives restart when
-`P0_SHARED_STATE_DIR` is set, so detection stays muted until someone types `/on` — set
-`P0_ISSUE_WATCH_MUTE_MAX_MIN` to a positive number only if you want an auto-resume timer instead.
+`P0_SHARED_STATE_DIR` is set. A mute auto-resumes after `P0_ISSUE_WATCH_MUTE_MAX_MIN` minutes
+(default 180 = 3h); set it to `0` to hold the mute until someone types `/on`.
 
 ### Prod vs dev (issue watch)
 

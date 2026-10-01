@@ -2859,16 +2859,16 @@ def get_p0_issue_watch_mute_command_enabled() -> bool:
 
 
 def get_p0_issue_watch_mute_max_min() -> int:
-    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — optional auto-resume for a ``/off`` group, in minutes.
+    """``P0_ISSUE_WATCH_MUTE_MAX_MIN`` — auto-resume a ``/off`` mute after N minutes.
 
-    Default **0** = the mute holds until someone types ``/on`` (no timer). Set a positive number
-    only if you want a forgotten ``/off`` to expire on its own."""
+    Default **180** (3h) so a forgotten ``/off`` never leaves detection silenced for days; ``/on``
+    still resumes early. ``0`` = no timer (the mute holds until someone types ``/on``)."""
     reload_env_runtime()
-    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "0").strip()
+    raw = (os.getenv("P0_ISSUE_WATCH_MUTE_MAX_MIN") or "180").strip()
     try:
         return max(0, int(raw))
     except ValueError:
-        return 0
+        return 180
 
 
 def parse_issue_watch_mute_command(text: str) -> str:
@@ -3691,31 +3691,31 @@ def get_p0_adjustment_bitable_max_rows() -> int:
 
 
 def get_p0_adjustment_bitable_ops_max_rows() -> int:
-    """Cap ops rows on card. Default **8**. ``0`` = no limit."""
+    """Cap ops rows on card. Default **0** = no limit (every row in the window is shown)."""
     reload_env_runtime()
     legacy = get_p0_adjustment_bitable_max_rows()
     if legacy > 0:
         return legacy
-    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS") or "8").strip()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS") or "0").strip()
     try:
         n = int(raw)
         return max(0, n)
     except ValueError:
-        return 8
+        return 0
 
 
 def get_p0_adjustment_bitable_deploy_max_rows() -> int:
-    """Cap deployment rows (before pagination). Default **16** (~2 pages). ``0`` = no limit."""
+    """Cap deployment rows (before pagination). Default **0** = no limit (every row in the window is shown)."""
     reload_env_runtime()
     legacy = get_p0_adjustment_bitable_max_rows()
     if legacy > 0:
         return legacy
-    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS") or "16").strip()
+    raw = (os.getenv("P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS") or "0").strip()
     try:
         n = int(raw)
         return max(0, n)
     except ValueError:
-        return 16
+        return 0
 
 
 def get_p0_adjustment_bitable_timezone_name() -> str:

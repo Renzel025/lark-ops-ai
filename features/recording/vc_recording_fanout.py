@@ -449,7 +449,15 @@ def handle_vc_recording_ready_fanout(evt: Dict[str, Any], tenant_token: str) -> 
     meeting_no = str(meeting.get("meeting_no") or "").strip()
     meeting_id = str(meeting.get("id") or "").strip()
     url = str(evt.get("url") or "").strip()
-    duration_raw = str(evt.get("duration") or "").strip()
+    # recording_ready ``duration`` is in SECONDS ("376" = 6m16s); fan-out formats milliseconds
+    # (the poll path passes (end-start)*1000), so convert — raw seconds showed as "0s".
+    duration_raw = ""
+    try:
+        dur_s = int(str(evt.get("duration") or "0").strip() or "0")
+        if dur_s > 0:
+            duration_raw = str(dur_s * 1000)
+    except ValueError:
+        pass
     if not fanout_recording_to_chats(
         tenant_token,
         meeting_id,

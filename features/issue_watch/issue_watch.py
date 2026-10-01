@@ -651,7 +651,7 @@ def _apply_mute_command(
             f"🔇 Major P0 detection is already muted{window}. Type /on to resume."
             if already
             else f"🔇 Major P0 detection muted{window} — no alerts from any detection group "
-            "until someone types /on."
+            f"until {'then, or until ' if window else ''}someone types /on."
         )
     else:
         was_muted = _mute.unmute()
@@ -754,13 +754,6 @@ def try_handle_issue_watch(
         return False
     sender = (sender_open_id or "").strip()
     concern_mids = [str(x).strip() for x in (mention_open_ids or []) if str(x).strip()]
-    if concern_mids and _config.get_p0_vc_ring_enabled():
-        from features.recording import vc_ring as _vc_ring
-
-        if _vc_ring._is_duty_open_id(sender):
-            _vc_ring.note_duty_mentions_in_chat(
-                cid, sender, concern_mids, tenant_token=tenant_token
-            )
     raw = (text or "").strip()
     if not raw:
         return True
@@ -820,6 +813,16 @@ def try_handle_issue_watch(
     if not result.get("is_incident_signal"):
         log.info(
             "issue_watch: not a signal chat_id=%s reason=%r",
+            cid,
+            (result.get("reason") or "")[:120],
+        )
+        return True
+
+    # A major P0 must fall in the major-issue scope. A "signal" with no category (alert showed
+    # "• (unspecified)") is the model saying yes without naming what is broken — don't alert on it.
+    if not [c for c in (result.get("categories") or []) if c in _CATEGORY_LABELS and c != "widespread_impact"]:
+        log.info(
+            "issue_watch: signal has no major-issue category — skipped chat_id=%s reason=%r",
             cid,
             (result.get("reason") or "")[:120],
         )
