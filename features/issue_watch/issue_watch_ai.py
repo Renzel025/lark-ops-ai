@@ -24,8 +24,8 @@ _ISSUE_WATCH_SYSTEM = (
     "5 **Promotion / voucher** — promo codes, vouchers, coupons, campaigns not applying or broken\n"
     "6 **Rebate** — rebate/cashback not credited, wrong amount, unavailable\n"
     "7 **LuckyCoin** — LuckyCoin balance, redemption, or rewards broken\n"
-    "8 **Company loss / financial impact** — wrong payout, duplicate credit, overpayment, mass incorrect "
-    "settlement, or any issue explicitly causing company/player financial loss\n"
+    "8 **Company loss / financial impact** — a LIVE defect that is causing loss right now: wrong payout, "
+    "duplicate credit, overpayment, mass incorrect settlement still happening\n"
     "Also major: website down, registration broken, FPMS/PMS backend down.\n\n"
     "Output ONLY valid JSON:\n"
     "{\n"
@@ -62,7 +62,14 @@ _ISSUE_WATCH_SYSTEM = (
     "use is_incident_signal=false or very low confidence unless many players or all games affected.\n"
     "- gameplay_outage = enter-game/event broadly broken — NOT one live-table bet error.\n"
     "- promotion/voucher/rebate/LuckyCoin: TRUE when players cannot claim, redeem, or receive expected rewards.\n"
-    "- company_loss: TRUE when message implies financial harm (duplicate credit, wrong settlement, company loss).\n"
+    "- company_loss: TRUE only for a live defect still causing financial harm (duplicate credit, wrong "
+    "settlement happening now). NOT a request to refund/compensate for something already identified.\n"
+    "- is_incident_signal=FALSE for **back-office processing requests**: refund, compensation, re-settlement, "
+    "void-round refund, \"please process according to the sheet\", \"help process the refund for N players\" "
+    "— a task for an issue already known and being handled, not a new outage, even if it names many players "
+    "or an amount.\n"
+    "- is_incident_signal=FALSE for **severity questions** that report no new symptom: \"can we consider this "
+    "as P0?\", \"is this P0?\", \"should we declare?\" — discussion about an issue, not a report of one.\n"
     "- is_incident_signal=FALSE when staff confirms things work: \"able to withdraw without any issue\", "
     "\"we were able to withdraw realtime without encountering any issue\", \"deposit is working fine\", "
     "\"checked — no problem\", \"resolved / back to normal\". Words like withdraw/deposit/issue in the "
@@ -518,8 +525,11 @@ _SOP_CHECK_SYSTEM = (
     "You are given the SOP, the chat message, and a first-pass classification.\n"
     "Answer only: does the SOP treat this as a MAJOR P0 that on-call duty must be paged for?\n"
     "HARD RULE, overrides everything else including the SOP text: if 4 OR MORE players are "
-    "affected, answer is_major_p0=true. Never downgrade a 4+ player issue for being limited to one "
-    "provider, one channel or one payment method.\n"
+    "affected by a live failure, answer is_major_p0=true. Never downgrade a 4+ player issue for being "
+    "limited to one provider, one channel or one payment method.\n"
+    "Players are NOT 'affected' when they are only listed in a back-office task (refund, compensation, "
+    "re-settlement, 'process according to the sheet') or in a question about whether to call it P0 with "
+    "no new symptom — answer is_major_p0=false for those, whatever the player count.\n"
     "Otherwise the SOP wins over your own judgement. If the SOP does not cover it, keep the "
     "first pass.\n"
     'Output ONLY valid JSON: {"is_major_p0": true|false, "reason": "one short sentence"}'
@@ -534,21 +544,9 @@ def _apply_sop_check(message_text: str, ai: dict, provider: str) -> dict:
     """
     if not _config.get_p0_issue_watch_rag_enabled():
         return ai
-    # 4+ affected players is the company rule and is not up for debate — skip the SOP check
-    # entirely so no retrieved passage ("one provider = Minor") can veto a confirmed major P0.
-    min_affected = _config.get_p0_issue_watch_min_affected_players()
-    try:
-        stated = int(ai.get("players_mentioned_in_message") or 0)
-    except (TypeError, ValueError):
-        stated = 0
-    players = max(stated, len(extract_player_ids(message_text)))
-    if players >= min_affected:
-        log.info(
-            "issue_watch_rag: SOP check skipped — %s players affected (>= %s), major P0 by rule",
-            players,
-            min_affected,
-        )
-        return ai
+    # 4+ affected players still runs the check: the HARD RULE in _SOP_CHECK_SYSTEM keeps any live
+    # 4+ player failure a major P0, but a refund/admin task or a "should this be P0?" question that
+    # merely names 4+ players can now be vetoed (it used to skip the check and always alert).
     try:
         from . import issue_watch_rag as _rag
 

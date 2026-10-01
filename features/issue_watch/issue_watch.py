@@ -818,6 +818,16 @@ def try_handle_issue_watch(
         )
         return True
 
+    # A major P0 must fall in the major-issue scope. A "signal" with no category (alert showed
+    # "• (unspecified)") is the model saying yes without naming what is broken — don't alert on it.
+    if not [c for c in (result.get("categories") or []) if c in _CATEGORY_LABELS and c != "widespread_impact"]:
+        log.info(
+            "issue_watch: signal has no major-issue category — skipped chat_id=%s reason=%r",
+            cid,
+            (result.get("reason") or "")[:120],
+        )
+        return True
+
     fingerprint = str(result.get("issue_fingerprint") or "unknown_issue")
     window_min = _config.get_p0_issue_watch_window_min()
     window_sec = float(window_min * 60)
