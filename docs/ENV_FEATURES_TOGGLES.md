@@ -78,8 +78,8 @@ Reference for **lark-ops-ai-dev** (`features/` layout). Values use **`on` / `off
 
 **Optional Bitable tuning (numbers, not on/off):**
 
-- `P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS` (default 8)
-- `P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS` (default 16)
+- `P0_ADJUSTMENT_BITABLE_OPS_MAX_ROWS` (default 0 = no cap, all rows in the window)
+- `P0_ADJUSTMENT_BITABLE_DEPLOY_MAX_ROWS` (default 0 = no cap, all rows in the window)
 - `P0_ADJUSTMENT_BITABLE_OPS_PAGE_SIZE` / `DEPLOY_PAGE_SIZE` (default 8)
 
 ### Prod vs dev (overview / Bitable)
