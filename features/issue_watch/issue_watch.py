@@ -754,13 +754,6 @@ def try_handle_issue_watch(
         return False
     sender = (sender_open_id or "").strip()
     concern_mids = [str(x).strip() for x in (mention_open_ids or []) if str(x).strip()]
-    if concern_mids and _config.get_p0_vc_ring_enabled():
-        from features.recording import vc_ring as _vc_ring
-
-        if _vc_ring._is_duty_open_id(sender):
-            _vc_ring.note_duty_mentions_in_chat(
-                cid, sender, concern_mids, tenant_token=tenant_token
-            )
     raw = (text or "").strip()
     if not raw:
         return True
