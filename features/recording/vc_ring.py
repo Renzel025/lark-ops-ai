@@ -1005,6 +1005,10 @@ def _try_ring_session(
     if not targets:
         if list(sess.get("vc_ring_target_open_ids") or []):
             log.info("vc_ring: all targets already invited chat_id=%s", chat_id[:24])
+        elif str(sess.get("priority") or "").upper() == "P1":
+            # P1 never auto-rings (P0_VC_AUTO_INVITE_ON_P1 off) — an empty list is expected, not a
+            # problem, so keep it out of the WARNING-level session details summary.
+            log.info("vc_ring: P1 session has no auto-ring targets (expected) chat_id=%s", chat_id[:24])
         else:
             log.warning("vc_ring: no ring targets on session chat_id=%s", chat_id[:24])
         return False
