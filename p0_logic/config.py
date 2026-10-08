@@ -1155,7 +1155,7 @@ PLAYER_VAGUE_LABELS: Dict[str, str] = {
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 GROQ_BASE = "https://api.groq.com/openai/v1"
 # Groq retired the Llama 3.x chat models (llama-3.1-8b-instant → 404 model_not_found, Oct 2026).
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip()
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "qwen/qwen3.8-27b").strip()
 GROQ_VISION_MODEL = (os.getenv("GROQ_VISION_MODEL") or "llama-3.2-11b-vision-preview").strip()
 # One Groq call for issue EN + zh_issue + zh_impact (faster than summarize + 2 translates). Set 0 to use legacy path.
 GROQ_OVERVIEW_ONE_SHOT = (os.getenv("GROQ_OVERVIEW_ONE_SHOT", "1") or "1").strip().lower() not in (

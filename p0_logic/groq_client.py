@@ -49,7 +49,7 @@ def _groq_runtime() -> Tuple[str, str, str]:
     """Fresh key/models after ``reload_env_runtime`` (module-level GROQ_* is import-time only)."""
     _config.reload_env_runtime()
     key = (os.getenv("GROQ_API_KEY") or "").strip()
-    model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "openai/gpt-oss-20b").strip()
+    model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "qwen/qwen3.8-27b").strip()
     vision = (os.getenv("GROQ_VISION_MODEL") or GROQ_VISION_MODEL or "llama-3.2-11b-vision-preview").strip()
     return key, model, vision
 
