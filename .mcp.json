@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lark-bot-inspector": {
+      "type": "stdio",
+      "command": "tools/lark-bot-inspector/.venv/bin/python",
+      "args": ["tools/lark-bot-inspector/server.py"],
+      "env": {}
+    }
+  }
+}

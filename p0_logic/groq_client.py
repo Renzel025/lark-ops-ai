@@ -25,6 +25,21 @@ GROQ_BASE = _config.GROQ_BASE
 GROQ_MODEL = _config.GROQ_MODEL
 GROQ_VISION_MODEL = _config.GROQ_VISION_MODEL
 
+# Groq's current chat models are reasoning models. Their thinking counts against max_tokens, so the
+# small budgets used here (120-500) could be spent thinking and return no answer, and Qwen writes
+# <think> into the content by default (breaks JSON parsing). Turn reasoning down/hidden for them.
+_REASONING_MIN_MAX_TOKENS = 1024
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
+
+
+def _reasoning_params(model: str) -> dict:
+    m = (model or "").strip().lower()
+    if m.startswith("openai/gpt-oss"):
+        return {"reasoning_effort": "low", "include_reasoning": False}
+    if m.startswith("qwen/qwen3"):
+        return {"reasoning_effort": "none", "reasoning_format": "hidden"}
+    return {}
+
 
 def _timeout_kw():
     return _config.timeout_kw()
@@ -34,7 +49,7 @@ def _groq_runtime() -> Tuple[str, str, str]:
     """Fresh key/models after ``reload_env_runtime`` (module-level GROQ_* is import-time only)."""
     _config.reload_env_runtime()
     key = (os.getenv("GROQ_API_KEY") or "").strip()
-    model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "llama-3.1-8b-instant").strip()
+    model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "qwen/qwen3.8-27b").strip()
     vision = (os.getenv("GROQ_VISION_MODEL") or GROQ_VISION_MODEL or "llama-3.2-11b-vision-preview").strip()
     return key, model, vision
 
@@ -56,10 +71,24 @@ def groq_chat_once(system_prompt: str, user_content: str, max_tokens: int, model
             {"role": "user", "content": user_content},
         ],
     }
+    reasoning = _reasoning_params(use_model)
+    if reasoning:
+        payload.update(reasoning)
+        payload["max_tokens"] = max(int(max_tokens or 0), _REASONING_MIN_MAX_TOKENS)
     t0 = time.perf_counter()
     try:
         try:
             r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
+            if r.status_code == 400 and reasoning:
+                # Reasoning knobs rejected for this model — retry plain rather than fail the call.
+                log.warning(
+                    "Groq rejected reasoning params for model=%s (%s) — retrying without them",
+                    use_model,
+                    (r.text or "")[:160],
+                )
+                for k in reasoning:
+                    payload.pop(k, None)
+                r = requests.post(url, headers=headers, json=payload, **_timeout_kw())
         except Exception as e:
             log.error("Groq request error: %s", e)
             return ""
@@ -68,7 +97,8 @@ def groq_chat_once(system_prompt: str, user_content: str, max_tokens: int, model
             return ""
         try:
             j = r.json() if r.text else {}
-            return (j.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+            content = j.get("choices", [{}])[0].get("message", {}).get("content") or ""
+            return _THINK_RE.sub("", content).strip()
         except Exception:
             return ""
     finally:

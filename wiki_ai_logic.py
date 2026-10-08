@@ -1,6 +1,12 @@
 import json
+import logging
 import os
 import requests
+
+from p0_logic.anthropic_client import anthropic_chat_once
+from p0_logic.groq_client import groq_chat_once
+
+log = logging.getLogger("lark-ops-ai")
 
 # Direct Document Token from the URL (override with env WIKI_DOC_TOKEN if needed)
 OBJ_TOKEN = os.getenv("WIKI_DOC_TOKEN", "O94kwR7YWiRyFkkTVf2lHHzpgbc").strip()
@@ -27,34 +33,29 @@ def get_wiki_content(token):
     return ""
 
 
-def handle_wiki_ai(incoming_text, chat_id, token, groq_key):
+def handle_wiki_ai(incoming_text, chat_id, token, groq_key=None):
     """
-    Uses the fetched Docx content to provide AI-generated answers via Groq.
+    Answers from the fetched Docx content: Claude first, Groq (``GROQ_MODEL``) as fallback — the same
+    provider order as the rest of the bot. ``groq_key`` is unused (Groq reads ``GROQ_API_KEY``) and
+    kept only so existing callers don't break.
     """
     wiki_context = get_wiki_content(token)
 
     if not wiki_context:
         reply = "I cannot read the document, please check if the bot has 'Viewer' access to the Doc."
     else:
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": f"You are OSE-AI. Strictly use this document context to answer: {wiki_context}. Be concise."
-                },
-                {"role": "user", "content": incoming_text}
-            ]
-        }
+        system = f"You are OSE-AI. Strictly use this document context to answer: {wiki_context}. Be concise."
+        reply = ""
         try:
-            res = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}"},
-                json=payload
-            ).json()
-            reply = res.get("choices", [{}])[0].get("message", {}).get("content", "AI Error.")
-        except Exception as e:
-            print(f"🚨 Groq API Error: {str(e)}")
+            reply = anthropic_chat_once(system, incoming_text, max_tokens=800)
+        except Exception as e:  # noqa: BLE001
+            log.warning("wiki_ai: claude failed — trying groq: %s", e)
+        if not reply:
+            try:
+                reply = groq_chat_once(system, incoming_text, max_tokens=800)
+            except Exception as e:  # noqa: BLE001
+                log.warning("wiki_ai: groq failed: %s", e)
+        if not reply:
             reply = "AI Processing Error."
 
     requests.post(
